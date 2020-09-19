@@ -6,6 +6,7 @@
 //-----------------------------------------------------------------------
 
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
@@ -417,20 +418,30 @@ namespace Akka.Actor
             }
 
             // Concatenate segments (in reverse order) into buffer with '/' prefixes
-            char[] buffer = new char[totalLength];
-            int offset = buffer.Length;
-            p = this;
-            while (!(p is RootActorPath))
+            char[] buffer = null;
+            try
             {
-                offset -= p.Name.Length + 1;
-                buffer[offset] = '/';
-                p.Name.CopyTo(0, buffer, offset + 1, p.Name.Length);
-                p = p.Parent;
-            }
+                buffer = _arrayPool.Rent(totalLength);
+                int offset = totalLength;
+                p = this;
+                while (!(p is RootActorPath))
+                {
+                    offset -= p.Name.Length + 1;
+                    buffer[offset] = '/';
+                    p.Name.CopyTo(0, buffer, offset + 1, p.Name.Length);
+                    p = p.Parent;
+                }
 
-            return new string(buffer);
+                return new string(buffer, 0, totalLength);
+            }
+            finally
+            {
+                _arrayPool.Return(buffer, true);
+            }
         }
 
+        private static ArrayPool<char> _arrayPool =
+            ArrayPool<char>.Create(8192, 100);
         /// <summary>
         /// String representation of the path elements, excluding the address
         /// information. The elements are separated with "/" and starts with "/",
