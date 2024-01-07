@@ -2541,6 +2541,39 @@ namespace Akka.Streams.Implementation.Fusing
         public static readonly NotYetThereSentinel Instance = new();
     }
 
+    public readonly struct SlimResult<T>
+    {
+        public readonly Exception Error;
+        public readonly T Result;
+
+        public static readonly SlimResult<T> NotYetReady =
+            new SlimResult<T>(NotYetThereSentinel.Instance, default!);
+
+        public SlimResult(Exception errorOrSentinel, T result)
+        {
+            if (result == null)
+            {
+                Error = errorOrSentinel ?? ReactiveStreamsCompliance
+                    .ElementMustNotBeNullException;
+                Result = default!;
+            }
+            else
+            {
+                Result = result;
+                Error = default!;
+            }
+        }
+
+        public bool IsSuccess()
+        {
+            return Error == null;
+        }
+
+        public bool IsDone()
+        {
+            return Error != NotYetThereSentinel.Instance;
+        }
+    }
     /// <summary>
     /// INTERNAL API
     /// </summary>
@@ -2556,11 +2589,11 @@ namespace Akka.Streams.Implementation.Fusing
         {
             private sealed class Holder<T>
             {
-                public Result<T> Element { get; private set; }
+                public SlimResult<T> Element { get; private set; }
                 private readonly Action<Holder<T>> _callback;
                 private ValueTask<T> _pending;
 
-                private static readonly Action<object> OnCompletedAction =
+                /*private static readonly Action<object> OnCompletedAction =
                     CompletionActionVt;
 
                 private static readonly Action<Task<T>, object>
@@ -2581,7 +2614,9 @@ namespace Akka.Streams.Implementation.Fusing
                             ca.Invoke(Result.Success(t.Result));
                         }
                     };
-
+                */
+                private readonly Action TaskCompletedAction;
+                /*
                 private static void CompletionActionVt(object discard)
                 {
                     var inst = (Holder<T>)discard;
@@ -2595,7 +2630,7 @@ namespace Akka.Streams.Implementation.Fusing
                     {
                         inst.VTCompletionError(vtCapture);
                     }
-                }
+                }*/
 
                 private void VTCompletionError(ValueTask<T> vtCapture)
                 {
@@ -2608,26 +2643,41 @@ namespace Akka.Streams.Implementation.Fusing
                             ? t.Exception.InnerExceptions[0]
                             : t.Exception;
 
-                        Invoke(Result.Failure<T>(exception!));
+                        Invoke(new SlimResult<T>(exception!,default!));
+                    }
+                    else
+                    {
+                        // TODO: Incorrect condition, Throw?
                     }
                 }
 
-                public Holder(Result<T> element, Action<Holder<T>> callback)
+                public Holder(SlimResult<T> element, Action<Holder<T>> callback)
                 {
                     _callback = callback;
                     Element = element;
+                    TaskCompletedAction = () =>
+                    {
+                        var inst = this._pending;
+                        this._pending = default;
+                        if (inst.IsCompletedSuccessfully)
+                        {
+                            this.Invoke(new SlimResult<T>(default!,inst.Result));
+                        }
+                        else
+                        {
+                            this.VTCompletionError(inst);
+                        }
+                    };
                 }
 
-                public void SetElement(Result<T> result)
+                public void SetElement(SlimResult<T> result)
                 {
-                    Element = result.IsSuccess && result.Value == null
-                        ? Result.Failure<T>(ReactiveStreamsCompliance
-                            .ElementMustNotBeNullException)
-                        : result;
+                    Element = result;
                 }
 
                 public void SetContinuation(ValueTask<T> vt)
                 {
+/*<<<<<<< HEAD
                     var valueTask = vt;
                     var peeker =
                         Unsafe.As<ValueTask<T>, ValueTaskCheatingPeeker<T>>(
@@ -2650,27 +2700,30 @@ namespace Akka.Streams.Implementation.Fusing
                             peeker._token,
                             ValueTaskSourceOnCompletedFlags.None);
                     }
+=======*/
+                    _pending = vt;
+                    vt.ConfigureAwait(true).GetAwaiter()
+                        .OnCompleted(TaskCompletedAction);
                 }
 
-                public void Invoke(Result<T> result)
+                public void Invoke(SlimResult<T> result)
                 {
                     SetElement(result);
                     _callback(this);
                 }
             }
 
-            private static readonly Result<TOut> NotYetThere =
-                Result.Failure<TOut>(NotYetThereSentinel.Instance);
+            private static readonly SlimResult<TOut> NotYetThere =
+                SlimResult<TOut>.NotYetReady;
 
             private readonly SelectValueTaskAsync<TIn, TOut> _stage;
             private readonly Decider _decider;
             private IBuffer<Holder<TOut>> _buffer = null!;
             private readonly Action<Holder<TOut>> _taskCallback;
 
-            private readonly
-                ConcurrentQueue<
-                    Holder<TOut>> _queue;
-
+            //Use this to hold on to reused holders.
+            private readonly ConcurrentQueue<Holder<TOut>> _holderReuseQueue;
+            
             public Logic(Attributes inheritedAttributes,
                 SelectValueTaskAsync<TIn, TOut> stage) : base(stage.Shape)
             {
@@ -2681,8 +2734,10 @@ namespace Akka.Streams.Implementation.Fusing
                     ? attr.Decider
                     : Deciders.StoppingDecider;
 
-                _taskCallback = GetAsyncCallback<Holder<TOut>>(HolderCompleted);
-                _queue =
+                _taskCallback =
+                    GetAsyncCallback<Holder<TOut>>(hc =>
+                        HolderCompleted(hc));
+                _holderReuseQueue =
                     new ConcurrentQueue<
                         Holder<TOut>>();
                 SetHandlers(stage.In, stage.Out, this);
@@ -2690,7 +2745,7 @@ namespace Akka.Streams.Implementation.Fusing
 
             private Holder<TOut> RentOrGet()
             {
-                if (_queue.TryDequeue(out var item))
+                if (_holderReuseQueue.TryDequeue(out var item))
                 {
                     return item;
                 }
@@ -2707,20 +2762,16 @@ namespace Akka.Streams.Implementation.Fusing
                 {
                     var task = _stage._mapFunc(message);
                     var holder = RentOrGet();
-                    //var holder = new Holder<TOut>(NotYetThere, _taskCallback);
                     _buffer.Enqueue(holder);
-
                     // We dispatch the task if it's ready to optimize away
                     // scheduling it to an execution context
                     if (task.IsCompletedSuccessfully)
                     {
-                        holder.SetElement(Result.Success(task.Result));
+                        holder.SetElement(new SlimResult<TOut>(null!,task.Result));
                         HolderCompleted(holder);
                     }
                     else
                         holder.SetContinuation(task);
-                    //task.GetAwaiter().ContinueWith(t => holder.Invoke(Result.FromTask(t)),
-                    //    TaskContinuationOptions.ExecuteSynchronously);
                 }
                 catch (Exception e)
                 {
@@ -2735,7 +2786,7 @@ namespace Akka.Streams.Implementation.Fusing
             {
                 var strategy = _decider(e);
                 Log.Error(e,
-                    "An exception occured inside SelectAsync while processing message [{0}]. Supervision strategy: {1}",
+                    "An exception occured inside SelectValueTaskAsync while processing message [{0}]. Supervision strategy: {1}",
                     message, strategy);
                 switch (strategy)
                 {
@@ -2764,8 +2815,10 @@ namespace Akka.Streams.Implementation.Fusing
 
             private int Todo => _buffer.Used;
 
-            public override void PreStart() => _buffer =
-                Buffer.Create<Holder<TOut>>(_stage._parallelism, Materializer);
+            public override void PreStart() =>
+                _buffer =
+                    Buffer.Create<Holder<TOut>>(_stage._parallelism,
+                        Materializer);
 
             private void PushOne()
             {
@@ -2775,25 +2828,30 @@ namespace Akka.Streams.Implementation.Fusing
                     if (_buffer.IsEmpty)
                     {
                         if (IsClosed(inlet))
+                        {
                             CompleteStage();
+                        }
                         else if (!HasBeenPulled(inlet))
+                        {
                             Pull(inlet);
+                        }
                     }
-                    else if (_buffer.Peek()!.Element == NotYetThere)
+                    else if (_buffer.Peek()!.Element.IsDone() == false) // Shebang is fine, we checked that the buffer is not empty
                     {
                         if (Todo < _stage._parallelism && !HasBeenPulled(inlet))
+                        {
                             TryPull(inlet);
+                        }
                     }
                     else
                     {
                         var dequeued = _buffer.Dequeue();
-                        var result = dequeued.Element;
+                        var result = dequeued!.Element;
                         dequeued.SetElement(NotYetThere);
-                        _queue.Enqueue(dequeued);
-                        if (!result.IsSuccess)
+                        _holderReuseQueue.Enqueue(dequeued);
+                        if (!result.IsSuccess())
                             continue;
-
-                        Push(_stage.Out!, result.Value);
+                        Push(_stage.Out, result.Result);
 
                         if (Todo < _stage._parallelism && !HasBeenPulled(inlet))
                             TryPull(inlet);
@@ -2806,17 +2864,17 @@ namespace Akka.Streams.Implementation.Fusing
             private void HolderCompleted(Holder<TOut> holder)
             {
                 var element = holder.Element;
-                if (element.IsSuccess)
+                if (element.IsSuccess())
                 {
                     if (IsAvailable(_stage.Out))
                         PushOne();
                     return;
                 }
 
-                var exception = element.Exception;
+                var exception = element.Error;
                 var strategy = _decider(exception);
                 Log.Error(exception,
-                    "An exception occured inside SelectAsync while executing Task. Supervision strategy: {0}",
+                    "An exception occured inside SelectValueTaskAsync while executing Task. Supervision strategy: {0}",
                     strategy);
                 switch (strategy)
                 {
