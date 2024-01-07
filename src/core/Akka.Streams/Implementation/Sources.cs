@@ -13,6 +13,7 @@ using System.Threading.Tasks;
 using Akka.Annotations;
 using Akka.Pattern;
 using Akka.Streams.Dsl;
+using Akka.Streams.Implementation.Fusing;
 using Akka.Streams.Implementation.Stages;
 using Akka.Streams.Stage;
 using Akka.Streams.Supervision;
@@ -808,8 +809,8 @@ namespace Akka.Streams.Implementation
             private readonly Lazy<Decider> _decider;
             private Option<TSource> _state = Option<TSource>.None;
 
-            private readonly PooledValueTaskContinuationHelper<Option<TOut>>
-                _pooledContinuation;
+            private ValueTask<Option<TOut>> _currentReadVt;
+            private readonly Action _valueTaskAwaiterOnCompleteAction;
             public Logic(UnfoldResourceSourceValueTaskAsync<TOut, TCreateState, TSource> stage, Attributes inheritedAttributes)
                 : base(stage.Shape)
             {
@@ -819,11 +820,10 @@ namespace Akka.Streams.Implementation
                     var strategy = inheritedAttributes.GetAttribute<ActorAttributes.SupervisionStrategy>(null);
                     return strategy != null ? strategy.Decider : Deciders.StoppingDecider;
                 });
-                _pooledContinuation =
-                    new PooledValueTaskContinuationHelper<Option<TOut>>(
-                        ReadCallback);
+                _valueTaskAwaiterOnCompleteAction = SelfReadCallback;
                 SetHandler(_stage.Out, this);
             }
+
 
             private Action<Try<TSource>> CreatedCallback => GetAsyncCallback<Try<TSource>>(resource =>
             {
@@ -859,12 +859,26 @@ namespace Akka.Streams.Implementation
                         throw new ArgumentOutOfRangeException();
                 }
             }
-
-            private Action<Try<Option<TOut>>> ReadCallback => GetAsyncCallback<Try<Option<TOut>>>(read =>
+            
+            
+            private void SelfReadCallback()
             {
-                if (read.IsSuccess)
+                var swap = _currentReadVt;
+                _currentReadVt = default;
+                if (swap.IsCompletedSuccessfully)
                 {
-                    var data = read.Success.Value;
+                    ReadCallback(new SlimResult<Option<TOut>>(default,swap.Result));
+                }
+                else
+                {
+                    ReadCallback(SlimResult<Option<TOut>>.FromTask(swap.AsTask()));
+                }
+            }
+            private Action<SlimResult<Option<TOut>>> ReadCallback => GetAsyncCallback<SlimResult<Option<TOut>>>(read =>
+            {
+                if (read.IsSuccess())
+                {
+                    var data = read.Result;
                     if (data.HasValue)
                     {
                         var some = data.Value;
@@ -884,7 +898,7 @@ namespace Akka.Streams.Implementation
                         }
                     }
                 }
-                else ErrorHandler(read.Failure.Value);
+                else ErrorHandler(read.Error);
             });
 
             private void CloseResource()
@@ -923,7 +937,9 @@ namespace Akka.Streams.Implementation
                         }
                         else
                         {
-                            _pooledContinuation.AttachAwaiter(vt);
+                            _currentReadVt = vt;
+                            _currentReadVt.GetAwaiter().OnCompleted(_valueTaskAwaiterOnCompleteAction);
+                            //_pooledContinuation.AttachAwaiter(vt);
                         }
 
                         

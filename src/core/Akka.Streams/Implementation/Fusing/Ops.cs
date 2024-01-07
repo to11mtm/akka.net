@@ -2548,7 +2548,13 @@ namespace Akka.Streams.Implementation.Fusing
 
         public static readonly SlimResult<T> NotYetReady =
             new SlimResult<T>(NotYetThereSentinel.Instance, default!);
-
+        public static SlimResult<T> FromTask(Task<T> task)
+        {
+            return task.IsCanceled || task.IsFaulted
+                ? new SlimResult<T>(task.Exception!, default!)
+                : new SlimResult<T>(default!, task.Result);
+        }
+        
         public SlimResult(Exception errorOrSentinel, T result)
         {
             if (result == null)
