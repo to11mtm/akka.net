@@ -4,6 +4,8 @@
     <TargetFrameworks>$(NetFrameworkTestVersion);$(NetTestVersion)</TargetFrameworks>
     <OutputType>Exe</OutputType>
     <IsPackable>false</IsPackable>
+    <TargetFrameworks Condition=" '$(OS)' == 'Windows_NT' ">$(NetFrameworkTestVersion);$(NetTestVersion)</TargetFrameworks>
+    <TargetFramework Condition=" '$(OS)' != 'Windows_NT' ">$(NetTestVersion)</TargetFramework>
   </PropertyGroup>
 
   <ItemGroup>
