@@ -6,11 +6,17 @@
 // -----------------------------------------------------------------------
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 
 namespace Akka.Actor;
 #nullable enable
-internal class ReceiveActorHandlers
+internal static class AssignableCache
+{
+    public static readonly ConcurrentDictionary<(Type,Type), bool> IsAssignableCache = new ConcurrentDictionary<(Type,Type), bool>();
+}
+internal sealed class ReceiveActorHandlers
 {
     private bool _hadObjectHandlerWithNoPredicate;
 
@@ -91,7 +97,8 @@ internal class ReceiveActorHandlers
         {
             // This is covering object types as well. There might be an ordering issue here
             // but this should probably be resolved with the logic around how handlers are ordered.
-            if (kvp.Key.IsAssignableFrom(messageType))
+            //if (kvp.Key.IsAssignableFrom(messageType))
+            if(AssignableCache.IsAssignableCache.GetOrAdd((kvp.Key,messageType),a=> kvp.Key.IsAssignableFrom(a.Item2)))
             {
                 if (kvp.Value.TryHandle(message))
                 {
@@ -115,7 +122,7 @@ internal interface ITypeHandler
     bool TryHandle(object message);
 }
 
-internal class TypeHandler<T> : ITypeHandler
+internal sealed class TypeHandler<T> : ITypeHandler
 {
     public TypeHandler()
     {
@@ -127,8 +134,9 @@ internal class TypeHandler<T> : ITypeHandler
     public bool TryHandle(object message)
     {
         var typedMessage = (T)message;
-        foreach (var predicateHandler in Handlers)
+        for (var index = 0; index < Handlers.Count; index++)
         {
+            var predicateHandler = Handlers[index];
             if (predicateHandler.TryHandle(typedMessage))
             {
                 return true;
@@ -139,7 +147,7 @@ internal class TypeHandler<T> : ITypeHandler
     }
 }
 
-internal class PredicateHandler<T>
+internal sealed class PredicateHandler<T>
 {
     public PredicateHandler(Predicate<T>? predicate, Func<T, bool> handler)
     {
