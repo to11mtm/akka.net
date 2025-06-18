@@ -1,14 +1,13 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="MonotonicClock.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 
 namespace Akka.Util
 {
@@ -20,36 +19,53 @@ namespace Akka.Util
     /// </summary>
     internal static class MonotonicClock
     {
-        private static readonly Stopwatch Stopwatch = Stopwatch.StartNew();
+        private static readonly Stopwatch Stopwatch;
 
-        private const int TicksInMillisecond = 10000;
-
+        private const long TicksInMillisecond = TimeSpan.TicksPerMillisecond;
+        private const long TicksInSecond = TimeSpan.TicksPerSecond;
         private const long NanosPerTick = 100;
 
         /// <summary>
+        /// TickFrequency is a constant scaling value to normalize operating system reported performance counter
+        /// clock tick to .NET internal definition of a "tick".
+        /// </summary>
+        private static readonly double TicksFrequency;
+        
+        static MonotonicClock()
+        {
+            // TickFrequency is a constant scaling value to normalize operating system reported performance counter
+            // clock tick to .NET internal definition of a "tick".
+            //
+            // Stopwatch.ElapsedTicks returns the raw operating system level performance clock ticks, which is not
+            // the same definition as .NET DateTime or TimeSpan definition.
+            //
+            // .NET DateTime or TimeSpan definition of a "tick" is 100 nanosecond (sampling frequency of 10 MHz)
+            // which is true for all windows platforms that support performance counter clock (win8+); however
+            // this is not true for linux platforms, their definition of a "tick" is 1 nanosecond (sampling
+            // frequency of 1 GHz).
+            TicksFrequency = (double)TicksInSecond / Stopwatch.Frequency;
+            
+            Stopwatch = Stopwatch.StartNew();
+        }
+        
+        /// <summary>
         /// Time as measured by the current system up-time.
         /// </summary>
-        public static TimeSpan Elapsed
-        {
-            get
-            {
-                return TimeSpan.FromTicks(GetTicks());
-            }
-        }
+        public static TimeSpan Elapsed => TimeSpan.FromTicks(GetTicks());
 
         /// <summary>
         /// High resolution elapsed time as determined by a <see cref="Stopwatch"/>
         /// running continuously in the background.
         /// </summary>
-        public static TimeSpan ElapsedHighRes
-        {
-            get { return Stopwatch.Elapsed; }
-        }
+        public static TimeSpan ElapsedHighRes => Stopwatch.Elapsed;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static long GetTicksHighRes() => (long)(Stopwatch.ElapsedTicks * TicksFrequency);
 
         /// <summary>
-        /// TBD
+        /// Gets the elapsed time in milliseconds as measured by the system uptime.
         /// </summary>
-        /// <returns>TBD</returns>
+        /// <returns>The elapsed time in milliseconds.</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static long GetMilliseconds()
         {
@@ -57,9 +73,9 @@ namespace Akka.Util
         }
 
         /// <summary>
-        /// TBD
+        /// Gets the elapsed time in nanoseconds as measured by the system uptime.
         /// </summary>
-        /// <returns>TBD</returns>
+        /// <returns>The elapsed time in nanoseconds.</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static long GetNanos()
         {
@@ -67,9 +83,9 @@ namespace Akka.Util
         }
 
         /// <summary>
-        /// TBD
+        /// Gets the elapsed time in ticks as measured by the system uptime.
         /// </summary>
-        /// <returns>TBD</returns>
+        /// <returns>The elapsed time in ticks (where 1 tick = 100 nanoseconds).</returns>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static long GetTicks()
         {
@@ -81,8 +97,9 @@ namespace Akka.Util
         /// 
         /// This extension method converts a Ticks value to nano seconds.
         /// </summary>
-        /// <param name="ticks">TBD</param>
-        /// <returns>TBD</returns>
+        /// <param name="ticks">The number of ticks to convert to nanoseconds.</param>
+        /// <returns>The equivalent value in nanoseconds.</returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static long ToNanos(this long ticks)
         {
             return ticks*NanosPerTick;
@@ -93,11 +110,14 @@ namespace Akka.Util
         /// 
         /// This extension method converts a nano seconds value to Ticks.
         /// </summary>
-        /// <param name="nanos">TBD</param>
-        /// <returns>TBD</returns>
+        /// <param name="nanos">The number of nanoseconds to convert to ticks.</param>
+        /// <returns>The equivalent value in ticks.</returns>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal static long ToTicks(this long nanos)
         {
             return nanos/NanosPerTick;
         }
+
+        internal static bool IsHighResolution => Stopwatch.IsHighResolution;
     }
 }

@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="BuiltInActors.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -41,10 +41,10 @@ namespace Akka.Actor
         /// <returns>TBD</returns>
         protected override bool Receive(object message)
         {
-            if(message is Terminated)
+            if (message is Terminated)
                 Context.Stop(Self);
-            else if(message is StopChild)
-                Context.Stop(((StopChild)message).Child);
+            else if (message is StopChild child)
+                Context.Stop(child.Child);
             else
                 Context.System.DeadLetters.Tell(new DeadLetter(message, Sender, Self), Sender);
             return true;
@@ -60,8 +60,8 @@ namespace Akka.Actor
     }
 
     /// <summary>
-    /// System guardian. 
-    /// 
+    /// System guardian.
+    ///
     /// Root actor for all actors under the /system path.
     /// </summary>
     public class SystemGuardianActor : ActorBase, IRequiresMessageQueue<IUnboundedMessageQueueSemantics>
@@ -87,16 +87,16 @@ namespace Akka.Actor
         protected override bool Receive(object message)
         {
             var terminated = message as Terminated;
-            if(terminated != null)
+            if (terminated != null)
             {
                 var terminatedActor = terminated.ActorRef;
-                if(_userGuardian.Equals(terminatedActor))
+                if (_userGuardian.Equals(terminatedActor))
                 {
                     // time for the systemGuardian to stop, but first notify all the
                     // termination hooks, they will reply with TerminationHookDone
                     // and when all are done the systemGuardian is stopped
                     Context.Become(Terminating);
-                    foreach(var terminationHook in _terminationHooks)
+                    foreach (var terminationHook in _terminationHooks)
                     {
                         terminationHook.Tell(TerminationHook.Instance);
                     }
@@ -110,17 +110,17 @@ namespace Akka.Actor
                 }
                 return true;
             }
-            
+
             var stopChild = message as StopChild;
-            if(stopChild != null)
+            if (stopChild != null)
             {
                 Context.Stop(stopChild.Child);
                 return true;
             }
             var sender = Sender;
-            
+
             var registerTerminationHook = message as RegisterTerminationHook;
-            if(registerTerminationHook != null && !ReferenceEquals(sender, Context.System.DeadLetters))
+            if (registerTerminationHook != null && !ReferenceEquals(sender, Context.System.DeadLetters))
             {
                 _terminationHooks.Add(sender);
                 Context.Watch(sender);
@@ -133,7 +133,7 @@ namespace Akka.Actor
         private bool Terminating(object message)
         {
             var terminated = message as Terminated;
-            if(terminated != null)
+            if (terminated != null)
             {
                 StopWhenAllTerminationHooksDone(terminated.ActorRef);
                 return true;
@@ -141,7 +141,7 @@ namespace Akka.Actor
             var sender = Sender;
 
             var terminationHookDone = message as TerminationHookDone;
-            if(terminationHookDone != null)
+            if (terminationHookDone != null)
             {
                 StopWhenAllTerminationHooksDone(sender);
                 return true;
@@ -158,7 +158,7 @@ namespace Akka.Actor
 
         private void StopWhenAllTerminationHooksDone()
         {
-            if(_terminationHooks.Count == 0)
+            if (_terminationHooks.Count == 0)
             {
                 var actorSystem = Context.System;
                 actorSystem.EventStream.StopDefaultLoggers(actorSystem);
@@ -175,6 +175,39 @@ namespace Akka.Actor
         {
             //Guardian MUST NOT lose its children during restart
             //Intentionally left blank
+        }
+    }
+
+    /// <summary>
+    /// Message envelopes may implement this trait for better logging, such as logging of
+    /// message class name of the wrapped message instead of the envelope class name.
+    /// </summary>
+    public interface IWrappedMessage
+    {
+        object Message { get; }
+    }
+
+    public static class WrappedMessage
+    {
+        public static object Unwrap(object message)
+        {
+            while (message is IWrappedMessage wm)
+            {
+                message = wm.Message;
+            }
+            return message;
+        }
+
+        internal static bool IsDeadLetterSuppressedAnywhere(object message)
+        {
+            var isSuppressed = message is IDeadLetterSuppression;
+            while(!isSuppressed && message is IWrappedMessage wm)
+            {
+                message = wm.Message;
+                isSuppressed = message is IDeadLetterSuppression;
+            }
+            
+            return isSuppressed;
         }
     }
 
@@ -205,19 +238,20 @@ namespace Akka.Actor
         /// <exception cref="InvalidMessageException">This exception is thrown if the given <paramref name="message"/> is undefined.</exception>
         protected override void TellInternal(object message, IActorRef sender)
         {
-            if (message == null) throw new InvalidMessageException("Message is null");
-            var i = message as Identify;
-            if (i != null)
+            switch (message)
             {
-                sender.Tell(new ActorIdentity(i.MessageId, ActorRefs.Nobody));
-                return;
+                case null:
+                    throw new InvalidMessageException("Message is null");
+                case Identify i:
+                    sender.Tell(new ActorIdentity(i.MessageId, ActorRefs.Nobody));
+                    return;
+                case DeadLetter d:
+                {
+                    if (!SpecialHandle(d.Message, d.Sender)) { _eventStream.Publish(d); }
+                    return;
+                }
             }
-            var d = message as DeadLetter;
-            if (d != null)
-            {
-                if (!SpecialHandle(d.Message, d.Sender)) { _eventStream.Publish(d); }
-                return;
-            }
+
             if (!SpecialHandle(message, sender)) { _eventStream.Publish(new DeadLetter(message, sender.IsNobody() ? Provider.DeadLetters : sender, this)); }
         }
 
@@ -229,8 +263,7 @@ namespace Akka.Actor
         /// <returns>TBD</returns>
         protected override bool SpecialHandle(object message, IActorRef sender)
         {
-            var w = message as Watch;
-            if (w != null)
+            if (message is Watch w)
             {
                 if (!w.Watchee.Equals(this) && !w.Watcher.Equals(this))
                 {

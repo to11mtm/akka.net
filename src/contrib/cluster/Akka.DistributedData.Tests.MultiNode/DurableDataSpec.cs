@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="DurableDataSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -13,9 +13,12 @@ using Akka.Cluster;
 using Akka.Cluster.TestKit;
 using Akka.Configuration;
 using Akka.DistributedData.Durable;
+using Akka.Event;
+using Akka.MultiNode.TestAdapter;
 using Akka.Remote.TestKit;
 using Akka.TestKit;
 using FluentAssertions;
+using FluentAssertions.Extensions;
 
 namespace Akka.DistributedData.Tests.MultiNode
 {
@@ -82,9 +85,9 @@ namespace Akka.DistributedData.Tests.MultiNode
         private readonly IWriteConsistency writeTwo;
         private readonly IReadConsistency readTwo;
 
-        private readonly GCounterKey keyA = new GCounterKey("durable-A");
-        private readonly GCounterKey keyB = new GCounterKey("durable-B");
-        private readonly ORSetKey<string> keyC = new ORSetKey<string>("durable-C");
+        private readonly GCounterKey keyA = new("durable-A");
+        private readonly GCounterKey keyB = new("durable-B");
+        private readonly ORSetKey<string> keyC = new("durable-C");
 
         private int testStepCounter = 0;
 

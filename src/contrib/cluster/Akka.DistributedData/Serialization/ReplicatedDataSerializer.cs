@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ReplicatedDataSerializer.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -66,9 +66,13 @@ namespace Akka.DistributedData.Serialization
 
         private readonly byte[] _emptyArray = Array.Empty<byte>();
 
+        private readonly bool _backwardCompatWireFormat;
+        
         public ReplicatedDataSerializer(ExtendedActorSystem system) : base(system)
         {
             _ser = new SerializationSupport(system);
+            _backwardCompatWireFormat =
+                system.Settings.Config.GetBoolean("akka.cluster.sharding.distributed-data.backward-compatible-wire-format");
         }
 
 
@@ -251,15 +255,6 @@ namespace Akka.DistributedData.Serialization
         }
 
         #region ORSet
-
-        private static Proto.Msg.ORSet ORSetToProto<T>(ORSet<T> set)
-        {
-            var p = new Proto.Msg.ORSet();
-            p.Vvector = SerializationSupport.VersionVectorToProto(set.VersionVector);
-            p.Dots.Add(set.ElementsMap.Values.Select(SerializationSupport.VersionVectorToProto));
-            p.TypeInfo = new TypeDescriptor();
-            return p;
-        }
         private IORSet ORSetFromBinary(byte[] bytes)
         {
             return FromProto(Proto.Msg.ORSet.Parser.ParseFrom(bytes));
@@ -267,41 +262,70 @@ namespace Akka.DistributedData.Serialization
 
         private Proto.Msg.ORSet ToProto(IORSet orset)
         {
+            var b = new Proto.Msg.ORSet
+            {
+                TypeInfo = new TypeDescriptor()
+            };
+
             switch (orset)
             {
                 case ORSet<int> ints:
                     {
-                        var p = ORSetToProto(ints);
-                        p.TypeInfo.Type = ValType.Int;
-                        p.IntElements.Add(ints.Elements);
-                        return p;
+                        b.Vvector =  SerializationSupport.VersionVectorToProto(ints.VersionVector);
+                        b.TypeInfo.Type = ValType.Int;
+                        var intElements = new List<int>(ints.ElementsMap.Keys);
+                        intElements.Sort();
+                        foreach (var val in intElements)
+                        {
+                            b.IntElements.Add(val);
+                            b.Dots.Add(SerializationSupport.VersionVectorToProto(ints.ElementsMap[val]));
+                        }
+                        return b;
                     }
                 case ORSet<long> longs:
                     {
-                        var p = ORSetToProto(longs);
-                        p.TypeInfo.Type = ValType.Long;
-                        p.LongElements.Add(longs.Elements);
-                        return p;
+                        b.Vvector =  SerializationSupport.VersionVectorToProto(longs.VersionVector);
+                        b.TypeInfo.Type = ValType.Long;
+                        var longElements = new List<long>(longs.ElementsMap.Keys);
+                        longElements.Sort();
+                        foreach (var val in longElements)
+                        {
+                            b.LongElements.Add(val);
+                            b.Dots.Add(SerializationSupport.VersionVectorToProto(longs.ElementsMap[val]));
+                        }
+                        return b;
                     }
                 case ORSet<string> strings:
                     {
-                        var p = ORSetToProto(strings);
-                        p.TypeInfo.Type = ValType.String;
-                        p.StringElements.Add(strings.Elements);
-                        return p;
+                        b.Vvector =  SerializationSupport.VersionVectorToProto(strings.VersionVector);
+                        b.TypeInfo.Type = ValType.String;
+                        var stringElements = new List<string>(strings.ElementsMap.Keys);
+                        stringElements.Sort();
+                        foreach (var val in stringElements)
+                        {
+                            b.StringElements.Add(val);
+                            b.Dots.Add(SerializationSupport.VersionVectorToProto(strings.ElementsMap[val]));
+                        }
+                        return b;
                     }
                 case ORSet<IActorRef> refs:
                     {
-                        var p = ORSetToProto(refs);
-                        p.TypeInfo.Type = ValType.ActorRef;
-                        p.ActorRefElements.Add(refs.Select(Akka.Serialization.Serialization.SerializedActorPath));
-                        return p;
+                        b.Vvector =  SerializationSupport.VersionVectorToProto(refs.VersionVector);
+                        b.TypeInfo.Type = ValType.ActorRef;
+                        var actorRefElements = new List<IActorRef>(refs.ElementsMap.Keys);
+                        actorRefElements.Sort();
+                        foreach (var val in actorRefElements)
+                        {
+                            b.ActorRefElements.Add(Akka.Serialization.Serialization.SerializedActorPath(val));
+                            b.Dots.Add(SerializationSupport.VersionVectorToProto(refs.ElementsMap[val]));
+                        }
+                        return b;
                     }
                 default: // unknown type
                     {
                         // runtime type - enter horrible dynamic serialization stuff
                         var makeProto = ORSetUnknownMaker.MakeGenericMethod(orset.SetType);
-                        return (Proto.Msg.ORSet)makeProto.Invoke(this, new object[] { orset });
+                        return (Proto.Msg.ORSet)makeProto.Invoke(this, new object[] { orset, b });
                     }
             }
         }
@@ -368,14 +392,29 @@ namespace Akka.DistributedData.Serialization
         /// <summary>
         /// Called when we're serializing none of the standard object types with ORSet
         /// </summary>
-        private Proto.Msg.ORSet ORSetUnknownToProto<T>(IORSet o)
+        private Proto.Msg.ORSet ORSetUnknownToProto<T>(IORSet o, Proto.Msg.ORSet b)
         {
             var orset = (ORSet<T>)o;
-            var p = ORSetToProto(orset);
-            p.TypeInfo.Type = ValType.Other;
-            p.TypeInfo.TypeName = typeof(T).TypeQualifiedName();
-            p.OtherElements.Add(orset.Elements.Select(x => _ser.OtherMessageToProto(x)));
-            return p;
+            b.Vvector =  SerializationSupport.VersionVectorToProto(orset.VersionVector);
+            b.TypeInfo.Type = ValType.Other;
+            b.TypeInfo.TypeName = typeof(T).TypeQualifiedName();
+
+            var otherElements = new List<OtherMessage>();
+            var otherElementsDict = new Dictionary<OtherMessage, Proto.Msg.VersionVector>();
+            foreach (var kvp in orset.ElementsMap)
+            {
+                var otherElement = _ser.OtherMessageToProto(kvp.Key);
+                otherElements.Add(otherElement);
+                otherElementsDict[otherElement] = SerializationSupport.VersionVectorToProto(kvp.Value);
+            }
+            otherElements.Sort(OtherMessageComparer.Instance);
+            
+            foreach (var val in otherElements)
+            {
+                b.OtherElements.Add(val);
+                b.Dots.Add(otherElementsDict[val]);
+            }
+            return b;
         }
 
         private ORSet.IAddDeltaOperation ORAddDeltaOperationFromBinary(byte[] bytes)
@@ -494,9 +533,14 @@ namespace Akka.DistributedData.Serialization
         private Proto.Msg.GSet GSetToProtoUnknown<T>(IGSet g)
         {
             var gset = (GSet<T>)g;
-            var p = new Proto.Msg.GSet();
-            p.TypeInfo = GetTypeDescriptor(typeof(T));
-            p.OtherElements.Add(gset.Select(x => _ser.OtherMessageToProto(x)));
+            var otherElements = new List<OtherMessage>(gset.Select(x => _ser.OtherMessageToProto(x)));
+            otherElements.Sort(OtherMessageComparer.Instance);
+
+            var p = new Proto.Msg.GSet
+            {
+                TypeInfo = GetTypeDescriptor(typeof(T))
+            };
+            p.OtherElements.Add(otherElements);
             return p;
         }
 
@@ -510,25 +554,33 @@ namespace Akka.DistributedData.Serialization
                 case GSet<int> ints:
                     {
                         var p = GSetToProto(ints);
-                        p.IntElements.Add(ints.Elements);
+                        var intElements = new List<int>(ints.Elements);
+                        intElements.Sort();
+                        p.IntElements.Add(intElements);
                         return p;
                     }
                 case GSet<long> longs:
                     {
                         var p = GSetToProto(longs);
-                        p.LongElements.Add(longs.Elements);
+                        var longElements = new List<long>(longs.Elements);
+                        longElements.Sort();
+                        p.LongElements.Add(longElements);
                         return p;
                     }
                 case GSet<string> strings:
                     {
                         var p = GSetToProto(strings);
-                        p.StringElements.Add(strings.Elements);
+                        var stringElements = new List<string>(strings.Elements);
+                        stringElements.Sort();
+                        p.StringElements.Add(stringElements);
                         return p;
                     }
                 case GSet<IActorRef> refs:
                     {
                         var p = GSetToProto(refs);
-                        p.ActorRefElements.Add(refs.Select(Akka.Serialization.Serialization.SerializedActorPath));
+                        var refElements = new List<IActorRef>(refs.Elements);
+                        refElements.Sort();
+                        p.ActorRefElements.Add(refElements.Select(Akka.Serialization.Serialization.SerializedActorPath));
                         return p;
                     }
                 default: // unknown type
@@ -687,6 +739,11 @@ namespace Akka.DistributedData.Serialization
             pLww.State = _ser.OtherMessageToProto(register.Value);
             pLww.Timestamp = register.Timestamp;
             pLww.TypeInfo = GetTypeDescriptor(r.RegisterType);
+            
+            // HACK: Really really ugly hack to make sure that v1.5 DData cluster sharding works with v1.4
+            if(_backwardCompatWireFormat && pLww.TypeInfo.TypeName == "Akka.Cluster.Sharding.ShardCoordinator+CoordinatorState, Akka.Cluster.Sharding")
+                pLww.TypeInfo.TypeName = "Akka.Cluster.Sharding.PersistentShardCoordinator+State, Akka.Cluster.Sharding";
+            
             return pLww;
         }
 
@@ -718,9 +775,13 @@ namespace Akka.DistributedData.Serialization
                     }
                 case ValType.Other:
                     {
+                        // HACK: Really really ugly hack to make sure that v1.5 DData cluster sharding works with v1.4
+                        var typeName = proto.TypeInfo.TypeName;
+                        if (typeName == "Akka.Cluster.Sharding.PersistentShardCoordinator+State, Akka.Cluster.Sharding")
+                            typeName = "Akka.Cluster.Sharding.ShardCoordinator+CoordinatorState, Akka.Cluster.Sharding";
+                        
                         // runtime type - enter horrible dynamic serialization stuff
-
-                        var setContentType = Type.GetType(proto.TypeInfo.TypeName);
+                        var setContentType = Type.GetType(typeName);
 
                         var setType = LWWRegisterMaker.MakeGenericMethod(setContentType);
                         return (ILWWRegister)setType.Invoke(this, new object[] { proto });
@@ -929,13 +990,14 @@ namespace Akka.DistributedData.Serialization
         {
             switch (op)
             {
+                case null: throw new ArgumentNullException(nameof(op), $"Failed to serialize {nameof(ORDictionary.IDeltaOperation)} to protobuf");
                 case ORDictionary.IPutDeltaOp p: return ORDictionaryPutToProto(p);
                 case ORDictionary.IRemoveDeltaOp r: return ORDictionaryRemoveToProto(r);
                 case ORDictionary.IRemoveKeyDeltaOp r: return ORDictionaryRemoveKeyToProto(r);
                 case ORDictionary.IUpdateDeltaOp u: return ORDictionaryUpdateToProto(u);
                 case ORDictionary.IDeltaGroupOp g: return ORDictionaryDeltasToProto(g.OperationsSerialization.ToList());
                 default:
-                    throw new SerializationException($"Unrecognized delta operation [{op}]");
+                    throw new SerializationException($"Unrecognized delta operation [({op.GetType().Name}):{op}]");
             }
 
         }
@@ -1013,7 +1075,7 @@ namespace Akka.DistributedData.Serialization
                         {
                             if (entry.EntryData.Count > 1)
                                 throw new ArgumentOutOfRangeException(
-                                    $"Can't deserialize key/value pair in ORDictionary delta - too many pairs on the wire");
+                                    "Can't deserialize key/value pair in ORDictionary delta - too many pairs on the wire");
                             var (key, value) = MapEntryFromProto(entry.EntryData[0]);
 
                             deltaOps.Add(new ORDictionary<TKey, TValue>.PutDeltaOperation(new ORSet<TKey>.AddDeltaOperation((ORSet<TKey>)underlying), (TKey)key, (TValue)value));
@@ -1028,7 +1090,7 @@ namespace Akka.DistributedData.Serialization
                         {
                             if (entry.EntryData.Count > 1)
                                 throw new ArgumentOutOfRangeException(
-                                    $"Can't deserialize key/value pair in ORDictionary delta - too many pairs on the wire");
+                                    "Can't deserialize key/value pair in ORDictionary delta - too many pairs on the wire");
                             var (key, value) = MapEntryFromProto(entry.EntryData[0]);
                             deltaOps.Add(new ORDictionary<TKey, TValue>.RemoveKeyDeltaOperation(new ORSet<TKey>.RemoveDeltaOperation((ORSet<TKey>)underlying), (TKey)key));
                         }
@@ -1060,7 +1122,7 @@ namespace Akka.DistributedData.Serialization
             if (groupOp.OperationsSerialization.Count == 1 &&
                 groupOp.OperationsSerialization.First() is ORDictionary.IPutDeltaOp put)
                 return put;
-            throw new SerializationException($"Improper ORDictionary delta put operation size or kind");
+            throw new SerializationException("Improper ORDictionary delta put operation size or kind");
         }
 
         private ORDictionary.IRemoveDeltaOp ORDictionaryRemoveFromBinary(byte[] bytes)
@@ -1069,7 +1131,7 @@ namespace Akka.DistributedData.Serialization
             if (groupOp.OperationsSerialization.Count == 1 &&
                 groupOp.OperationsSerialization.First() is ORDictionary.IRemoveDeltaOp remove)
                 return remove;
-            throw new SerializationException($"Improper ORDictionary delta remove operation size or kind");
+            throw new SerializationException("Improper ORDictionary delta remove operation size or kind");
         }
 
         private ORDictionary.IRemoveKeyDeltaOp ORDictionaryRemoveKeyFromBinary(byte[] bytes)
@@ -1078,7 +1140,7 @@ namespace Akka.DistributedData.Serialization
             if (groupOp.OperationsSerialization.Count == 1 &&
                 groupOp.OperationsSerialization.First() is ORDictionary.IRemoveKeyDeltaOp removeKey)
                 return removeKey;
-            throw new SerializationException($"Improper ORDictionary delta remove key operation size or kind");
+            throw new SerializationException("Improper ORDictionary delta remove key operation size or kind");
         }
 
         private ORDictionary.IUpdateDeltaOp ORDictionaryUpdateFromBinary(byte[] bytes)
@@ -1087,7 +1149,7 @@ namespace Akka.DistributedData.Serialization
             if (groupOp.OperationsSerialization.Count == 1 &&
                 groupOp.OperationsSerialization.First() is ORDictionary.IUpdateDeltaOp update)
                 return update;
-            throw new SerializationException($"Improper ORDictionary delta update operation size or kind");
+            throw new SerializationException("Improper ORDictionary delta update operation size or kind");
         }
 
         #endregion
@@ -1212,8 +1274,12 @@ namespace Akka.DistributedData.Serialization
 
         private ILWWDictionaryDeltaOperation LWWDictionaryDeltaFromProto<TKey, TValue>(ORDictionary.IDeltaOperation op)
         {
-            var casted = (ORDictionary<TKey, LWWRegister<TValue>>.IDeltaOperation)op;
-            return new LWWDictionary<TKey, TValue>.LWWDictionaryDelta(casted);
+            return op switch
+            {
+                null => throw new ArgumentNullException(nameof(op), $"Failed to deserialize {nameof(ILWWDictionaryDeltaOperation)}"),
+                ORDictionary<TKey, LWWRegister<TValue>>.IDeltaOperation casted => new LWWDictionary<TKey, TValue>.LWWDictionaryDelta(casted),
+                _ => throw new ArgumentException($"Failed to cast cast {op.GetType().FullName} to {typeof(ORDictionary<TKey, LWWRegister<TValue>>.IDeltaOperation).FullName}")
+            };
         }
 
         #endregion

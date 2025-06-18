@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="RemoteActorRef.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -12,6 +12,7 @@ using Akka.Actor;
 using Akka.Annotations;
 using Akka.Dispatch.SysMsg;
 using Akka.Event;
+using Akka.Util.Internal.Collections;
 
 namespace Akka.Remote
 {
@@ -97,8 +98,9 @@ namespace Akka.Remote
         /// Obsolete. Use <see cref="Watch"/> or <see cref="ReceiveActor.Receive{T}(Action{T}, Predicate{T})">Receive&lt;<see cref="Akka.Actor.Terminated"/>&gt;</see>
         /// </summary>
         [Obsolete("Use Context.Watch and Receive<Terminated> [1.1.0]")]
+#pragma warning disable CS0809
         public override bool IsTerminated => false;
-
+#pragma warning restore CS0809
 
         /// <summary>
         /// Gets the child.
@@ -106,17 +108,16 @@ namespace Akka.Remote
         /// <param name="name">The name.</param>
         /// <returns>ActorRef.</returns>
         /// <exception cref="System.NotImplementedException">TBD</exception>
-        public override IActorRef GetChild(IEnumerable<string> name)
+        public override IActorRef GetChild(IReadOnlyList<string> name)
         {
-            var items = name.ToList();
-            switch (items.FirstOrDefault())
+            switch (name.FirstOrDefault())
             {
                 case null:
                     return this;
                 case "..":
-                    return Parent.GetChild(items.Skip(1));
+                    return Parent.GetChild(name.NoCopySlice(1));
                 default:
-                    return new RemoteActorRef(Remote, LocalAddressToUse, Path / items, ActorRefs.Nobody, Props.None, Deploy.None);
+                    return new RemoteActorRef(Remote, LocalAddressToUse, Path / name, ActorRefs.Nobody, Props.None, Deploy.None);
             }
         }
 
@@ -154,7 +155,7 @@ namespace Akka.Remote
             SendSystemMessage(new Akka.Dispatch.SysMsg.Suspend());
         }
 
-        /// <inheritdoc cref="IInternalActorRef"/>
+        
         public override bool IsLocal => false;
 
         /// <inheritdoc cref="IActorRef"/>

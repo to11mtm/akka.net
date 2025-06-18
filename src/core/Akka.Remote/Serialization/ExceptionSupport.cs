@@ -1,29 +1,28 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ExceptionSupport.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using System.Collections.Generic;
 using System.Reflection;
-using System.Runtime.Serialization.Formatters;
+using System.Runtime.CompilerServices;
 using Akka.Actor;
 using Akka.Util;
 using Akka.Util.Internal;
 using Google.Protobuf;
-#if SERIALIZATION
 using System.Runtime.Serialization;
-#endif
+using Akka.Remote.Serialization.Proto.Msg;
 
 namespace Akka.Remote.Serialization
 {
-    internal class ExceptionSupport
+    internal sealed class ExceptionSupport
     {
         private readonly WrappedPayloadSupport _wrappedPayloadSupport;
         private const BindingFlags All = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
-        private HashSet<string> DefaultProperties = new HashSet<string>
+        private readonly HashSet<string> _defaultProperties = new()
         {
             "ClassName",
             "Message",
@@ -54,11 +53,7 @@ namespace Akka.Remote.Serialization
 
         internal Proto.Msg.ExceptionData ExceptionToProto(Exception exception)
         {
-#if SERIALIZATION
             return ExceptionToProtoNet(exception);
-#else
-            return ExceptionToProtoNetCore(exception);
-#endif
         }
 
         public Exception DeserializeException(byte[] bytes)
@@ -69,15 +64,10 @@ namespace Akka.Remote.Serialization
 
         internal Exception ExceptionFromProto(Proto.Msg.ExceptionData proto)
         {
-#if SERIALIZATION
             return ExceptionFromProtoNet(proto);
-#else
-            return ExceptionFromProtoNetCore(proto);
-#endif
         }
 
-#if SERIALIZATION
-        private FormatterConverter DefaultFormatterConverter = new FormatterConverter();
+        private readonly FormatterConverter _defaultFormatterConverter = new();
 
         public Proto.Msg.ExceptionData ExceptionToProtoNet(Exception exception)
         {
@@ -93,16 +83,29 @@ namespace Akka.Remote.Serialization
             message.StackTrace = exception.StackTrace ?? "";
             message.Source = exception.Source ?? "";
             message.InnerException = ExceptionToProto(exception.InnerException);
+            
+            var forwardedFrom = exceptionType.GetCustomAttribute<TypeForwardedFromAttribute>();
+            message.TypeForwardedFrom = forwardedFrom is not null 
+                ? forwardedFrom.AssemblyFullName[..forwardedFrom.AssemblyFullName.IndexOf(',')] 
+                : string.Empty;
 
             var serializable = exception as ISerializable;
-            var serializationInfo = new SerializationInfo(exceptionType, DefaultFormatterConverter);
+            var serializationInfo = new SerializationInfo(exceptionType, _defaultFormatterConverter);
             serializable.GetObjectData(serializationInfo, new StreamingContext());
 
             foreach (var info in serializationInfo)
             {
-                if (DefaultProperties.Contains(info.Name)) continue;
-                var preparedValue = _wrappedPayloadSupport.PayloadToProto(info.Value);
-                message.CustomFields.Add(info.Name, preparedValue);
+                if (_defaultProperties.Contains(info.Name)) continue;
+                if (info.Value is Exception exceptionValue)
+                {
+                    var exceptionPayload = ExceptionToProto(exceptionValue);
+                    var preparedValue = _wrappedPayloadSupport.PayloadToProto(exceptionPayload);
+                    message.CustomFields.Add(info.Name, preparedValue);
+                } else
+                {
+                    var preparedValue = _wrappedPayloadSupport.PayloadToProto(info.Value);
+                    message.CustomFields.Add(info.Name, preparedValue);
+                }
             }
 
             return message;
@@ -113,24 +116,39 @@ namespace Akka.Remote.Serialization
             if (string.IsNullOrEmpty(proto.TypeName))
                 return null;
 
-            Type exceptionType = Type.GetType(proto.TypeName);
+            var exceptionType = Type.GetType(proto.TypeName);
+            
+            // If type loading failed and type was forwarded from an older assembly,
+            // retry by loading the type from the older assembly name
+            if (exceptionType is null && proto.TypeForwardedFrom != string.Empty)
+            {
+                var typeName = $"{proto.TypeName[..proto.TypeName.IndexOf(',')]}, {proto.TypeForwardedFrom}";
+                exceptionType = Type.GetType(typeName);
+            }
 
-            var serializationInfo = new SerializationInfo(exceptionType, DefaultFormatterConverter);
+            // If we still fail, throw.
+            if (exceptionType is null)
+                throw new SerializationException($"Failed to deserialize ExceptionData. Could not load {proto.TypeName}. {proto}");
+
+            var serializationInfo = new SerializationInfo(exceptionType, _defaultFormatterConverter);
 
             serializationInfo.AddValue("ClassName", proto.TypeName);
-            serializationInfo.AddValue("Message", proto.Message);
-            serializationInfo.AddValue("StackTraceString", proto.StackTrace);
-            serializationInfo.AddValue("Source", proto.Source);
+            serializationInfo.AddValue("Message", ValueOrNull(proto.Message));
+            serializationInfo.AddValue("StackTraceString", ValueOrNull(proto.StackTrace));
+            serializationInfo.AddValue("Source", ValueOrNull(proto.Source));
             serializationInfo.AddValue("InnerException", ExceptionFromProto(proto.InnerException));
             serializationInfo.AddValue("HelpURL", string.Empty);
-            serializationInfo.AddValue("RemoteStackTraceString", string.Empty);
+            serializationInfo.AddValue("RemoteStackTraceString", null);
             serializationInfo.AddValue("RemoteStackIndex", 0);
-            serializationInfo.AddValue("ExceptionMethod", string.Empty);
+            serializationInfo.AddValue("ExceptionMethod", null);
             serializationInfo.AddValue("HResult", int.MinValue);
 
             foreach (var field in proto.CustomFields)
             {
-                serializationInfo.AddValue(field.Key, _wrappedPayloadSupport.PayloadFrom(field.Value));
+                var payload = _wrappedPayloadSupport.PayloadFrom(field.Value);
+                if (payload is ExceptionData exception)
+                    payload = ExceptionFromProto(exception);
+                serializationInfo.AddValue(field.Key, payload);
             }
 
             Exception obj = null;
@@ -148,71 +166,8 @@ namespace Akka.Remote.Serialization
 
             return obj;
         }
-#else
-        private TypeInfo ExceptionTypeInfo = typeof(Exception).GetTypeInfo();
 
-        internal Proto.Msg.ExceptionData ExceptionToProtoNetCore(Exception exception)
-        {
-            var message = new Proto.Msg.ExceptionData();
-
-            if (exception == null)
-                return message;
-
-            var exceptionType = exception.GetType();
-
-            message.TypeName = exceptionType.TypeQualifiedName();
-            message.Message = exception.Message;
-            message.StackTrace = exception.StackTrace ?? "";
-            message.Source = exception.Source ?? "";
-            message.InnerException = ExceptionToProto(exception.InnerException);
-
-            // serialize all public properties
-            foreach (var property in exceptionType.GetTypeInfo().DeclaredProperties)
-            {
-                if (DefaultProperties.Contains(property.Name)) continue;
-                if (property.SetMethod != null)
-                {
-                    message.CustomFields.Add(property.Name, _wrappedPayloadSupport.PayloadToProto(property.GetValue(exception)));
-                }
-            }
-
-            return message;
-        }
-
-        internal Exception ExceptionFromProtoNetCore(Proto.Msg.ExceptionData proto)
-        {
-            if (string.IsNullOrEmpty(proto.TypeName))
-                return null;
-
-            Type exceptionType = Type.GetType(proto.TypeName);
-
-            var obj = System.Runtime.Serialization.FormatterServices.GetUninitializedObject(exceptionType);
-
-            if (!string.IsNullOrEmpty(proto.Message))
-                ExceptionTypeInfo?.GetField("_message", All)?.SetValue(obj, proto.Message);
-
-            if (!string.IsNullOrEmpty(proto.StackTrace))
-                ExceptionTypeInfo?.GetField("_stackTraceString", All)?.SetValue(obj, proto.StackTrace);
-
-            if (!string.IsNullOrEmpty(proto.Source))
-                ExceptionTypeInfo?.GetField("_source", All)?.SetValue(obj, proto.Source);
-
-            if (!string.IsNullOrEmpty(proto.InnerException.TypeName))
-                ExceptionTypeInfo?.GetField("_innerException", All)?.SetValue(obj, ExceptionFromProto(proto.InnerException));
-
-            // deserialize all public properties with setters
-            foreach (var property in proto.CustomFields)
-            {
-                if (DefaultProperties.Contains(property.Key)) continue;
-                var prop = exceptionType.GetProperty(property.Key, All);
-                if (prop.SetMethod != null)
-                {
-                    prop.SetValue(obj, _wrappedPayloadSupport.PayloadFrom(property.Value));
-                }
-            }
-
-            return (Exception)obj;
-        }
-#endif
+        private static string ValueOrNull(string value)
+            => string.IsNullOrEmpty(value) ? null : value;
     }
 }

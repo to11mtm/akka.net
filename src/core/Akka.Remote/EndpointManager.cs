@@ -1,15 +1,14 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="EndpointManager.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
-
+#pragma warning disable AK1004
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Akka.Actor;
@@ -24,7 +23,7 @@ namespace Akka.Remote
     /// <summary>
     /// INTERNAL API
     /// </summary>
-    internal class EndpointManager : ReceiveActor, IRequiresMessageQueue<IUnboundedMessageQueueSemantics>
+    internal sealed class EndpointManager : ReceiveActor, IRequiresMessageQueue<IUnboundedMessageQueueSemantics>
     {
 
         #region Policy definitions
@@ -462,10 +461,10 @@ namespace Akka.Remote
         /// Mapping between addresses and endpoint actors. If passive connections are turned off, incoming connections
         /// will not be part of this map!
         /// </summary>
-        private readonly EndpointRegistry _endpoints = new EndpointRegistry();
+        private readonly EndpointRegistry _endpoints = new();
         private readonly RemoteSettings _settings;
         private readonly Config _conf;
-        private readonly AtomicCounterLong _endpointId = new AtomicCounterLong(0L);
+        private readonly AtomicCounterLong _endpointId = new(0L);
         private readonly ILoggingAdapter _log;
         private readonly EventPublisher _eventPublisher;
 
@@ -477,10 +476,9 @@ namespace Akka.Remote
         /// <summary>
         /// Mapping between transports and the local addresses they listen to
         /// </summary>
-        private Dictionary<Address, AkkaProtocolTransport> _transportMapping =
-            new Dictionary<Address, AkkaProtocolTransport>();
+        private Dictionary<Address, AkkaProtocolTransport> _transportMapping = new();
 
-        private readonly ConcurrentDictionary<Link, ResendState> _receiveBuffers = new ConcurrentDictionary<Link, ResendState>();
+        private readonly ConcurrentDictionary<Link, ResendState> _receiveBuffers = new();
 
         private bool RetryGateEnabled => _settings.RetryGateClosedFor > TimeSpan.Zero;
 
@@ -511,16 +509,15 @@ namespace Akka.Remote
             }
         }
 
-        private Dictionary<IActorRef, AkkaProtocolHandle> _pendingReadHandoffs = new Dictionary<IActorRef, AkkaProtocolHandle>();
-        private Dictionary<IActorRef, List<InboundAssociation>> _stashedInbound = new Dictionary<IActorRef, List<InboundAssociation>>();
+        private Dictionary<IActorRef, AkkaProtocolHandle> _pendingReadHandoffs = new();
+        private Dictionary<IActorRef, List<InboundAssociation>> _stashedInbound = new();
 
 
         private void HandleStashedInbound(IActorRef endpoint, bool writerIsIdle)
         {
-            var stashed = _stashedInbound.GetOrElse(endpoint, new List<InboundAssociation>());
-            _stashedInbound.Remove(endpoint);
-            foreach (var ia in stashed)
-                HandleInboundAssociation(ia, writerIsIdle);
+            if (_stashedInbound.Remove(endpoint, out var value))
+                foreach (var ia in value)
+                    HandleInboundAssociation(ia, writerIsIdle);
         }
 
         private void KeepQuarantinedOr(Address remoteAddress, Action body)
@@ -551,14 +548,14 @@ namespace Akka.Remote
                 {
                     switch (e)
                     {
-                        case HopelessAssociation h when h.Uid != null:
-                            _log.Error(e.InnerException ?? e, "Association to [{0}] with UID [{1}] is irrecoverably failed. Quarantining address.", h.RemoteAddress, h.Uid);
+                        case HopelessAssociation { Uid: not null }:
+                            _log.Error(e.InnerException ?? e, "Association to [{0}] with UID [{1}] is irrecoverably failed. Quarantining address.", e.RemoteAddress, e.Uid);
                             if (_settings.QuarantineDuration.HasValue && _settings.QuarantineDuration != TimeSpan.MaxValue)
                             {
                                 // have a finite quarantine duration specified in settings.
                                 // If we don't have one specified, don't bother quarantining - it's disabled.
-                                _endpoints.MarkAsQuarantined(h.RemoteAddress, h.Uid.Value, Deadline.Now + _settings.QuarantineDuration);
-                                _eventPublisher.NotifyListeners(new QuarantinedEvent(h.RemoteAddress, h.Uid.Value));
+                                _endpoints.MarkAsQuarantined(e.RemoteAddress, e.Uid.Value, Deadline.Now + _settings.QuarantineDuration);
+                                _eventPublisher.NotifyListeners(new QuarantinedEvent(e.RemoteAddress, e.Uid.Value));
                             }
 
                             return Directive.Stop;
@@ -599,7 +596,7 @@ namespace Akka.Remote
                     case ActorInitializationException i when i.InnerException is HopelessAssociation h2:
                         return Hopeless(h2);
                     default:
-                        if (ex is EndpointDisassociatedException || ex is EndpointAssociationException) { } //no logging
+                        if (ex is EndpointDisassociatedException or EndpointAssociationException) { } //no logging
                         else { _log.Error(ex, ex.Message); }
                         _endpoints.MarkAsFailed(Sender, Deadline.Now + _settings.RetryGateClosedFor);
                         return Directive.Stop;
@@ -689,9 +686,9 @@ namespace Akka.Remote
 
             Receive<InboundAssociation>(
                 ia => Context.System.Scheduler.ScheduleTellOnce(TimeSpan.FromMilliseconds(10), Self, ia, Self));
-            Receive<ManagementCommand>(mc => Sender.Tell(new ManagementCommandAck(status: false)));
-            Receive<StartupFinished>(sf => Become(Accepting));
-            Receive<ShutdownAndFlush>(sf =>
+            Receive<ManagementCommand>(_ => Sender.Tell(new ManagementCommandAck(status: false)));
+            Receive<StartupFinished>(_ => Become(Accepting));
+            Receive<ShutdownAndFlush>(_ =>
              {
                  Sender.Tell(true);
                  Context.Stop(Self);
@@ -702,7 +699,7 @@ namespace Akka.Remote
         /// Message-processing behavior when the <see cref="EndpointManager"/> is able to accept
         /// inbound association requests.
         /// </summary>
-        protected void Accepting()
+        private void Accepting()
         {
             Receive<ManagementCommand>(mc =>
                 {
@@ -755,7 +752,7 @@ namespace Akka.Remote
                         //the quarantine uid has lost the race with some failure, do nothing
                     }
                 }
-                else if (policy.Item1 is Quarantined && policy.Item2 != null && policy.Item1.AsInstanceOf<Quarantined>().Uid == policy.Item2.Value)
+                else if (policy.Item1 is Quarantined quarantined && policy.Item2 != null && quarantined.Uid == policy.Item2.Value)
                 {
                     // the UID to be quarantined already exists, do nothing
                 }
@@ -791,7 +788,9 @@ namespace Akka.Remote
                     // Side-effecting here
                     if (drop)
                     {
+#pragma warning disable CS0618
                         x.Value.Disassociate();
+#pragma warning restore CS0618
                         Context.Stop(x.Key);
                     }
                     return !drop;
@@ -805,7 +804,9 @@ namespace Akka.Remote
                         var handle = assoc.Association.AsInstanceOf<AkkaProtocolHandle>();
                         var drop = MatchesQuarantine(handle);
                         if (drop)
+#pragma warning disable CS0618
                             handle.Disassociate();
+#pragma warning restore CS0618
                         return !drop;
                     }).ToList();
                     return new KeyValuePair<IActorRef, List<InboundAssociation>>(x.Key, associations);
@@ -816,9 +817,6 @@ namespace Akka.Remote
             Receive<Send>(send =>
             {
                 var recipientAddress = send.Recipient.Path.Address;
-                IActorRef CreateAndRegisterWritingEndpoint() => _endpoints.RegisterWritableEndpoint(recipientAddress, 
-                    CreateEndpoint(recipientAddress, send.Recipient.LocalAddressToUse, _transportMapping[send.Recipient.LocalAddressToUse], 
-                        _settings, writing: true, handleOption: null), uid: null);
 
                 // pattern match won't throw a NullReferenceException if one is returned by WritableEndpointWithPolicyFor
                 switch (_endpoints.WritableEndpointWithPolicyFor(recipientAddress))
@@ -839,6 +837,12 @@ namespace Akka.Remote
                         CreateAndRegisterWritingEndpoint().Tell(send);
                         break;
                 }
+
+                return;
+
+                IActorRef CreateAndRegisterWritingEndpoint() => _endpoints.RegisterWritableEndpoint(recipientAddress, 
+                    CreateEndpoint(recipientAddress, send.Recipient.LocalAddressToUse, _transportMapping[send.Recipient.LocalAddressToUse], 
+                        _settings, writing: true, handleOption: null), uid: null);
             });
             Receive<InboundAssociation>(ia => HandleInboundAssociation(ia, false));
             Receive<EndpointWriter.StoppedReading>(endpoint => AcceptPendingReader(endpoint.Writer));
@@ -874,12 +878,12 @@ namespace Akka.Remote
                         break;
                 }
             });
-            Receive<ReliableDeliverySupervisor.Idle>(idle =>
+            Receive<ReliableDeliverySupervisor.Idle>(_ =>
             {
                 HandleStashedInbound(Sender, writerIsIdle: true);
             });
-            Receive<Prune>(prune => _endpoints.Prune());
-            Receive<ShutdownAndFlush>(shutdown =>
+            Receive<Prune>(_ => _endpoints.Prune());
+            Receive<ShutdownAndFlush>(_ =>
             {
                 //Shutdown all endpoints and signal to Sender when ready (and whether all endpoints were shutdown gracefully)
                 var sender = Sender;
@@ -892,8 +896,7 @@ namespace Akka.Remote
                         {
                             if (result.IsFaulted || result.IsCanceled)
                             {
-                                if (result.Exception != null)
-                                    result.Exception.Handle(e => true);
+                                result.Exception?.Handle(_ => true);
                                 return false;
                             }
                             return result.Result.All(x => x);
@@ -905,7 +908,7 @@ namespace Akka.Remote
                               if (result.IsFaulted || result.IsCanceled)
                               {
                                   if (result.Exception != null)
-                                      result.Exception.Handle(e => true);
+                                      result.Exception.Handle(_ => true);
                                   return false;
                               }
                               return result.Result.All(x => x) && tr.Result;
@@ -926,12 +929,12 @@ namespace Akka.Remote
         /// <summary>
         /// TBD
         /// </summary>
-        protected void Flushing()
+        private void Flushing()
         {
             Receive<Send>(send => Context.System.DeadLetters.Tell(send));
             Receive<InboundAssociation>(
                      ia => ia.Association.AsInstanceOf<AkkaProtocolHandle>().Disassociate(DisassociateInfo.Shutdown));
-            Receive<Terminated>(terminated => { }); // why should we care now?
+            Receive<Terminated>(_ => { }); // why should we care now?
         }
 
         #endregion

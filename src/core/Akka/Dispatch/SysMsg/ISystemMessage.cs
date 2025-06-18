@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ISystemMessage.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -24,11 +24,11 @@ namespace Akka.Dispatch.SysMsg
         /// <summary>
         /// TBD
         /// </summary>
-        public static readonly LatestFirstSystemMessageList LNil = new LatestFirstSystemMessageList(null);
+        public static readonly LatestFirstSystemMessageList LNil = new(null);
         /// <summary>
         /// TBD
         /// </summary>
-        public static readonly EarliestFirstSystemMessageList ENil = new EarliestFirstSystemMessageList(null);
+        public static readonly EarliestFirstSystemMessageList ENil = new(null);
 
         /// <summary>
         /// TBD
@@ -118,14 +118,14 @@ namespace Akka.Dispatch.SysMsg
         /// should be taken when passing the tail to other methods. <see cref="SystemMessage.Unlink"/> should be
         /// called on the head if one wants to detach the tail permanently.
         /// </summary>
-        public LatestFirstSystemMessageList Tail => new LatestFirstSystemMessageList(Head.Next);
+        public LatestFirstSystemMessageList Tail => new(Head.Next);
 
         /// <summary>
         /// Reverses the list. This operation mutates the underlying list. The cost of the call is O(N), where N is the number of elements.
         /// 
         /// The type of the returned list ios the opposite order: <see cref="EarliestFirstSystemMessageList"/>.
         /// </summary>
-        public EarliestFirstSystemMessageList Reverse => new EarliestFirstSystemMessageList(SystemMessageList.ReverseInner(Head, null));
+        public EarliestFirstSystemMessageList Reverse => new(SystemMessageList.ReverseInner(Head, null));
 
         /// <summary>
         /// Attaches a message to the current head of the list. This operation has constant cost.
@@ -192,14 +192,14 @@ namespace Akka.Dispatch.SysMsg
         /// should be taken when passing the tail to other methods. <see cref="SystemMessage.Unlink"/> should be
         /// called on the head if one wants to detach the tail permanently.
         /// </summary>
-        public EarliestFirstSystemMessageList Tail => new EarliestFirstSystemMessageList(Head.Next);
+        public EarliestFirstSystemMessageList Tail => new(Head.Next);
 
         /// <summary>
         /// Reverses the list. This operation mutates the underlying list. The cost of the call is O(N), where N is the number of elements.
         /// 
         /// The type of the returned list ios the opposite order: <see cref="LatestFirstSystemMessageList"/>.
         /// </summary>
-        public LatestFirstSystemMessageList Reverse => new LatestFirstSystemMessageList(SystemMessageList.ReverseInner(Head, null));
+        public LatestFirstSystemMessageList Reverse => new(SystemMessageList.ReverseInner(Head, null));
 
         /// <summary>
         /// Attaches a message to the current head of the list. This operation has constant cost.
@@ -278,11 +278,12 @@ namespace Akka.Dispatch.SysMsg
     /// <see cref="ISystemMessage"/> is an interface and too basic to express
     /// all of the capabilities needed to express a full-fledged system message.
     /// </summary>
-    [InternalApi]
+    [InternalStableApi]
     public abstract class SystemMessage : ISystemMessage
     {
         /// <summary>
         /// The next <see cref="ISystemMessage"/> in the linked list.
+        /// Next fields are only modifiable via the <see cref="SystemMessageList"/> class.
         /// </summary>
         [NonSerialized]
         internal SystemMessage Next;
@@ -290,15 +291,12 @@ namespace Akka.Dispatch.SysMsg
         /// <summary>
         /// Unlinks this message from the linked list.
         /// </summary>
-        public void Unlink()
-        {
-            Next = null;
-        }
+        public void Unlink() => Next = null;
 
         /// <summary>
         /// Returns <c>true</c> if we are unlinked.
         /// </summary>
-        public bool Unlinked { get { return Next == null; } }
+        public bool Unlinked => Next == null;
     }
 
     /// <summary>
@@ -306,7 +304,6 @@ namespace Akka.Dispatch.SysMsg
     /// </summary>
     public sealed class NoMessage : SystemMessage
     {
-        /// <inheritdoc cref="object"/>
         public override string ToString()
         {
             return "NoMessage";
@@ -349,7 +346,7 @@ namespace Akka.Dispatch.SysMsg
         /// <value><c>true</c> if [address terminated]; otherwise, <c>false</c>.</value>
         public bool AddressTerminated { get; private set; }
 
-        /// <inheritdoc cref="object"/>
+        
         public override string ToString()
         {
             return "<DeathWatchNotification>: " + Actor + ", ExistenceConfirmed=" + ExistenceConfirmed + ", AddressTerminated=" + AddressTerminated;
@@ -544,7 +541,7 @@ namespace Akka.Dispatch.SysMsg
         {
             if (ReferenceEquals(null, obj)) return false;
             if (ReferenceEquals(this, obj)) return true;
-            return obj is Unwatch && Equals((Unwatch)obj);
+            return obj is Unwatch unwatch && Equals(unwatch);
         }
 
         public override int GetHashCode()
@@ -602,8 +599,8 @@ namespace Akka.Dispatch.SysMsg
         /// <param name="message">TBD</param>
         public ActorTaskSchedulerMessage(ActorTaskScheduler scheduler, Task task, object message)
         {
-            _scheduler = scheduler;
-            _task = task;
+            _scheduler = scheduler ?? throw new ArgumentNullException(nameof(scheduler));
+            _task = task ?? throw new ArgumentNullException(nameof(task));
             Message = message;
         }
 
@@ -614,18 +611,18 @@ namespace Akka.Dispatch.SysMsg
         /// <param name="message">The message causing the exception</param>
         public ActorTaskSchedulerMessage(Exception exception, object message)
         {
-            Exception = exception;
+            Exception = exception ?? throw new ArgumentNullException(nameof(exception));
             Message = message;
         }
 
         /// <summary>
         /// TBD
         /// </summary>
-        public Exception Exception { get; private set; }
+        public Exception Exception { get; }
         /// <summary>
         /// TBD
         /// </summary>
-        public object Message { get; private set; }
+        public object Message { get; }
 
         /// <summary>
         /// TBD
@@ -841,7 +838,7 @@ namespace Akka.Dispatch.SysMsg
         {
             if (ReferenceEquals(null, obj)) return false;
             if (ReferenceEquals(this, obj)) return true;
-            return obj is Create && Equals((Create)obj);
+            return obj is Create create && Equals(create);
         }
 
         public override int GetHashCode()
@@ -860,27 +857,12 @@ namespace Akka.Dispatch.SysMsg
     }
 
     /// <summary>
-    /// TBD
+    /// Singleton instance representing a register termination hook system message.
     /// </summary>
     public sealed class RegisterTerminationHook
     {
         private RegisterTerminationHook() { }
-        private static readonly RegisterTerminationHook _instance = new RegisterTerminationHook();
-        /// <summary>
-        /// TBD
-        /// </summary>
-        public static RegisterTerminationHook Instance
-        {
-            get
-            {
-                return _instance;
-            }
-        }
-
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <returns>TBD</returns>
+        public static RegisterTerminationHook Instance { get; } = new();
         public override string ToString()
         {
             return "<RegisterTerminationHook>";
@@ -888,27 +870,13 @@ namespace Akka.Dispatch.SysMsg
     }
 
     /// <summary>
-    /// TBD
+    /// Singleton system message indicating a termination hook.
     /// </summary>
     public sealed class TerminationHook
     {
         private TerminationHook() { }
-        private static readonly TerminationHook _instance = new TerminationHook();
-        /// <summary>
-        /// TBD
-        /// </summary>
-        public static TerminationHook Instance
-        {
-            get
-            {
-                return _instance;
-            }
-        }
+        public static TerminationHook Instance { get; } = new();
 
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <returns>TBD</returns>
         public override string ToString()
         {
             return "<TerminationHook>";
@@ -916,27 +884,13 @@ namespace Akka.Dispatch.SysMsg
     }
 
     /// <summary>
-    ///     Class Terminate.
+    /// Singleton system message indicating a completed termination hook.
     /// </summary>
     public sealed class TerminationHookDone
     {
         private TerminationHookDone() { }
-        private static readonly TerminationHookDone _instance = new TerminationHookDone();
-        /// <summary>
-        /// TBD
-        /// </summary>
-        public static TerminationHookDone Instance
-        {
-            get
-            {
-                return _instance;
-            }
-        }
+        public static TerminationHookDone Instance { get; } = new();
 
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <returns>TBD</returns>
         public override string ToString()
         {
             return "<TerminationHookDone>";

@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="StageActorRefSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -178,7 +178,7 @@ namespace Akka.Streams.Tests.Dsl
             warn.Message.ToString()
                 .Should()
                 .MatchRegex(
-                    "<PoisonPill> message sent to StageActor\\(akka\\://AkkaSpec/user/StreamSupervisor-[0-9]+/\\$\\$[a-z]+\\) will be ignored, since it is not a real Actor. Use a custom message type to communicate with it instead.");
+                    $"<PoisonPill> message sent to StageActor\\(akka\\://{Sys.Name}/user/StreamSupervisor-[0-9]+/\\$\\$[a-z]+\\) will be ignored, since it is not a real Actor. Use a custom message type to communicate with it instead.");
 
             stageRef.Tell(Kill.Instance);
             warn = ExpectMsg<Warning>(TimeSpan.FromSeconds(1));
@@ -186,7 +186,7 @@ namespace Akka.Streams.Tests.Dsl
             warn.Message.ToString()
                            .Should()
                            .MatchRegex(
-                               "<Kill> message sent to StageActor\\(akka\\://AkkaSpec/user/StreamSupervisor-[0-9]+/\\$\\$[a-z]+\\) will be ignored, since it is not a real Actor. Use a custom message type to communicate with it instead.");
+                               $"<Kill> message sent to StageActor\\(akka\\://{Sys.Name}/user/StreamSupervisor-[0-9]+/\\$\\$[a-z]+\\) will be ignored, since it is not a real Actor. Use a custom message type to communicate with it instead.");
 
             source.SetResult(2);
 
@@ -213,22 +213,22 @@ namespace Akka.Streams.Tests.Dsl
         }
         private sealed class CallInitStageActorRef
         {
-            public static readonly CallInitStageActorRef Instance = new CallInitStageActorRef();
+            public static readonly CallInitStageActorRef Instance = new();
             private CallInitStageActorRef() { }
         }
         private sealed class BecomeStringEcho
         {
-            public static readonly BecomeStringEcho Instance = new BecomeStringEcho();
+            public static readonly BecomeStringEcho Instance = new();
             private BecomeStringEcho() { }
         }
         private sealed class PullNow
         {
-            public static readonly PullNow Instance = new PullNow();
+            public static readonly PullNow Instance = new();
             private PullNow() { }
         }
         private sealed class StopNow
         {
-            public static readonly StopNow Instance = new StopNow();
+            public static readonly StopNow Instance = new();
             private StopNow() { }
         }
 
@@ -303,7 +303,7 @@ namespace Akka.Streams.Tests.Dsl
             }
             #endregion
 
-            private readonly Inlet<int> _inlet = new Inlet<int>("IntSum.in");
+            private readonly Inlet<int> _inlet = new("IntSum.in");
 
             public SumTestStage(IActorRef probe)
             {

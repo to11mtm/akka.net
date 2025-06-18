@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="Graph.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -9,10 +9,13 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Runtime.Serialization;
+using Akka.Annotations;
 using Akka.Streams.Implementation;
 using Akka.Streams.Implementation.Fusing;
 using Akka.Streams.Implementation.Stages;
 using Akka.Streams.Stage;
+using Akka.Util;
 using Akka.Util.Internal;
 // ReSharper disable MemberCanBePrivate.Global
 
@@ -141,7 +144,7 @@ namespace Akka.Streams.Dsl
             _inputPorts = inputPorts;
             _eagerComplete = eagerComplete;
 
-            var ins = ImmutableArray<Inlet<TIn>>.Empty.ToBuilder();
+            var ins = ImmutableArray.CreateBuilder<Inlet<TIn>>();
             for (var i = 0; i < inputPorts; i++)
                 ins.Add(new Inlet<TIn>("Merge.in" + i));
 
@@ -446,7 +449,7 @@ namespace Akka.Streams.Dsl
             private readonly MergePrioritized<T> _stage;
             private readonly List<FixedSizeBuffer<Inlet<T>>> _allBuffers;
             private int _runningUpstreams;
-            private readonly Random _randomGen = new Random();
+            private readonly Random _randomGen = new();
 
             public MergePrioritizedLogic(MergePrioritized<T> stage) : base(stage.Shape)
             {
@@ -866,17 +869,17 @@ namespace Akka.Streams.Dsl
         /// <summary>
         /// TBD
         /// </summary>
-        public readonly Inlet<T> Left = new Inlet<T>("left");
+        public readonly Inlet<T> Left = new("left");
 
         /// <summary>
         /// TBD
         /// </summary>
-        public readonly Inlet<T> Right = new Inlet<T>("right");
+        public readonly Inlet<T> Right = new("right");
 
         /// <summary>
         /// TBD
         /// </summary>
-        public readonly Outlet<T> Out = new Outlet<T>("out");
+        public readonly Outlet<T> Out = new("out");
 
         /// <summary>
         /// TBD
@@ -936,13 +939,13 @@ namespace Akka.Streams.Dsl
                         _pendingCount--;
                         TryPull();
                     },
-                    onDownstreamFinish: () =>
+                    onDownstreamFinish: cause =>
                     {
-                        if (stage._eagerCancel) CompleteStage();
+                        if (stage._eagerCancel) CancelStage(cause);
                         else
                         {
                             _downstreamsRunning--;
-                            if (_downstreamsRunning == 0) CompleteStage();
+                            if (_downstreamsRunning == 0) CancelStage(cause);
                             else if (_pending[i])
                             {
                                 _pending[i] = false;
@@ -1008,7 +1011,7 @@ namespace Akka.Streams.Dsl
         /// <summary>
         /// TBD
         /// </summary>
-        public readonly Inlet<T> In = new Inlet<T>("Broadcast.in");
+        public readonly Inlet<T> In = new("Broadcast.in");
 
         /// <summary>
         /// TBD
@@ -1096,19 +1099,18 @@ namespace Akka.Streams.Dsl
                         }
                         else if (!HasBeenPulled(stage.In))
                             Pull(stage.In);
-                    }, onDownstreamFinish: () =>
+                    }, onDownstreamFinish: cause =>
                     {
                         downstreamRunning--;
                         if(downstreamRunning == 0)
-                            CompleteStage();
-                        else if (_outPendingElement != null)
+                            CancelStage(cause);
+                        else if (_outPendingElement != null && index == _outPendingIndex)
                         {
-                            if (index == _outPendingIndex)
-                            {
-                                _outPendingElement = null;
-                                if(!HasBeenPulled(stage.In))
-                                    Pull(stage.In);
-                            }
+                            _outPendingElement = null;
+                            if(IsClosed(stage.In))
+                                CancelStage(cause);
+                            else if(!HasBeenPulled(stage.In))
+                                Pull(stage.In);
                         }
                     });
                 }
@@ -1169,7 +1171,7 @@ namespace Akka.Streams.Dsl
         /// <summary>
         /// TBD
         /// </summary>
-        public readonly Inlet<T> In = new Inlet<T>("Partition.in");
+        public readonly Inlet<T> In = new("Partition.in");
 
         /// <summary>
         /// TBD
@@ -1211,6 +1213,13 @@ namespace Akka.Streams.Dsl
         {
 
         }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="PartitionOutOfBoundsException"/> class.
+        /// </summary>
+        /// <param name="info">The <see cref="SerializationInfo" /> that holds the serialized object data about the exception being thrown.</param>
+        /// <param name="context">The <see cref="StreamingContext" /> that contains contextual information about the source or destination.</param>
+        public PartitionOutOfBoundsException(SerializationInfo info, StreamingContext context) : base(info, context) { }
     }
 
     /// <summary>
@@ -1272,10 +1281,10 @@ namespace Akka.Streams.Dsl
                         }
                         else _pendingQueue.Enqueue(outlet);
                     },
-                    onDownstreamFinish: () =>
+                    onDownstreamFinish: cause =>
                     {
                         downstreamsRunning--;
-                        if (downstreamsRunning == 0) CompleteStage();
+                        if (downstreamsRunning == 0) CancelStage(cause);
                         else if (!hasPulled && needDownstreamPulls > 0)
                         {
                             needDownstreamPulls--;
@@ -1340,7 +1349,7 @@ namespace Akka.Streams.Dsl
         /// <summary>
         /// TBD
         /// </summary>
-        public Inlet<T> In { get; } = new Inlet<T>("Balance.in");
+        public Inlet<T> In { get; } = new("Balance.in");
 
         /// <summary>
         /// TBD
@@ -1418,7 +1427,7 @@ namespace Akka.Streams.Dsl
         /// <summary>
         /// The singleton instance of <see cref="ZipWith"/>.
         /// </summary>
-        public static readonly ZipWith Instance = new ZipWith();
+        public static readonly ZipWith Instance = new();
         private ZipWith() { }
     }
 
@@ -1467,7 +1476,7 @@ namespace Akka.Streams.Dsl
         /// <summary>
         /// The singleton instance of <see cref="UnzipWith"/>.
         /// </summary>
-        public static readonly UnzipWith Instance = new UnzipWith();
+        public static readonly UnzipWith Instance = new();
         private UnzipWith() { }
     }
 
@@ -1771,7 +1780,7 @@ namespace Akka.Streams.Dsl
         /// <summary>
         /// TBD
         /// </summary>
-        public Outlet<TOut> Out { get; } = new Outlet<TOut>("Concat.out");
+        public Outlet<TOut> Out { get; } = new("Concat.out");
 
         /// <summary>
         /// TBD
@@ -1790,7 +1799,6 @@ namespace Akka.Streams.Dsl
         /// <returns>TBD</returns>
         protected override GraphStageLogic CreateLogic(Attributes inheritedAttributes) => new Logic(this);
     }
-
 
     /// <summary>
     /// TBD
@@ -1895,17 +1903,17 @@ namespace Akka.Streams.Dsl
         /// <summary>
         /// TBD
         /// </summary>
-        public Inlet<T> Primary { get; }   = new Inlet<T>("OrElse.primary");
+        public Inlet<T> Primary { get; }   = new("OrElse.primary");
 
         /// <summary>
         /// TBD
         /// </summary>
-        public Inlet<T> Secondary { get; } = new Inlet<T>("OrElse.secondary");
+        public Inlet<T> Secondary { get; } = new("OrElse.secondary");
 
         /// <summary>
         /// TBD
         /// </summary>
-        public Outlet<T> Out { get; } = new Outlet<T>("OrElse.out");
+        public Outlet<T> Out { get; } = new("OrElse.out");
 
         /// <summary>
         /// TBD
@@ -1924,5 +1932,100 @@ namespace Akka.Streams.Dsl
         /// </summary>
         /// <returns>TBD</returns>
         public override string ToString() => "OrElse";
+    }
+    
+    public static class WireTap
+    {
+        /// <summary>
+        /// TBD
+        /// </summary>
+        /// <typeparam name="T">TBD</typeparam>
+        /// <returns>TBD</returns>
+        public static WireTap<T> Create<T>() => new();
+    }
+
+    /// <summary>
+    /// <para>
+    /// Fan-out the stream to two output streams - a 'main' and a 'tap' one. Each incoming element is emitted
+    /// to the 'main' output; elements are also emitted to the 'tap' output if there is demand;
+    /// otherwise they are dropped.
+    /// </para>
+    /// <para>Emits when element is available and demand exists from the 'main' output; the element will also be sent to the 'tap' output if there is demand.</para>
+    /// <para>Backpressures when the 'main' output backpressures</para>
+    /// <para>Completes when upstream completes</para>
+    /// <para>Cancels when the 'main' output cancels</para>
+    /// </summary>
+    [InternalApi]
+    public sealed class WireTap<T> : GraphStage<FanOutShape<T, T, T>>
+    {
+        #region Logic
+
+        private sealed class Logic : GraphStageLogic
+        {
+            private Option<T> _pendingTap = Option<T>.None;
+
+            public Logic(WireTap<T> stage) : base(stage.Shape)
+            {
+                SetHandler(stage.In, () =>
+                {
+                    var elem = Grab(stage.In);
+                    Push(stage.OutMain, elem);
+                    if (IsAvailable(stage.OutTap))
+                        Push(stage.OutTap, elem);
+                    else
+                        _pendingTap = elem;
+                });
+                
+                SetHandler(stage.OutMain, () => Pull(stage.In), CancelStage);
+                
+                // The 'tap' output can neither backpressure, nor cancel, the stage.
+                SetHandler(stage.OutTap, 
+                    () =>
+                    {
+                        if (!_pendingTap.HasValue)
+                        {
+                            // no pending element to emit
+                            return;
+                        }
+                        
+                        Push(stage.OutTap, _pendingTap.Value);
+                        _pendingTap = Option<T>.None;
+                    },
+                    _ =>
+                    {
+                        SetHandler(stage.In, () => Push(stage.OutMain, Grab(stage.In)));
+                        // Allow any outstanding element to be garbage-collected
+                        _pendingTap = Option<T>.None;
+                    });
+            }
+        }
+
+        #endregion
+        
+        /// <summary>
+        /// Initializes a new instance of the <see cref="WireTap{T}"/> class.
+        /// </summary>
+        public WireTap() => Shape = new FanOutShape<T, T, T>(In, OutMain, OutTap);
+        
+        public Inlet<T> In { get; }   = new("WireTap.In");
+        public Outlet<T> OutMain { get; } = new("WireTap.OutMain");
+        public Outlet<T> OutTap { get; } = new("WireTap.OutTap");
+
+        public override FanOutShape<T, T, T> Shape { get; }
+        
+        protected override Attributes InitialAttributes => DefaultAttributes.WireTap;
+
+        /// <summary>
+        /// TBD
+        /// </summary>
+        /// <param name="inheritedAttributes">TBD</param>
+        /// <returns>TBD</returns>
+        protected override GraphStageLogic CreateLogic(Attributes inheritedAttributes) => new Logic(this);
+        
+        /// <summary>
+        /// TBD
+        /// </summary>
+        /// <returns>TBD</returns>
+        public override string ToString() => "WireTap";
     }
 }

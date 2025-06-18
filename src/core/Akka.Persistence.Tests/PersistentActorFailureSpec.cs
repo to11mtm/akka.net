@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="PersistentActorFailureSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -9,6 +9,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Persistence.Journal;
@@ -49,7 +50,7 @@ namespace Akka.Persistence.Tests
         internal class FailingMemoryJournal : MemoryJournal
         {
 
-            protected override Task<IImmutableList<Exception>> WriteMessagesAsync(IEnumerable<AtomicWrite> messages)
+            protected override Task<IImmutableList<Exception>> WriteMessagesAsync(IEnumerable<AtomicWrite> messages, CancellationToken cancellationToken)
             {
                 var msgs = messages.ToList();
                 if (IsWrong(msgs))
@@ -59,7 +60,7 @@ namespace Akka.Persistence.Tests
                 {
                     return Task.FromResult(checkSerializable);
                 }
-                return base.WriteMessagesAsync(msgs);
+                return base.WriteMessagesAsync(msgs, cancellationToken);
             }
 
             public override Task ReplayMessagesAsync(IActorContext context, string persistenceId, long fromSequenceNr,
@@ -210,9 +211,9 @@ namespace Akka.Persistence.Tests
 
             private bool FailingRecover(object message)
             {
-                if (message is Evt)
+                if (message is Evt evt)
                 {
-                    if (((Evt) message).Data.Equals("bad"))
+                    if (evt.Data.Equals("bad"))
                         throw new SimulatedException("Simulated exception from receiveRecover");
                 }
                 return true;

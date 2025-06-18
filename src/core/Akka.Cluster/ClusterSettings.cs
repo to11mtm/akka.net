@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ClusterSettings.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -9,6 +9,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Reflection;
 using Akka.Actor;
 using Akka.Configuration;
 using Akka.Dispatch;
@@ -21,8 +22,8 @@ namespace Akka.Cluster
     /// </summary>
     public sealed class ClusterSettings
     {
-        readonly Config _failureDetectorConfig;
-        readonly string _useDispatcher;
+        private readonly Config _failureDetectorConfig;
+        private readonly string _useDispatcher;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ClusterSettings"/> class.
@@ -33,8 +34,8 @@ namespace Akka.Cluster
         {
             //TODO: Requiring!
             var clusterConfig = config.GetConfig("akka.cluster");
-            if (clusterConfig.IsNullOrEmpty())
-                throw ConfigurationException.NullOrEmptyConfig<ClusterSettings>("akka.cluster");
+            if (clusterConfig?.GetConfig("failure-detector") == null)
+                throw new ConfigurationException($"Failed to instantiate {nameof(ClusterSettings)}: Configuration does not contain `akka.cluster` node. Did you forgot to set the 'akka.cluster.provider' HOCON property to 'cluster'?");
 
             LogInfoVerbose = clusterConfig.GetBoolean("log-info-verbose", false);
             LogInfo = LogInfoVerbose || clusterConfig.GetBoolean("log-info", false);
@@ -65,10 +66,13 @@ namespace Akka.Cluster
                 ) ? TimeSpan.Zero :
                 clusterConfig.GetTimeSpan("down-removal-margin", null);
 
+#pragma warning disable CS0618
             AutoDownUnreachableAfter = clusterConfig.GetTimeSpanWithOffSwitch("auto-down-unreachable-after");
+#pragma warning restore CS0618
 
             Roles = clusterConfig.GetStringList("roles", new string[] { }).ToImmutableHashSet();
             AppVersion = Util.AppVersion.Create(clusterConfig.GetString("app-version"));
+
             MinNrOfMembers = clusterConfig.GetInt("min-nr-of-members", 0);
 
             _useDispatcher = clusterConfig.GetString("use-dispatcher", null);
@@ -87,13 +91,37 @@ namespace Akka.Cluster
             var downingProviderClassName = clusterConfig.GetString("downing-provider-class", null);
             if (!string.IsNullOrEmpty(downingProviderClassName))
                 DowningProviderType = Type.GetType(downingProviderClassName, true);
+#pragma warning disable CS0618
             else if (AutoDownUnreachableAfter.HasValue)
+#pragma warning restore CS0618
                 DowningProviderType = typeof(AutoDowning);
             else
                 DowningProviderType = typeof(NoDowning);
 
             RunCoordinatedShutdownWhenDown = clusterConfig.GetBoolean("run-coordinated-shutdown-when-down", false);
-            AllowWeaklyUpMembers = clusterConfig.GetBoolean("allow-weakly-up-members", false);
+            
+            TimeSpan GetWeaklyUpDuration()
+            {
+                var cKey = "allow-weakly-up-members";
+                switch (clusterConfig.GetString(cKey, string.Empty)
+                    .ToLowerInvariant())
+                {
+                    case "off":
+                        return TimeSpan.Zero;
+                    case "on":
+
+                        return TimeSpan.FromSeconds(7); // for backwards compatibility when it wasn't a duration
+                    default:
+                        var val = clusterConfig.GetTimeSpan(cKey, TimeSpan.FromSeconds(7));
+                        if(!(val > TimeSpan.Zero))
+                            throw new ConfigurationException($"Valid settings for [akka.cluster.{cKey}] are 'off', 'on', or a timespan greater than 0s. Received [{val}]");
+                        return val;
+                }
+            }
+
+            WeaklyUpAfter = GetWeaklyUpDuration();
+
+            UseLegacyHeartbeatMessage = clusterConfig.GetBoolean("use-legacy-heartbeat-message", false);
         }
 
         /// <summary>
@@ -182,8 +210,9 @@ namespace Akka.Cluster
         public TimeSpan? PublishStatsInterval { get; }
 
         /// <summary>
-        /// TBD
+        /// Obsolete. No longer used as of Akka.NET v1.5.
         /// </summary>
+        [Obsolete(message:"Deprecated as of Akka.NET v1.5.2 - clustering defaults to using KeepMajority SBR instead")]
         public TimeSpan? AutoDownUnreachableAfter { get; }
 
         /// <summary>
@@ -231,11 +260,7 @@ namespace Akka.Cluster
         /// </summary>
         public ImmutableDictionary<string, int> MinNrOfMembersOfRole { get; }
 
-        /// <summary>
-        /// Obsolete. Use <see cref="P:Cluster.DowningProvider.DownRemovalMargin"/>.
-        /// </summary>
-        [Obsolete("Use Cluster.DowningProvider.DownRemovalMargin [1.1.2]")]
-        public TimeSpan DownRemovalMargin { get; }
+        internal TimeSpan DownRemovalMargin { get; }
 
         /// <summary>
         /// Determine whether or not to log heartbeat message in verbose mode.
@@ -261,12 +286,28 @@ namespace Akka.Cluster
         /// <summary>
         /// If this is set to "off", the leader will not move <see cref="MemberStatus.Joining"/> members to <see cref="MemberStatus.Up"/> during a network
         /// split. This feature allows the leader to accept <see cref="MemberStatus.Joining"/> members to be <see cref="MemberStatus.WeaklyUp"/>
-        /// so they become part of the cluster even during a network split. The leader will
-        /// move <see cref="MemberStatus.Joining"/> members to <see cref="MemberStatus.WeaklyUp"/> after 3 rounds of 'leader-actions-interval'
-        /// without convergence.
+        /// so they become part of the cluster even during a network split.
+        ///
         /// The leader will move <see cref="MemberStatus.WeaklyUp"/> members to <see cref="MemberStatus.Up"/> status once convergence has been reached.
         /// </summary>
-        public bool AllowWeaklyUpMembers { get; }
+        public bool AllowWeaklyUpMembers => WeaklyUpAfter != TimeSpan.Zero;
+
+        /// <summary>
+        /// The duration after which a member who is currently <see cref="MemberStatus.Joining"/> will be marked as
+        /// <see cref="MemberStatus.WeaklyUp"/> in the event that members of the cluster are currently unreachable.
+        ///
+        /// This is designed to allow new cluster members to perform work even in the event of a cluster split.
+        /// 
+        /// The leader will move <see cref="MemberStatus.WeaklyUp"/> members to <see cref="MemberStatus.Up"/> status once convergence has been reached.
+        /// </summary>
+        public TimeSpan WeaklyUpAfter { get; }
+        
+        /// <summary>
+        /// Enable/disable legacy pre-1.4.19 <see cref="ClusterHeartbeatSender.Heartbeat"/> and
+        /// <see cref="ClusterHeartbeatSender.HeartbeatRsp"/> wire format serialization support.
+        /// Set this to true if you're doing a rolling update from Akka.NET version older than 1.4.19.
+        /// </summary>
+        public bool UseLegacyHeartbeatMessage { get; }
     }
 }
 

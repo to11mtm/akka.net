@@ -1,15 +1,18 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="InternalTestActorRef.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Actor.Internal;
 using Akka.Dispatch;
-using Akka.Dispatch.SysMsg;
+using Akka.Event;
 using Akka.Pattern;
 using Akka.Util;
 using Akka.Util.Internal;
@@ -24,7 +27,7 @@ namespace Akka.TestKit.Internal
     /// </summary>
     public class InternalTestActorRef : LocalActorRef
     {
-        private static readonly AtomicCounterLong _uniqueNameNumber = new AtomicCounterLong(0);
+        private static readonly AtomicCounterLong _uniqueNameNumber = new(0);
 
         /// <summary>INTERNAL
         /// <remarks>Note! Part of internal API. Breaking changes may occur without notice. Use at own risk.</remarks>
@@ -86,6 +89,14 @@ namespace Akka.TestKit.Internal
             sender = sender.IsNobody() ? cell.System.DeadLetters : sender;
             var envelope = new Envelope(message, sender);
             cell.UseThreadContext(() => cell.ReceiveMessageForTest(envelope));
+        }
+
+        public Task ReceiveAsync(object message, IActorRef sender = null)
+        {
+            var cell = (TestActorCell)Cell;
+            sender = sender.IsNobody() ? cell.System.DeadLetters : sender;
+            var envelope = new Envelope(message, sender);
+            return cell.UseThreadContextAsync(() => cell.ReceiveMessageForTestAsync(envelope));
         }
 
         /// <summary>
@@ -172,21 +183,18 @@ namespace Akka.TestKit.Internal
 
             var dispatcher = system.Dispatchers.Lookup(props.Deploy.Dispatcher);
 
-            var supervisorLocal = supervisor as LocalActorRef;
-            if (supervisorLocal != null)
+            if (supervisor is LocalActorRef supervisorLocal)
             {
                 supervisorLocal.Cell.ReserveChild(name);
             }
             else
             {
-                var supervisorRep = supervisor as RepointableActorRef;
-                if (supervisorRep != null)
+                if (supervisor is RepointableActorRef supervisorRep)
                 {
                     var repUnderlying = supervisorRep.Underlying;
                     if (repUnderlying is UnstartedCell)
                         throw new IllegalStateException("Cannot attach a TestActor to an unstarted top-level actor, ensure that it is started by sending a message and observing the reply");
-                    var cellUnderlying = repUnderlying as ActorCell;
-                    if (cellUnderlying != null)
+                    if (repUnderlying is ActorCell cellUnderlying)
                     {
                         cellUnderlying.ReserveChild(name);
                     }
@@ -197,7 +205,7 @@ namespace Akka.TestKit.Internal
                 }
             }
 
-            MailboxType mailbox = system.Mailboxes.GetMailboxType(props, dispatcher.Configurator.Config);
+            var mailbox = system.Mailboxes.GetMailboxType(props, dispatcher.Configurator.Config);
             var testActorRef = new InternalTestActorRef((ActorSystemImpl)system, props, dispatcher, mailbox, (IInternalActorRef)supervisor, supervisor.Path / name);
 
             // we need to start ourselves since the creation of an actor has been split into initialization and starting
@@ -210,6 +218,8 @@ namespace Akka.TestKit.Internal
         /// </summary>
         protected class TestActorCell : ActorCell
         {
+            private TestActorTaskScheduler _taskScheduler;
+            
             /// <summary>
             /// TBD
             /// </summary>
@@ -235,10 +245,88 @@ namespace Akka.TestKit.Internal
                     base.AutoReceiveMessage(envelope);
             }
 
+            /// <inheritdoc />
+            public override ActorTaskScheduler TaskScheduler
+            {
+                get
+                {
+                    var taskScheduler = Volatile.Read(ref _taskScheduler);
+
+                    if (taskScheduler != null)
+                        return taskScheduler;
+
+                    taskScheduler = new TestActorTaskScheduler(this, TaskFailureHook);
+                    return Interlocked.CompareExchange(ref _taskScheduler, taskScheduler, null) ?? taskScheduler;
+                }
+            }
+
+
+            private readonly Dictionary<object, TaskCompletionSource<Done>> _testActorTasks = new();
+        
+            /// <summary>
+            /// This is only intended to be called from TestKit's TestActorRef
+            /// </summary>
+            /// <param name="envelope">TBD</param>
+            public Task ReceiveMessageForTestAsync(Envelope envelope)
+            {
+                var tcs = new TaskCompletionSource<Done>();
+                _testActorTasks[envelope.Message] = tcs;
+                ReceiveMessageForTest(envelope);
+                return tcs.Task;
+            }
+        
+            /// <summary>
+            /// TBD
+            /// </summary>
+            /// <param name="actionAsync">TBD</param>
+            public Task UseThreadContextAsync(Func<Task> actionAsync)
+            {
+                var tmp = InternalCurrentActorCellKeeper.Current;
+                InternalCurrentActorCellKeeper.Current = this;
+                try
+                {
+                    return actionAsync();
+                }
+                finally
+                {
+                    //ensure we set back the old context
+                    InternalCurrentActorCellKeeper.Current = tmp;
+                }
+            }
+
+            private void TaskFailureHook(object message, Exception exception)
+            {
+                if (!_testActorTasks.TryGetValue(message, out var tcs)) 
+                    return;
+                if (exception is { })
+                    tcs.TrySetException(exception);
+                else
+                    tcs.TrySetResult(Done.Instance);
+                _testActorTasks.Remove(message);
+            }
+
             /// <summary>
             /// TBD
             /// </summary>
             public new object Actor { get { return base.Actor; } }
+        }
+
+        internal class TestActorTaskScheduler : ActorTaskScheduler, IAsyncResultInterceptor
+        {
+            private readonly TestActorCell _testActorCell;
+            private readonly Action<object, Exception> _taskCallback;
+
+            /// <inheritdoc />
+            internal TestActorTaskScheduler(ActorCell testActorCell, Action<object, Exception> taskCallback) : base(testActorCell)
+            {
+                _taskCallback = taskCallback;
+                _testActorCell = (TestActorCell) testActorCell;
+            }
+
+            public void OnTaskCompleted(object message, Exception exception)
+            {
+                _taskCallback(message, exception);
+            }
         }
 
         /// <summary>
@@ -249,7 +337,7 @@ namespace Akka.TestKit.Internal
             /// <summary>
             /// TBD
             /// </summary>
-            public static readonly InternalGetActor Instance = new InternalGetActor();
+            public static readonly InternalGetActor Instance = new();
             private InternalGetActor() { }
         }
     }

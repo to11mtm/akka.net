@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="Program.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -44,7 +44,7 @@ namespace RemotePingPong
         public static Config CreateActorSystemConfig(string actorSystemName, string ipOrHostname, int port)
         {
             var baseConfig = ConfigurationFactory.ParseString(@"
-                akka {
+            akka {
               actor.provider = remote
               loglevel = ERROR
               suppress-json-serializer-warning = on
@@ -55,12 +55,9 @@ namespace RemotePingPong
 
                 dot-netty.tcp {
                     port = 0
-                    hostname = """"
-                    batching {
-                        enabled = true
-                        flush-interval = 40ms
-                    }
+                    hostname = ""localhost""
                 }
+                
               }
             }");
 
@@ -71,24 +68,27 @@ namespace RemotePingPong
             return bindingConfig.WithFallback(baseConfig);
         }
 
-        private static void Main(params string[] args)
+        private static async Task Main(params string[] args)
         {
-            ThreadPool.SetMinThreads(12, 12);
-            Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.AboveNormal;
-            uint timesToRun;
-            if (args.Length == 0 || !uint.TryParse(args[0], out timesToRun))
+            try
+            {
+                Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.High;
+            }
+            catch (Exception ex)
+            {
+                await Console.Error.WriteLineAsync($"Attempted to elevate process priority, but failed due to {ex.Message} - carrying on at normal process priority.");
+            }
+            if (args.Length == 0 || !uint.TryParse(args[0], out var timesToRun))
             {
                 timesToRun = 1u;
             }
 
-            Start(timesToRun);
-            Console.ReadKey();
+            await Start(timesToRun);
         }
 
-        private static async void Start(uint timesToRun)
-        {
-            const long repeat = 50000L;
+        private static bool _firstRun = true;
 
+        private static void PrintSysInfo(){
             var processorCount = Environment.ProcessorCount;
             if (processorCount == 0)
             {
@@ -97,42 +97,34 @@ namespace RemotePingPong
                 return;
             }
 
-#if THREADS
-            int workerThreads;
-            int completionPortThreads;
-            ThreadPool.GetAvailableThreads(out workerThreads, out completionPortThreads);
-
-            Console.WriteLine("Worker threads:                    {0}", workerThreads);
             Console.WriteLine("OSVersion:                         {0}", Environment.OSVersion);
-#endif
             Console.WriteLine("ProcessorCount:                    {0}", processorCount);
             Console.WriteLine("ClockSpeed:                        {0} MHZ", CpuSpeed());
             Console.WriteLine("Actor Count:                       {0}", processorCount * 2);
             Console.WriteLine("Messages sent/received per client: {0}  ({0:0e0})", repeat*2);
             Console.WriteLine("Is Server GC:                      {0}", GCSettings.IsServerGC);
+            Console.WriteLine("Thread count:                      {0}", Process.GetCurrentProcess().Threads.Count);
             Console.WriteLine();
 
             //Print tables
-            Console.WriteLine("Num clients, Total [msg], Msgs/sec, Total [ms]");
+            Console.WriteLine("Num clients, Total [msg], Msgs/sec, Total [ms], Start Threads, End Threads");
 
+            _firstRun = false;
+        }
+
+        const long repeat = 100000L;
+
+        private static async Task Start(uint timesToRun)
+        {         
             for (var i = 0; i < timesToRun; i++)
             {
                 var redCount = 0;
                 var bestThroughput = 0L;
                 foreach (var throughput in GetClientSettings())
                 {
-                    try
-                    {
-                        var result1 = await Benchmark(throughput, repeat, bestThroughput, redCount);
-                        bestThroughput = result1.Item2;
-                        redCount = result1.Item3;
-                    }
-                    catch (Exception e)
-                    {
-                        Console.WriteLine(e);
-                        throw;
-                    }
-                    
+                    var result1 = await Benchmark(throughput, repeat, bestThroughput, redCount);
+                    bestThroughput = result1.Item2;
+                    redCount = result1.Item3;
                 }
             }
 
@@ -196,6 +188,14 @@ namespace RemotePingPong
                 throw new Exception("Received report that 1 or more remote actor is unable to begin the test. Aborting run.");
             }
 
+            // now that the dispatchers in both ActorSystems are started, we want to measure thread count and other system
+            // metrics here - but only the very first benchmark
+            if(_firstRun){
+                PrintSysInfo();
+            }
+
+            var startThreads = Process.GetCurrentProcess().Threads.Count;
+
             var sw = Stopwatch.StartNew();
             receivers.ForEach(c =>
             {
@@ -205,8 +205,11 @@ namespace RemotePingPong
             var waiting = Task.WhenAll(tasks);
             await Task.WhenAll(waiting);
             sw.Stop();
+            
+            var endThreads = Process.GetCurrentProcess().Threads.Count;
+
             // force clean termination
-            var termination = Task.WhenAll(new[] { system1.Terminate(), system2.Terminate() }).Wait(TimeSpan.FromSeconds(10));
+            await Task.WhenAll(new[] { system1.Terminate(), system2.Terminate() });
 
             var elapsedMilliseconds = sw.ElapsedMilliseconds;
             long throughput = elapsedMilliseconds == 0 ? -1 : (long)Math.Ceiling((double)totalMessagesReceived / elapsedMilliseconds * 1000);
@@ -224,7 +227,7 @@ namespace RemotePingPong
             }
 
             Console.ForegroundColor = foregroundColor;
-            Console.WriteLine("{0,10},{1,8},{2,10},{3,11}", numberOfClients, totalMessagesReceived, throughput, sw.Elapsed.TotalMilliseconds.ToString("F2", CultureInfo.InvariantCulture));
+            Console.WriteLine("{0,10},{1,8},{2,10},{3,11}, {4,13}, {5,15}", numberOfClients, totalMessagesReceived, throughput, sw.Elapsed.TotalMilliseconds.ToString("F2", CultureInfo.InvariantCulture), startThreads, endThreads);
             return (redCount <= 3, bestThroughput, redCount);
         }
 
@@ -232,7 +235,7 @@ namespace RemotePingPong
         {
             public class AllStarted { }
 
-            private readonly HashSet<IActorRef> _actors = new HashSet<IActorRef>();
+            private readonly HashSet<IActorRef> _actors = new();
             private int _correlationId = 0;
 
             protected override void OnReceive(object message)

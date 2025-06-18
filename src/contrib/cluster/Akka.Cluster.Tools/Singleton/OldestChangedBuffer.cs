@@ -1,17 +1,17 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="OldestChangedBuffer.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Threading.Tasks;
 using Akka.Actor;
-using Akka.Util.Internal;
 
 namespace Akka.Cluster.Tools.Singleton
 {
@@ -37,7 +37,7 @@ namespace Akka.Cluster.Tools.Singleton
             /// <summary>
             /// TBD
             /// </summary>
-            public static GetNext Instance { get; } = new GetNext();
+            public static GetNext Instance { get; } = new();
             private GetNext() { }
         }
 
@@ -50,7 +50,7 @@ namespace Akka.Cluster.Tools.Singleton
             /// <summary>
             /// The first event, corresponding to CurrentClusterState.
             /// </summary>
-            public List<UniqueAddress> Oldest { get; }
+            public ImmutableList<UniqueAddress> Oldest { get; }
 
             /// <summary>
             /// TBD
@@ -62,7 +62,7 @@ namespace Akka.Cluster.Tools.Singleton
             /// </summary>
             /// <param name="oldest">TBD</param>
             /// <param name="safeToBeOldest">TBD</param>
-            public InitialOldestState(List<UniqueAddress> oldest, bool safeToBeOldest)
+            public InitialOldestState(ImmutableList<UniqueAddress> oldest, bool safeToBeOldest)
             {
                 Oldest = oldest;
                 SafeToBeOldest = safeToBeOldest;
@@ -70,37 +70,47 @@ namespace Akka.Cluster.Tools.Singleton
         }
 
         /// <summary>
-        /// TBD
+        /// Message propagated once the previous oldest member is exiting / downed / removed.
         /// </summary>
         [Serializable]
         public sealed class OldestChanged
         {
             /// <summary>
-            /// TBD
+            /// The new "oldest" - this node will become the new singleton manager.
             /// </summary>
-            public UniqueAddress Oldest { get; }
+            /// <remarks>
+            /// Can be <c>null</c> if we're the last node in the cluster.
+            /// </remarks>
+            public UniqueAddress? NewOldest { get; }
 
             /// <summary>
-            /// TBD
+            /// The previous oldest - will be `null` if this is the first oldest.
             /// </summary>
-            /// <param name="oldest">TBD</param>
-            public OldestChanged(UniqueAddress oldest)
+            public UniqueAddress? PreviousOldest { get; }
+            
+            public OldestChanged(UniqueAddress? newOldest, UniqueAddress? previousOldest)
             {
-                Oldest = oldest;
+                NewOldest = newOldest;
+                PreviousOldest = previousOldest;
             }
         }
 
         #endregion
 
+        private readonly IComparer<Member> _memberAgeComparer;
         private readonly CoordinatedShutdown _coordShutdown = CoordinatedShutdown.Get(Context.System);
 
         /// <summary>
         /// Creates a new instance of the <see cref="OldestChangedBuffer"/>.
         /// </summary>
         /// <param name="role">The role for which we're watching for membership changes.</param>
-        public OldestChangedBuffer(string role)
+        /// <param name="considerAppVersion">Should cluster AppVersion be considered when sorting member age</param>
+        public OldestChangedBuffer(string role, bool considerAppVersion)
         {
             _role = role;
+            _memberAgeComparer = Member.AgeOrdering;
+            _membersByAge = ImmutableSortedSet<Member>.Empty.WithComparer(_memberAgeComparer);
+            
             SetupCoordinatedShutdown();
         }
 
@@ -124,13 +134,13 @@ namespace Akka.Cluster.Tools.Singleton
                 else
                 {
                     var timeout = _coordShutdown.Timeout(CoordinatedShutdown.PhaseClusterExiting);
-                    return self.Ask(SelfExiting.Instance, timeout).ContinueWith(tr => Done.Instance);
+                    return self.Ask(SelfExiting.Instance, timeout).ContinueWith(_ => Done.Instance);
                 }
             });
         }
 
         private readonly string _role;
-        private ImmutableSortedSet<Member> _membersByAge = ImmutableSortedSet<Member>.Empty.WithComparer(MemberAgeOrdering.Descending);
+        private ImmutableSortedSet<Member> _membersByAge;
         private ImmutableQueue<object> _changes = ImmutableQueue<object>.Empty;
 
         private readonly Cluster _cluster = Cluster.Get(Context.System);
@@ -140,10 +150,9 @@ namespace Akka.Cluster.Tools.Singleton
             var before = _membersByAge.FirstOrDefault();
             block();
             var after = _membersByAge.FirstOrDefault();
-
-            // todo: fix neq comparison
+            
             if (!Equals(before, after))
-                _changes = _changes.Enqueue(new OldestChanged(after?.UniqueAddress));
+                _changes = _changes.Enqueue(new OldestChanged(after?.UniqueAddress, before?.UniqueAddress));
         }
 
         private bool MatchingRole(Member member)
@@ -156,7 +165,7 @@ namespace Akka.Cluster.Tools.Singleton
             // all members except Joining and WeaklyUp
             _membersByAge = state.Members
                 .Where(m => m.UpNumber != int.MaxValue && MatchingRole(m))
-                .ToImmutableSortedSet(MemberAgeOrdering.Descending);
+                .ToImmutableSortedSet(_memberAgeComparer);
 
             // If there is some removal in progress of an older node it's not safe to immediately become oldest,
             // removal of younger nodes doesn't matter. Note that it can also be started via restart after
@@ -167,8 +176,8 @@ namespace Akka.Cluster.Tools.Singleton
                 .FirstOrDefault() ?? int.MaxValue;
 
             var oldest = _membersByAge.TakeWhile(m => m.UpNumber <= selfUpNumber).ToList();
-            var safeToBeOldest = !oldest.Any(m => m.Status == MemberStatus.Down || m.Status == MemberStatus.Exiting || m.Status == MemberStatus.Leaving);
-            var initial = new InitialOldestState(oldest.Select(m => m.UniqueAddress).ToList(), safeToBeOldest);
+            var safeToBeOldest = !oldest.Any(m => m.Status is MemberStatus.Down or MemberStatus.Exiting or MemberStatus.Leaving);
+            var initial = new InitialOldestState(oldest.Select(m => m.UniqueAddress).ToImmutableList(), safeToBeOldest);
             _changes = _changes.Enqueue(initial);
         }
 
@@ -194,8 +203,7 @@ namespace Akka.Cluster.Tools.Singleton
             // don't send cluster change events if this node is shutting its self down, just wait for SelfExiting
             if (!_cluster.IsTerminated)
             {
-                object change;
-                _changes = _changes.Dequeue(out change);
+                _changes = _changes.Dequeue(out var change);
                 Context.Parent.Tell(change);
             }
         }
@@ -215,21 +223,33 @@ namespace Akka.Cluster.Tools.Singleton
         /// <inheritdoc cref="UntypedActor.OnReceive"/>
         protected override void OnReceive(object message)
         {
-            if (message is ClusterEvent.CurrentClusterState state) HandleInitial(state);
-            else if (message is ClusterEvent.MemberUp up) Add(up.Member);
-            else if (message is ClusterEvent.MemberRemoved removed) Remove(removed.Member);
-            else if (message is ClusterEvent.MemberExited exited && exited.Member.UniqueAddress != _cluster.SelfUniqueAddress)
-                Remove(exited.Member);
-            else if (message is SelfExiting)
+            switch (message)
             {
-                Remove(_cluster.ReadView.Self);
-                Sender.Tell(Done.Instance); // reply to ask
-            }
-            else if (message is GetNext && _changes.IsEmpty) Context.BecomeStacked(OnDeliverNext);
-            else if (message is GetNext) SendFirstChange();
-            else
-            {
-                Unhandled(message);
+                case ClusterEvent.CurrentClusterState state:
+                    HandleInitial(state);
+                    break;
+                case ClusterEvent.MemberUp up:
+                    Add(up.Member);
+                    break;
+                case ClusterEvent.MemberRemoved removed:
+                    Remove(removed.Member);
+                    break;
+                case ClusterEvent.MemberExited exited when exited.Member.UniqueAddress != _cluster.SelfUniqueAddress:
+                    Remove(exited.Member);
+                    break;
+                case SelfExiting:
+                    Remove(_cluster.ReadView.Self);
+                    Sender.Tell(Done.Instance); // reply to ask
+                    break;
+                case GetNext when _changes.IsEmpty:
+                    Context.BecomeStacked(OnDeliverNext);
+                    break;
+                case GetNext:
+                    SendFirstChange();
+                    break;
+                default:
+                    Unhandled(message);
+                    break;
             }
         }
 

@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ReplicatorSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -14,6 +14,8 @@ using System.Collections.Immutable;
 using System.Linq;
 using Akka.Cluster;
 using Akka.Cluster.TestKit;
+using Akka.Event;
+using Akka.MultiNode.TestAdapter;
 using Akka.Remote.Transport;
 using Akka.TestKit;
 using FluentAssertions;
@@ -49,20 +51,21 @@ namespace Akka.DistributedData.Tests.MultiNode
 
         private readonly IActorRef _replicator;
 
-        private readonly GCounterKey KeyA = new GCounterKey("A");
-        private readonly GCounterKey KeyB = new GCounterKey("B");
-        private readonly GCounterKey KeyC = new GCounterKey("C");
-        private readonly GCounterKey KeyD = new GCounterKey("D");
-        private readonly GCounterKey KeyE = new GCounterKey("E");
-        private readonly GCounterKey KeyE2 = new GCounterKey("E2");
-        private readonly GCounterKey KeyF = new GCounterKey("F");
-        private readonly ORSetKey<string> KeyG = new ORSetKey<string>("G");
-        private readonly ORDictionaryKey<string, Flag> KeyH = new ORDictionaryKey<string, Flag>("H");
-        private readonly GSetKey<string> KeyI = new GSetKey<string>("I");
-        private readonly GSetKey<string> KeyJ = new GSetKey<string>("J");
-        private readonly GCounterKey KeyX = new GCounterKey("X");
-        private readonly GCounterKey KeyY = new GCounterKey("Y");
-        private readonly GCounterKey KeyZ = new GCounterKey("Z");
+        private readonly GCounterKey KeyA = new("A");
+        private readonly GCounterKey KeyB = new("B");
+        private readonly GCounterKey KeyC = new("C");
+        private readonly GCounterKey KeyD = new("D");
+        private readonly GCounterKey KeyE = new("E");
+        private readonly GCounterKey KeyE2 = new("E2");
+        private readonly GCounterKey KeyF = new("F");
+        private readonly ORSetKey<string> KeyG = new("G");
+        private readonly ORDictionaryKey<string, Flag> KeyH = new("H");
+        private readonly GSetKey<string> KeyI = new("I");
+        private readonly GSetKey<string> KeyJ = new("J");
+        private readonly LWWRegisterKey<string> KeyK = new("K");
+        private readonly GCounterKey KeyX = new("X");
+        private readonly GCounterKey KeyY = new("Y");
+        private readonly GCounterKey KeyZ = new("Z");
 
         private readonly TimeSpan _timeOut;
         private readonly WriteTo _writeTwo;
@@ -222,7 +225,7 @@ namespace Akka.DistributedData.Tests.MultiNode
             RunOn(() =>
             {
                 var exception = new Exception("Test exception");
-                Func<IReplicatedData, IReplicatedData> update = x =>
+                Func<IReplicatedData, IReplicatedData> update = _ =>
                 {
                     throw exception;
                 };
@@ -407,7 +410,7 @@ namespace Akka.DistributedData.Tests.MultiNode
                         _replicator.Tell(Dsl.Get(KeyC, ReadLocal.Instance));
                         var c = ExpectMsg<GetSuccess>(g => Equals(g.Key, KeyC), TimeSpan.FromMilliseconds(300)).Get(KeyC);
                         c.Value.ShouldBe(33UL);
-                    }, interval:TimeSpan.FromMilliseconds(300));
+                    }, interval: TimeSpan.FromMilliseconds(300));
                 });
             }, _first, _second);
 
@@ -713,9 +716,9 @@ namespace Akka.DistributedData.Tests.MultiNode
 
             Within(TimeSpan.FromSeconds(5), () =>
             {
-                
-                var changed =  changedProbe.ExpectMsg<Changed>(c =>
-                        c.Get(KeyI).Elements.ShouldBe(ImmutableHashSet.Create("a")));
+
+                var changed = changedProbe.ExpectMsg<Changed>(c =>
+                       c.Get(KeyI).Elements.ShouldBe(ImmutableHashSet.Create("a")));
                 var keyIData = changed.Get(KeyI);
                 Sys.Log.Debug("DEBUG: Received Changed {0}", changed);
             });
@@ -729,6 +732,60 @@ namespace Akka.DistributedData.Tests.MultiNode
 
             EnterBarrierAfterTestStep();
 
+        }
+
+        public void Cluster_CRDT_should_support_prefer_oldest_members()
+        {
+            // disable gossip and delta replication to only verify the write and read operations
+            var oldestReplicator = Sys.ActorOf(
+              Replicator.Props(
+                ReplicatorSettings.Create(Sys).WithPreferOldest(true).WithGossipInterval(TimeSpan.FromMinutes(1))),//.withDeltaCrdtEnabled(false)),
+              "oldestReplicator");
+            Within(TimeSpan.FromSeconds(5), () =>
+            {
+                var countProbe = CreateTestProbe();
+                AwaitAssert(() =>
+                {
+                    oldestReplicator.Tell(GetReplicaCount.Instance, countProbe.Ref);
+                    countProbe.ExpectMsg(new ReplicaCount(3));
+                });
+            });
+            EnterBarrier("oldest-replicator-started");
+
+            var probe = CreateTestProbe();
+
+            RunOn(() =>
+            {
+                oldestReplicator.Tell(
+                    Dsl.Update(KeyK, new LWWRegister<string>(Cluster.SelfUniqueAddress, "0"), _writeTwo, a => a.WithValue(Cluster.SelfUniqueAddress, "1")),
+                    probe.Ref);
+                probe.ExpectMsg(new UpdateSuccess(KeyK, null));
+            }, _second);
+            EnterBarrier("updated-1");
+
+            RunOn(() =>
+            {
+                // replicated to oldest
+                oldestReplicator.Tell(new Get(KeyK, ReadLocal.Instance), probe.Ref);
+                var msg = probe.ExpectMsg<GetSuccess>(m => m.Data is LWWRegister<string>);
+                ((LWWRegister<string>)msg.Data).Value.Should().Be("1");
+                //probe.ExpectMsg<GetSuccess[LWWRegister[String]]>.dataValue.value should === ("1");
+            }, _first);
+
+            RunOn(() =>
+            {
+                // not replicated to third (not among the two oldest)
+                oldestReplicator.Tell(Dsl.Get(KeyK, ReadLocal.Instance), probe.Ref);
+                probe.ExpectMsg(new NotFound(KeyK, null));
+
+                // read from oldest
+                oldestReplicator.Tell(Dsl.Get(KeyK, _readTwo), probe.Ref);
+                var msg = probe.ExpectMsg<GetSuccess>(m => m.Data is LWWRegister<string>);
+                ((LWWRegister<string>)msg.Data).Value.Should().Be("1");
+                //probe.ExpectMsg<GetSuccess[LWWRegister[String]]>.dataValue.value should === ("1");
+            }, _third);
+
+            EnterBarrierAfterTestStep();
         }
 
         protected override int InitialParticipantsValueFactory => Roles.Count;

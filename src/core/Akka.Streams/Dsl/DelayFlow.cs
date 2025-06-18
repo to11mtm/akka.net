@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="DelayFlow.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -110,7 +110,7 @@ namespace Akka.Streams.Dsl
         private sealed class Logic : TimerGraphStageLogic, IInHandler, IOutHandler
         {
             private readonly DelayFlow<T> _delayFlow;
-            private readonly object _delayTimerKey = new object();
+            private readonly object _delayTimerKey = new();
             private readonly IDelayStrategy<T> _strategy;
             private T _delayedElement;
 
@@ -149,7 +149,7 @@ namespace Akka.Streams.Dsl
                 Pull(_delayFlow.Inlet);
             }
 
-            public void OnDownstreamFinish() => CompleteStage();
+            public void OnDownstreamFinish(Exception cause) => InternalOnDownstreamFinish(cause);
 
             protected internal override void OnTimer(object timerKey)
             {

@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="GraphDslCompileSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -44,7 +44,9 @@ namespace Akka.Streams.Tests.Dsl
 
         }
 
+#pragma warning disable CS0618 // Type or member is obsolete
         private sealed class OpStage<TIn, TOut> : PushStage<TIn, TOut> where TIn : TOut
+#pragma warning restore CS0618 // Type or member is obsolete
         {
             public override ISyncDirective OnPush(TIn element, IContext<TOut> context)
             {
@@ -52,22 +54,36 @@ namespace Akka.Streams.Tests.Dsl
             }
         }
 
+#pragma warning disable CS0618 // Type or member is obsolete
         private static IStage<TIn, TOut> Op<TIn, TOut>() where TIn : TOut => new OpStage<TIn, TOut>();
+#pragma warning restore CS0618 // Type or member is obsolete
 
         private static IEnumerator<Apple> Apples() => Enumerable.Repeat(new Apple(), int.MaxValue).GetEnumerator();
 
         private static Flow<string, string, NotUsed> F1
+#pragma warning disable CS0618 // Type or member is obsolete
             => Flow.Create<string>().Transform(Op<string, string>).Named("F1");
+#pragma warning restore CS0618 // Type or member is obsolete
         private static Flow<string, string, NotUsed> F2
+#pragma warning disable CS0618 // Type or member is obsolete
             => Flow.Create<string>().Transform(Op<string, string>).Named("F2");
+#pragma warning restore CS0618 // Type or member is obsolete
         private static Flow<string, string, NotUsed> F3
+#pragma warning disable CS0618 // Type or member is obsolete
             => Flow.Create<string>().Transform(Op<string, string>).Named("F3");
+#pragma warning restore CS0618 // Type or member is obsolete
         private static Flow<string, string, NotUsed> F4
+#pragma warning disable CS0618 // Type or member is obsolete
             => Flow.Create<string>().Transform(Op<string, string>).Named("F4");
+#pragma warning restore CS0618 // Type or member is obsolete
         private static Flow<string, string, NotUsed> F5
+#pragma warning disable CS0618 // Type or member is obsolete
             => Flow.Create<string>().Transform(Op<string, string>).Named("F5");
+#pragma warning restore CS0618 // Type or member is obsolete
         private static Flow<string, string, NotUsed> F6
+#pragma warning disable CS0618 // Type or member is obsolete
             => Flow.Create<string>().Transform(Op<string, string>).Named("F6");
+#pragma warning restore CS0618 // Type or member is obsolete
 
         private static Source<string, NotUsed> In1 => Source.From(new[] { "a", "b", "c" });
         private static Source<string, NotUsed> In2 => Source.From(new[] { "d", "e", "f" });
@@ -227,8 +243,10 @@ namespace Akka.Streams.Tests.Dsl
                 var out2 = Sink.AsPublisher<string>(false).MapMaterializedValue(_ => NotUsed.Instance);
                 var out9 = Sink.AsPublisher<string>(false).MapMaterializedValue(_ => NotUsed.Instance);
                 var out10 = Sink.AsPublisher<string>(false).MapMaterializedValue(_ => NotUsed.Instance);
+#pragma warning disable CS0618 // Type or member is obsolete
                 Func<string, Flow<string, string, NotUsed>> f =
                     s => Flow.Create<string>().Transform(Op<string, string>).Named(s);
+#pragma warning restore CS0618 // Type or member is obsolete
 
                 b.From(in7).Via(f("a")).Via(b7).Via(f("b")).Via(m11).Via(f("c")).Via(b11).Via(f("d")).To(out2);
                 b.From(b11).Via(f("e")).Via(m9).Via(f("f")).To(out9);
@@ -296,19 +314,19 @@ namespace Akka.Streams.Tests.Dsl
 
                     builder.Invoking(
                         b => ((dynamic)b).From(Source.From(new[] { 1, 2, 3 })).Via(((dynamic)zip).Left).To(wrongOut))
-                        .ShouldThrow<RuntimeBinderException>();
+                        .Should().Throw<RuntimeBinderException>();
 
                     builder.Invoking(
                         b => ((dynamic)b).From(Source.From(new[] { "a", "b", "c" })).To(((dynamic)zip).Left))
-                        .ShouldThrow<RuntimeBinderException>();
+                        .Should().Throw<RuntimeBinderException>();
 
                     builder.Invoking(
                         b => ((dynamic)b).From(Source.From(new[] { "a", "b", "c" })).To(zip.Out))
-                        .ShouldThrow<RuntimeBinderException>();
+                        .Should().Throw<RuntimeBinderException>();
 
                     builder.Invoking(
                         b => ((dynamic)b).From(((dynamic)zip).Left).To(((dynamic)zip).Right))
-                        .ShouldThrow<RuntimeBinderException>();
+                        .Should().Throw<RuntimeBinderException>();
 
                     var source =
                         Source.From(new[]
@@ -318,13 +336,13 @@ namespace Akka.Streams.Tests.Dsl
                         });
                     builder.Invoking(
                         b => ((dynamic)b).From(source).Via(unzip.In).To(whatever))
-                        .ShouldThrow<RuntimeBinderException>();
+                        .Should().Throw<RuntimeBinderException>();
 
                     return ClosedShape.Instance;
                 }));
             };
 
-            action.ShouldThrow<ArgumentException>();
+            action.Should().Throw<ArgumentException>();
         }
 
         [Fact(Skip = "FIXME Covariance  is not supported")]
@@ -481,8 +499,8 @@ namespace Akka.Streams.Tests.Dsl
                 return new FlowShape<int, int>(id.Inlet, id.Outlet);
             }).Async().AddAttributes(Attributes.None).Named("useless");
 
-            ga.Module.Attributes.GetFirstAttribute<Attributes.Name>().Value.Should().Be("useless");
-            ga.Module.Attributes.GetFirstAttribute<Attributes.AsyncBoundary>()
+            ga.Module.Attributes.GetAttribute<Attributes.Name>().Value.Should().Be("useless");
+            ga.Module.Attributes.GetAttribute<Attributes.AsyncBoundary>()
                 .Should()
                 .Be(Attributes.AsyncBoundary.Instance);
         }

@@ -1,18 +1,23 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="AskSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using Akka.TestKit;
 using Xunit;
 using Akka.Actor;
+using Akka.Actor.Dsl;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Akka.Util.Internal;
+using FluentAssertions;
 using Nito.AsyncEx;
+using Akka.Dispatch.SysMsg;
+using FluentAssertions.Extensions;
+using static FluentAssertions.FluentActions;
 
 namespace Akka.Tests.Actor
 {
@@ -22,43 +27,65 @@ namespace Akka.Tests.Actor
             : base(@"akka.actor.ask-timeout = 3000ms")
         { }
 
-        public class SomeActor : UntypedActor
+        public class SomeActor : ReceiveActor
         {
-            protected override void OnReceive(object message)
+            public SomeActor()
             {
-                if (message.Equals("timeout"))
-                {
-                    Thread.Sleep(5000);
-                }
-
-                if (message.Equals("answer"))
-                {
-                    Sender.Tell("answer");
-                }
+                ReceiveAsync<string>(async message => 
+                { 
+                    switch (message)
+                    {
+                        case "timeout":
+                            await Task.Delay(5000);
+                            break;
+                        case "answer":
+                            Sender.Tell("answer");
+                            break;
+                        case "delay":
+                            await Task.Delay(3000);
+                            Sender.Tell("answer");
+                            break;
+                        case "many":
+                            Sender.Tell("answer1");
+                            Sender.Tell("answer2");
+                            Sender.Tell("answer2");
+                            break;
+                        case "invalid":
+                            Sender.Tell(123);
+                            break;
+                        case "system":
+                            Sender.As<IInternalActorRef>().SendSystemMessage(new DummySystemMessage());
+                            break;
+                    }
+                
+                });
             }
         }
 
-        public class WaitActor : UntypedActor
+        public class WaitActor : ReceiveActor
         {
             public WaitActor(IActorRef replyActor, IActorRef testActor)
             {
                 _replyActor = replyActor;
                 _testActor = testActor;
+                ReceiveAsync<string>(async message => 
+                {
+                    if (message.Equals("ask"))
+                    {
+                        await Awaiting(async () =>
+                        {
+                            var result = await _replyActor.Ask("foo");
+                            _testActor.Tell(result);
+                        }).Should().CompleteWithinAsync(2.Seconds());
+                    }
+
+                });
             }
 
             private readonly IActorRef _replyActor;
 
             private readonly IActorRef _testActor;
 
-            protected override void OnReceive(object message)
-            {
-                if (message.Equals("ask"))
-                {
-                    var result = _replyActor.Ask("foo");
-                    result.Wait(TimeSpan.FromSeconds(2));
-                    _testActor.Tell(result.Result);
-                }
-            }
         }
 
         public class ReplyActor : UntypedActor
@@ -79,6 +106,10 @@ namespace Akka.Tests.Actor
                 var requester = message.AsInstanceOf<IActorRef>();
                 requester.Tell("i_hear_ya");
             }
+        }
+
+        public sealed class DummySystemMessage : ISystemMessage
+        {
         }
 
         [Fact]
@@ -113,6 +144,60 @@ namespace Akka.Tests.Actor
         }
 
         [Fact]
+        public async Task Ask_should_put_timeout_answer_into_deadletter()
+        {
+            var actor = Sys.ActorOf<SomeActor>();            
+            
+            await EventFilter.DeadLetter<object>().ExpectOneAsync(TimeSpan.FromSeconds(5), async () => 
+            {
+                await Assert.ThrowsAsync<AskTimeoutException>(async () => await actor.Ask<string>("delay", TimeSpan.FromSeconds(1)));
+            });
+        }
+
+        [Fact]
+        public async Task Ask_should_put_too_many_answers_into_deadletter()
+        {
+            var actor = Sys.ActorOf<SomeActor>();
+
+            await EventFilter.DeadLetter<object>().ExpectAsync(2, async () =>
+            {
+                var result = await actor.Ask<string>("many", TimeSpan.FromSeconds(1));
+                result.ShouldBe("answer1");
+            });
+        }
+
+        [Fact]
+        public async Task Ask_should_not_put_canceled_answer_into_deadletter()
+        {
+            var actor = Sys.ActorOf<SomeActor>();
+
+            await EventFilter.DeadLetter<object>().ExpectAsync(0, async () =>
+            {
+                using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1)))
+                    await Assert.ThrowsAsync<TaskCanceledException>(async () => await actor.Ask<string>("delay", Timeout.InfiniteTimeSpan, cts.Token));
+            });
+        }
+
+        [Fact]
+        public async Task Ask_should_put_invalid_answer_into_deadletter()
+        {
+            var actor = Sys.ActorOf<SomeActor>();
+
+            await EventFilter.DeadLetter<object>().ExpectOne(async () =>
+            {
+                await Assert.ThrowsAsync<ArgumentException>(async () => await actor.Ask<string>("invalid", TimeSpan.FromSeconds(1)));
+            });
+        }
+
+        [Fact]
+        public async Task Ask_should_fail_on_system_message()
+        {
+            var actor = Sys.ActorOf<SomeActor>();
+
+            await Assert.ThrowsAsync<InvalidOperationException>(async () => await actor.Ask<ISystemMessage>("system", TimeSpan.FromSeconds(1)));
+        }
+
+        [Fact]
         public async Task Can_cancel_when_asking_actor()
         {
             var actor = Sys.ActorOf<SomeActor>();
@@ -129,11 +214,11 @@ namespace Akka.Tests.Actor
             try
             {
                 await actor.Ask<string>("timeout");
-                Assert.True(false, "the ask should have timed out with default timeout");
+                Assert.Fail("the ask should have timed out with default timeout");
             }
             catch (AskTimeoutException e)
             {
-                Assert.Equal("Timeout after 00:00:03 seconds", e.Message);
+                Assert.Equal("Timeout after 3.00 seconds", e.Message);
             }
         }
 
@@ -147,7 +232,7 @@ namespace Akka.Tests.Actor
                 await Assert.ThrowsAsync<TaskCanceledException>(async () => await actor.Ask<string>("cancel", cts.Token));
             }
 
-            Are_Temp_Actors_Removed(actor);
+            await Are_Temp_Actors_Removed(actor);
         }
 
         [Fact]
@@ -159,7 +244,7 @@ namespace Akka.Tests.Actor
                 await Assert.ThrowsAsync<TaskCanceledException>(async () => await actor.Ask<string>("cancel", TimeSpan.FromSeconds(30), cts.Token));
             }
 
-            Are_Temp_Actors_Removed(actor);
+            await Are_Temp_Actors_Removed(actor);
         }
 
         [Fact]
@@ -169,7 +254,7 @@ namespace Akka.Tests.Actor
 
             await Assert.ThrowsAsync<AskTimeoutException>(async () => await actor.Ask<string>("timeout"));
 
-            Are_Temp_Actors_Removed(actor);
+            await Are_Temp_Actors_Removed(actor);
         }
 
         [Fact]
@@ -178,7 +263,23 @@ namespace Akka.Tests.Actor
             var actor = Sys.ActorOf<SomeActor>();
 
             // expect int, but in fact string
-            await Assert.ThrowsAsync<InvalidCastException>(async () => await actor.Ask<int>("answer"));
+            await Assert.ThrowsAsync<ArgumentException>(async () => await actor.Ask<int>("answer"));
+        }
+        
+        /// <summary>
+        /// Reproduction for https://github.com/akkadotnet/akka.net/issues/5204
+        /// </summary>
+        [Fact]
+        public async Task Bugfix5204_should_allow_null_response_without_error()
+        {
+            var actor = Sys.ActorOf(act => act.ReceiveAny((_, context) =>
+            {
+                context.Sender.Tell(null);
+            }));
+
+            // expect a string, but the answer should be `null`
+            var resp = await actor.Ask<string>(1);
+            resp.Should().BeNullOrEmpty();
         }
 
         [Fact]
@@ -187,23 +288,23 @@ namespace Akka.Tests.Actor
             AsyncContext.Run(() =>
             {
                 var actor = Sys.ActorOf<SomeActor>();
-                var res = actor.Ask<string>("answer").Result; // blocking on purpose
+                var res = actor.Ask<string>("answer", TimeSpan.FromSeconds(3)).Result; // blocking on purpose
                 res.ShouldBe("answer");
             });
         }
 
-        private void Are_Temp_Actors_Removed(IActorRef actor)
+        private async Task Are_Temp_Actors_Removed(IActorRef actor)
         {
             var actorCell = actor as ActorRefWithCell;
             Assert.True(actorCell != null, "Test method only valid with ActorRefWithCell actors.");
             // ReSharper disable once PossibleNullReferenceException
             var container = actorCell.Provider.TempContainer as VirtualPathContainer;
 
-            AwaitAssert(() =>
+            await AwaitAssertAsync(() =>
             {
                 var childCounter = 0;
                 // ReSharper disable once PossibleNullReferenceException
-                container.ForEachChild(x => childCounter++);
+                container.ForEachChild(_ => childCounter++);
                 Assert.True(childCounter == 0, "Temp actors not all removed.");
             });
 
@@ -214,12 +315,12 @@ namespace Akka.Tests.Actor
         /// that we don't deadlock
         /// </summary>
         [Fact]
-        public void Can_Ask_actor_inside_receive_loop()
+        public async Task Can_Ask_actor_inside_receive_loop()
         {
             var replyActor = Sys.ActorOf<ReplyActor>();
             var waitActor = Sys.ActorOf(Props.Create(() => new WaitActor(replyActor, TestActor)));
             waitActor.Tell("ask");
-            ExpectMsg("bar");
+            await ExpectMsgAsync("bar");
         }
     }
 }

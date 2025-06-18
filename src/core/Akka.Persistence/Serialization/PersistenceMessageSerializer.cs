@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="PersistenceMessageSerializer.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -33,7 +33,7 @@ namespace Akka.Persistence.Serialization
             if (obj is AtomicWrite aw) return GetAtomicWrite(aw).ToByteArray();
             if (obj is AtLeastOnceDeliverySnapshot snap) return GetAtLeastOnceDeliverySnapshot(snap).ToByteArray();
             if (obj is PersistentFSM.StateChangeEvent stateEvent) return GetStateChangeEvent(stateEvent).ToByteArray();
-            if (obj.GetType().GetTypeInfo().IsGenericType 
+            if (obj.GetType().IsGenericType
                 && obj.GetType().GetGenericTypeDefinition() == typeof(PersistentFSM.PersistentFSMSnapshot<>)) return GetPersistentFSMSnapshot(obj).ToByteArray();
 
             throw new ArgumentException($"Can't serialize object of type [{obj.GetType()}] in [{GetType()}]");
@@ -47,6 +47,7 @@ namespace Akka.Persistence.Serialization
             if (persistent.Manifest != null) message.Manifest = persistent.Manifest;
             if (persistent.WriterGuid != null) message.WriterGuid = persistent.WriterGuid;
             if (persistent.Sender != null) message.Sender = Akka.Serialization.Serialization.SerializedActorPath(persistent.Sender);
+            if (persistent.Timestamp > 0L) message.Timestamp = persistent.Timestamp;
 
             message.Payload = GetPersistentPayload(persistent.Payload);
             message.SequenceNr = persistent.SequenceNr;
@@ -149,12 +150,13 @@ namespace Akka.Persistence.Serialization
 
         public override object FromBinary(byte[] bytes, Type type)
         {
+            if(type == null) return GetPersistentRepresentation(PersistentMessage.Parser.ParseFrom(bytes));
             if (type == typeof(Persistent)) return GetPersistentRepresentation(PersistentMessage.Parser.ParseFrom(bytes));
             if (type == typeof(IPersistentRepresentation)) return GetPersistentRepresentation(PersistentMessage.Parser.ParseFrom(bytes));
             if (type == typeof(AtomicWrite)) return GetAtomicWrite(bytes);
             if (type == typeof(AtLeastOnceDeliverySnapshot)) return GetAtLeastOnceDeliverySnapshot(bytes);
             if (type == typeof(PersistentFSM.StateChangeEvent)) return GetStateChangeEvent(bytes);
-            if (type.GetTypeInfo().IsGenericType
+            if (type.IsGenericType
                 && type.GetGenericTypeDefinition() == typeof(PersistentFSM.PersistentFSMSnapshot<>)) return GetPersistentFSMSnapshot(type, bytes);
 
             throw new SerializationException($"Unimplemented deserialization of message with type [{type}] in [{GetType()}]");
@@ -168,7 +170,7 @@ namespace Akka.Persistence.Serialization
                 sender = system.Provider.ResolveActorRef(message.Sender);
             }
 
-            return new Persistent(
+            var repr = new Persistent(
                 GetPayload(message.Payload),
                 message.SequenceNr,
                 message.PersistenceId,
@@ -176,6 +178,8 @@ namespace Akka.Persistence.Serialization
                 message.Deleted,
                 sender,
                 message.WriterGuid);
+
+            return message.Timestamp > 0L ? repr.WithTimestamp(message.Timestamp) : repr;
         }
 
         private object GetPayload(PersistentPayload payload)

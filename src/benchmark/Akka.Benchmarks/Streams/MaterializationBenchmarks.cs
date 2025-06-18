@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="MaterializationBenchmarks.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -30,7 +30,7 @@ namespace Akka.Benchmarks.Streams
 
             simpleGraph = Source.Single(1)
                 .Select(x => x + 1)
-                .ToMaterialized(Sink.ForEach<int>(i => { }), Keep.Right);
+                .ToMaterialized(Sink.ForEach<int>(_ => { }), Keep.Right);
         }
 
         [GlobalCleanup]

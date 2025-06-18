@@ -1,10 +1,10 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="RemoteWatcher.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
-
+#pragma warning disable AK1004
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
@@ -54,6 +54,7 @@ namespace Akka.Remote
             TimeSpan heartbeatExpectedResponseAfter)
         {
             return Actor.Props.Create(() => new RemoteWatcher(failureDetector, heartbeatInterval, unreachableReaperInterval, heartbeatExpectedResponseAfter))
+                .WithDispatcher(Dispatchers.InternalDispatcherId)
                 .WithDeploy(Deploy.Local);
         }
 
@@ -128,18 +129,10 @@ namespace Akka.Remote
             {
             }
 
-            private static readonly Heartbeat _instance = new Heartbeat();
-
             /// <summary>
             /// TBD
             /// </summary>
-            public static Heartbeat Instance
-            {
-                get
-                {
-                    return _instance;
-                }
-            }
+            public static Heartbeat Instance { get; } = new();
         }
 
         /// <summary>
@@ -174,18 +167,11 @@ namespace Akka.Remote
         public class HeartbeatTick
         {
             private HeartbeatTick() { }
-            private static readonly HeartbeatTick _instance = new HeartbeatTick();
 
             /// <summary>
             /// TBD
             /// </summary>
-            public static HeartbeatTick Instance
-            {
-                get
-                {
-                    return _instance;
-                }
-            }
+            public static HeartbeatTick Instance { get; } = new();
         }
 
         /// <summary>
@@ -194,18 +180,11 @@ namespace Akka.Remote
         public class ReapUnreachableTick
         {
             private ReapUnreachableTick() { }
-            private static readonly ReapUnreachableTick _instance = new ReapUnreachableTick();
 
             /// <summary>
             /// TBD
             /// </summary>
-            public static ReapUnreachableTick Instance
-            {
-                get
-                {
-                    return _instance;
-                }
-            }
+            public static ReapUnreachableTick Instance { get; } = new();
         }
 
         /// <summary>
@@ -239,7 +218,7 @@ namespace Akka.Remote
         /// </summary>
         public sealed class Stats
         {
-            /// <inheritdoc/>
+            
             public override bool Equals(object obj)
             {
                 var other = obj as Stats;
@@ -247,7 +226,7 @@ namespace Akka.Remote
                 return _watching == other._watching && _watchingNodes == other._watchingNodes;
             }
 
-            /// <inheritdoc/>
+            
             public override int GetHashCode()
             {
                 unchecked
@@ -324,7 +303,7 @@ namespace Akka.Remote
             /// </summary>
             public ImmutableHashSet<Address> WatchingAddresses => _watchingAddresses;
 
-            /// <inheritdoc/>
+            
             public override string ToString()
             {
                 string FormatWatchingRefs()
@@ -375,8 +354,7 @@ namespace Akka.Remote
         {
             _failureDetector = failureDetector;
             _heartbeatExpectedResponseAfter = heartbeatExpectedResponseAfter;
-            var systemProvider = Context.System.AsInstanceOf<ExtendedActorSystem>().Provider as IRemoteActorRefProvider;
-            if (systemProvider != null) _remoteProvider = systemProvider;
+            if (Context.System.AsInstanceOf<ExtendedActorSystem>().Provider is IRemoteActorRefProvider systemProvider) _remoteProvider = systemProvider;
             else throw new ConfigurationException(
                 $"ActorSystem {Context.System} needs to have a 'RemoteActorRefProvider' enabled in the configuration, current uses {Context.System.AsInstanceOf<ExtendedActorSystem>().Provider.GetType().FullName}");
 
@@ -388,17 +366,17 @@ namespace Akka.Remote
         private readonly TimeSpan _heartbeatExpectedResponseAfter;
         private readonly IScheduler _scheduler = Context.System.Scheduler;
         private readonly IRemoteActorRefProvider _remoteProvider;
-        private readonly HeartbeatRsp _selfHeartbeatRspMsg = new HeartbeatRsp(AddressUidExtension.Uid(Context.System));
+        private readonly HeartbeatRsp _selfHeartbeatRspMsg = new(AddressUidExtension.Uid(Context.System));
        
         /// <summary>
         ///  Actors that this node is watching, map of watchee --> Set(watchers)
         /// </summary>
-        protected readonly Dictionary<IInternalActorRef, HashSet<IInternalActorRef>>  Watching = new Dictionary<IInternalActorRef, HashSet<IInternalActorRef>>();
+        protected readonly Dictionary<IInternalActorRef, HashSet<IInternalActorRef>>  Watching = new();
 
         /// <summary>
         /// Nodes that this node is watching, i.e. expecting heartbeats from these nodes. Map of address --> Set(watchee) on this address.
         /// </summary>
-        protected readonly Dictionary<Address, HashSet<IInternalActorRef>> WatcheeByNodes = new Dictionary<Address, HashSet<IInternalActorRef>>();
+        protected readonly Dictionary<Address, HashSet<IInternalActorRef>> WatcheeByNodes = new();
 
         /// <summary>
         /// TBD
@@ -407,9 +385,9 @@ namespace Akka.Remote
         /// <summary>
         /// TBD
         /// </summary>
-        protected HashSet<Address> Unreachable { get; } = new HashSet<Address>();
+        protected HashSet<Address> Unreachable { get; } = new();
 
-        private readonly Dictionary<Address, int> _addressUids = new Dictionary<Address, int>();
+        private readonly Dictionary<Address, int> _addressUids = new();
 
         private readonly ICancelable _heartbeatCancelable;
         private readonly ICancelable _failureDetectorReaperCancelable;
@@ -430,42 +408,55 @@ namespace Akka.Remote
         /// <param name="message">TBD</param>
         protected override void OnReceive(object message)
         {
-            if (message is HeartbeatTick) SendHeartbeat();
-            else if (message is Heartbeat) ReceiveHeartbeat();
-            else if (message is HeartbeatRsp) ReceiveHeartbeatRsp(((HeartbeatRsp)message).AddressUid);
-            else if (message is ReapUnreachableTick) ReapUnreachable();
-            else if (message is ExpectedFirstHeartbeat) TriggerFirstHeartbeat(((ExpectedFirstHeartbeat)message).From);
-            else if (message is WatchRemote)
+            switch (message)
             {
-                var watchRemote = (WatchRemote)message;
-                AddWatching(watchRemote.Watchee, watchRemote.Watcher);
-            }
-            else if (message is UnwatchRemote)
-            {
-                var unwatchRemote = (UnwatchRemote)message;
-                RemoveWatch(unwatchRemote.Watchee, unwatchRemote.Watcher);
-            }
-            else if (message is Terminated)
-            {
-                var t = (Terminated)message;
-                ProcessTerminated(t.ActorRef.AsInstanceOf<IInternalActorRef>(), t.ExistenceConfirmed, t.AddressTerminated);
-            }
-            // test purpose
-            else if (message is Stats)
-            {
-                var watchSet = ImmutableHashSet.Create(Watching.SelectMany(pair =>
+                case HeartbeatTick _:
+                    SendHeartbeat();
+                    break;
+                case Heartbeat _:
+                    ReceiveHeartbeat();
+                    break;
+                case HeartbeatRsp rsp:
+                    ReceiveHeartbeatRsp(rsp.AddressUid);
+                    break;
+                case ReapUnreachableTick _:
+                    ReapUnreachable();
+                    break;
+                case ExpectedFirstHeartbeat heartbeat:
+                    TriggerFirstHeartbeat(heartbeat.From);
+                    break;
+                case WatchRemote watchRemote:
                 {
-                    var list = new List<(IActorRef, IActorRef)>(pair.Value.Count);
-                    var wee = pair.Key;
-                    list.AddRange(pair.Value.Select(wer => ((IActorRef)wee, (IActorRef)wer)));
-                    return list;
-                }).ToArray());
-                Sender.Tell(new Stats(watchSet.Count(), WatchingNodes.Count, watchSet,
-                    ImmutableHashSet.Create(WatchingNodes.ToArray())));
-            }
-            else
-            {
-                Unhandled(message);
+                    AddWatching(watchRemote.Watchee, watchRemote.Watcher);
+                    break;
+                }
+                case UnwatchRemote unwatchRemote:
+                {
+                    RemoveWatch(unwatchRemote.Watchee, unwatchRemote.Watcher);
+                    break;
+                }
+                // test purpose
+                case Terminated t:
+                {
+                    ProcessTerminated(t.ActorRef.AsInstanceOf<IInternalActorRef>(), t.ExistenceConfirmed, t.AddressTerminated);
+                    break;
+                }
+                case Stats _:
+                {
+                    var watchSet = ImmutableHashSet.Create(Watching.SelectMany(pair =>
+                    {
+                        var list = new List<(IActorRef, IActorRef)>(pair.Value.Count);
+                        var wee = pair.Key;
+                        list.AddRange(pair.Value.Select(wer => ((IActorRef)wee, (IActorRef)wer)));
+                        return list;
+                    }).ToArray());
+                    Sender.Tell(new Stats(watchSet.Count(), WatchingNodes.Count, watchSet,
+                        ImmutableHashSet.Create(WatchingNodes.ToArray())));
+                    break;
+                }
+                default:
+                    Unhandled(message);
+                    break;
             }
         }
 
@@ -485,12 +476,7 @@ namespace Akka.Remote
 
             if (WatcheeByNodes.ContainsKey(from) && !Unreachable.Contains(from))
             {
-                if (_addressUids.TryGetValue(from, out int addressUid))
-                {
-                    if (addressUid != uid)
-                        ReWatch(from);
-                }
-                else
+                if (!_addressUids.TryGetValue(from, out int addressUid) || addressUid != uid)
                     ReWatch(from);
 
                 _addressUids[from] = uid;
@@ -704,9 +690,6 @@ namespace Akka.Remote
             }
         }
 
-        /// <summary>
-        /// TBD
-        /// </summary>
         protected readonly ILoggingAdapter Log = Context.GetLogger();
     }
 }

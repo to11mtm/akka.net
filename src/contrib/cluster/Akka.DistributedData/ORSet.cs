@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ORSet.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -121,7 +121,7 @@ namespace Akka.DistributedData
 
             if (dot is MultiVersionVector multi)
             {
-                var acc = ImmutableDictionary<UniqueAddress, long>.Empty.ToBuilder();
+                var acc = ImmutableDictionary.CreateBuilder<UniqueAddress, long>();
                 foreach (var pair in multi.Versions)
                 {
                     var v2 = vvector.VersionAt(pair.Key);
@@ -174,7 +174,7 @@ namespace Akka.DistributedData
         IEnumerable<T>,
         IDeltaReplicatedData<ORSet<T>, ORSet<T>.IDeltaOperation>
     {
-        public static readonly ORSet<T> Empty = new ORSet<T>();
+        public static readonly ORSet<T> Empty = new();
 
         internal readonly ImmutableDictionary<T, VersionVector> ElementsMap;
 
@@ -242,8 +242,7 @@ namespace Akka.DistributedData
                     var commonDots = rhsDots.Versions
                         .Where(kv =>
                         {
-                            long v;
-                            return rhsDots.Versions.TryGetValue(kv.Key, out v) && v == kv.Value;
+                            return rhsDots.Versions.TryGetValue(kv.Key, out var v) && v == kv.Value;
                         }).ToImmutableDictionary();
                     var commonDotKeys = commonDots.Keys.ToImmutableArray();
                     var lhsUniqueDots = lhsDots.Versions.RemoveRange(commonDotKeys);
@@ -432,7 +431,7 @@ namespace Akka.DistributedData
             return new ORSet<T>(updated, VersionVector.PruningCleanup(removedNode));
         }
 
-        /// <inheritdoc/>
+        
         public bool Equals(ORSet<T> other)
         {
             if (ReferenceEquals(other, null)) return false;
@@ -441,14 +440,14 @@ namespace Akka.DistributedData
             return VersionVector == other.VersionVector && ElementsMap.SequenceEqual(other.ElementsMap);
         }
 
-        /// <inheritdoc/>
+        
         public IEnumerator<T> GetEnumerator() => ElementsMap.Keys.GetEnumerator();
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
-        /// <inheritdoc/>
-        public override bool Equals(object obj) => obj is ORSet<T> && Equals((ORSet<T>)obj);
+        
+        public override bool Equals(object obj) => obj is ORSet<T> set && Equals(set);
 
-        /// <inheritdoc/>
+        
         public override int GetHashCode()
         {
             unchecked
@@ -518,35 +517,38 @@ namespace Akka.DistributedData
             public override ORSet<T> Underlying { get; }
             public override IReplicatedData Merge(IReplicatedData other)
             {
-                if (other is AddDeltaOperation)
+                switch (other)
                 {
-                    var u = ((AddDeltaOperation)other).Underlying;
-                    // Note that we only merge deltas originating from the same node
-                    return new AddDeltaOperation(new ORSet<T>(
-                        ConcatElementsMap(u.ElementsMap),
-                        Underlying.VersionVector.Merge(u.VersionVector)));
+                    case AddDeltaOperation operation:
+                    {
+                        var u = operation.Underlying;
+                        // Note that we only merge deltas originating from the same node
+                        return new AddDeltaOperation(new ORSet<T>(
+                            ConcatElementsMap(u.ElementsMap),
+                            Underlying.VersionVector.Merge(u.VersionVector)));
+                    }
+                    case AtomicDeltaOperation _:
+                        return new DeltaGroup(ImmutableArray.Create(this, other));
+                    case DeltaGroup dg:
+                    {
+                        var vector = dg.Operations;
+                        return new DeltaGroup(vector.Add(this));
+                    }
+                    default:
+                        throw new ArgumentException($"Unknown delta operation of type {other.GetType()}", nameof(other));
                 }
-                else if (other is AtomicDeltaOperation)
-                {
-                    return new DeltaGroup(ImmutableArray.Create(this, other));
-                }
-                else if (other is DeltaGroup)
-                {
-                    var vector = ((DeltaGroup)other).Operations;
-                    return new DeltaGroup(vector.Add(this));
-                }
-                else throw new ArgumentException($"Unknown delta operation of type {other.GetType()}", nameof(other));
             }
 
             private ImmutableDictionary<T, VersionVector> ConcatElementsMap(
                 ImmutableDictionary<T, VersionVector> thatMap)
             {
-                var u = Underlying.ElementsMap.ToBuilder();
-                foreach (var entry in thatMap)
-                {
-                    u[entry.Key] = entry.Value;
-                }
-                return u.ToImmutable();
+                //var u = Underlying.ElementsMap.ToBuilder();
+                //foreach (var entry in thatMap)
+                //{
+                //    u[entry.Key] = entry.Value;
+                //}
+                //return u.ToImmutable();
+                return Underlying.ElementsMap.SetItems(thatMap);
             }
         }
 
@@ -567,9 +569,9 @@ namespace Akka.DistributedData
                 {
                     return new DeltaGroup(ImmutableArray.Create(this, other));
                 }
-                else if (other is DeltaGroup)
+                else if (other is DeltaGroup group)
                 {
-                    var vector = ((DeltaGroup)other).Operations;
+                    var vector = group.Operations;
                     return new DeltaGroup(vector.Add(this));
                 }
                 else throw new ArgumentException($"Unknown delta operation of type {other.GetType()}", nameof(other));
@@ -590,9 +592,9 @@ namespace Akka.DistributedData
                 {
                     return new DeltaGroup(ImmutableArray.Create(this, other));
                 }
-                else if (other is DeltaGroup)
+                else if (other is DeltaGroup group)
                 {
-                    var vector = ((DeltaGroup)other).Operations;
+                    var vector = group.Operations;
                     return new DeltaGroup(vector.Add(this));
                 }
                 else throw new ArgumentException($"Unknown delta operation of type {other.GetType()}", nameof(other));
@@ -610,12 +612,12 @@ namespace Akka.DistributedData
 
             public IReplicatedData Merge(IReplicatedData other)
             {
-                if (other is AddDeltaOperation)
+                if (other is AddDeltaOperation thatAdd)
                 {
                     // merge AddDeltaOp into last AddDeltaOp in the group, if possible
                     var last = Operations[Operations.Length - 1];
-                    return last is AddDeltaOperation
-                        ? new DeltaGroup(Operations.SetItem(Operations.Length - 1, other.Merge(last)))
+                    return last is AddDeltaOperation thisAdd
+                        ? new DeltaGroup(Operations.SetItem(Operations.Length - 1, thisAdd.Merge(thatAdd)))
                         : new DeltaGroup(Operations.Add(other));
                 }
                 else if (other is DeltaGroup @group)
@@ -647,7 +649,7 @@ namespace Akka.DistributedData
             {
                 if (ReferenceEquals(null, obj)) return false;
                 if (ReferenceEquals(this, obj)) return true;
-                return obj is DeltaGroup && Equals((DeltaGroup)obj);
+                return obj is DeltaGroup group && Equals(group);
             }
 
             public override int GetHashCode()
@@ -688,7 +690,7 @@ namespace Akka.DistributedData
                             case AddDeltaOperation op: acc = acc.DryMerge(op.Underlying, addDeltaOp: true); break;
                             case RemoveDeltaOperation op: acc = acc.MergeRemoveDelta(op); break;
                             case FullStateDeltaOperation op: acc = acc.DryMerge(op.Underlying, addDeltaOp: false); break;
-                            default: throw new ArgumentException($"GroupDelta should not be nested");
+                            default: throw new ArgumentException("GroupDelta should not be nested");
                         }
                     }
                     return acc;
@@ -709,9 +711,9 @@ namespace Akka.DistributedData
             {
                 while (deleteDots.MoveNext())
                 {
-                    var curr = deleteDots.Current;
-                    deleteDotNodes.Add(curr.Key);
-                    deleteDotsAreGreater &= (thisDot != null && (thisDot.VersionAt(curr.Key) <= curr.Value));
+                    var current = deleteDots.Current;
+                    deleteDotNodes.Add(current.Key);
+                    deleteDotsAreGreater &= (thisDot != null && (thisDot.VersionAt(current.Key) <= current.Value));
                 }
             }
 

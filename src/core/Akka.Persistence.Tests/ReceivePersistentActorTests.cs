@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ReceivePersistentActorTests.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -31,9 +31,9 @@ namespace Akka.Persistence.Tests
             //Given
             var pid = "p-1";
             WriteEvents(pid, 1, 2, 3);
-            var actor = Sys.ActorOf(Props.Create(() => new NoCommandActor(pid)), "no-receive-specified");
             Sys.EventStream.Subscribe(TestActor, typeof(UnhandledMessage));
-
+            var actor = Sys.ActorOf(Props.Create(() => new NoCommandActor(pid)), "no-receive-specified");
+          
             //When
             actor.Tell("Something");
 
@@ -50,8 +50,8 @@ namespace Akka.Persistence.Tests
             WriteEvents(pid, "Something");
 
             // when
-            var actor = Sys.ActorOf(Props.Create(() => new NoEventActor(pid)), "no-receive-specified");
             Sys.EventStream.Subscribe(TestActor, typeof(UnhandledMessage));
+            var actor = Sys.ActorOf(Props.Create(() => new NoEventActor(pid)), "no-receive-specified");
             
             //Then
             ExpectMsg<UnhandledMessage>(m => ((string)m.Message) == "Something" && Equals(m.Recipient, actor));
@@ -136,7 +136,7 @@ namespace Akka.Persistence.Tests
             ExpectMsg((object)"any:hello");
         }
         
-        private readonly AtomicCounterLong _seqNrCounter = new AtomicCounterLong(1L);
+        private readonly AtomicCounterLong _seqNrCounter = new(1L);
         /// <summary>
         /// Initialize test journal using provided events.
         /// </summary>
@@ -155,7 +155,7 @@ namespace Akka.Persistence.Tests
 
         private abstract class TestReceivePersistentActor : ReceivePersistentActor
         {
-            public readonly LinkedList<object> State = new LinkedList<object>();
+            public readonly LinkedList<object> State = new();
             private readonly string _persistenceId;
 
             protected TestReceivePersistentActor(string persistenceId)
@@ -189,7 +189,7 @@ namespace Akka.Persistence.Tests
             public CallReceiveWhenHandlingMessageActor(string pid) : base(pid)
             {
                 Recover<int>(i => State.AddLast(i));
-                Command<object>(m =>
+                Command<object>(_ =>
                 {
                     try
                     {

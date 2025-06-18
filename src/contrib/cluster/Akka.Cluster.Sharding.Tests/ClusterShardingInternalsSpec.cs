@@ -1,58 +1,64 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ClusterShardingInternalsSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
+using System.Collections.Immutable;
 using Akka.Actor;
 using Akka.Cluster.Tools.Singleton;
 using Akka.Configuration;
+using Akka.TestKit;
 using Akka.Util;
 using FluentAssertions;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace Akka.Cluster.Sharding.Tests
 {
-    public class ClusterShardingInternalsSpec : Akka.TestKit.Xunit2.TestKit
+    public class ClusterShardingInternalsSpec : AkkaSpec
     {
-        ClusterSharding clusterSharding;
-
-        public ClusterShardingInternalsSpec() : base(GetConfig())
+        private class MessageExtractor: IMessageExtractor
         {
-            clusterSharding = ClusterSharding.Get(Sys);
+            public string EntityId(object message)
+                => message switch
+                {
+                    int i => i.ToString(),
+                    _ => null
+                };
+
+            public object EntityMessage(object message)
+                => message;
+
+            public string ShardId(object message)
+                => message switch
+                {
+                    int i => (i % 10).ToString(),
+                    _ => null
+                };
+
+            public string ShardId(string entityId, object messageHint = null)
+                => (int.Parse(entityId) % 10).ToString();
         }
 
-        private Option<(string, object)> ExtractEntityId(object message)
-        {
-            switch (message)
-            {
-                case int i:
-                    return (i.ToString(), message);
-            }
-            throw new NotSupportedException();
-        }
-
-        private string ExtractShardId(object message)
-        {
-            switch (message)
-            {
-                case int i:
-                    return (i % 10).ToString();
-            }
-            throw new NotSupportedException();
-        }
-
-
-        public static Config GetConfig()
-        {
-            return ConfigurationFactory.ParseString(@"akka.actor.provider = cluster
-                                                     akka.remote.dot-netty.tcp.port = 0")
+        private static Config SpecConfig =>
+            ConfigurationFactory.ParseString(@"
+                akka.actor.provider = cluster
+                akka.remote.dot-netty.tcp.port = 0
+                akka.cluster.sharding.fail-on-invalid-entity-state-transition = on")
 
                 .WithFallback(Sharding.ClusterSharding.DefaultConfig())
                 .WithFallback(DistributedData.DistributedData.DefaultConfig())
-                .WithFallback(ClusterSingletonManager.DefaultConfig());
+                .WithFallback(ClusterSingleton.DefaultConfig());
+
+        private ClusterSharding clusterSharding;
+        private readonly MessageExtractor _messageExtractor = new();
+
+        public ClusterShardingInternalsSpec(ITestOutputHelper helper) : base(SpecConfig, helper)
+        {
+            clusterSharding = ClusterSharding.Get(Sys);
         }
 
         [Fact]
@@ -65,16 +71,14 @@ namespace Akka.Cluster.Sharding.Tests
                   typeName: typeName,
                   entityProps: Props.Empty,
                   settings: settingsWithRole,
-                  extractEntityId: ExtractEntityId,
-                  extractShardId: ExtractShardId,
+                  messageExtractor: _messageExtractor,
                   allocationStrategy: ShardAllocationStrategy.LeastShardAllocationStrategy(3, 0.1),
                   handOffStopMessage: PoisonPill.Instance);
 
             var proxy = clusterSharding.StartProxy(
                   typeName: typeName,
                   role: settingsWithRole.Role,
-                  extractEntityId: ExtractEntityId,
-                  extractShardId: ExtractShardId
+                  messageExtractor: _messageExtractor
                 );
 
             region.Should().BeSameAs(proxy);
@@ -88,13 +92,13 @@ namespace Akka.Cluster.Sharding.Tests
             var shard = "7";
             var emptyHandlerActor = Sys.ActorOf(Props.Create(() => new EmptyHandlerActor()));
             var handOffStopper = Sys.ActorOf(
-                Props.Create(() => new ShardRegion.HandOffStopper(typeName, shard, probe.Ref, new IActorRef[] { emptyHandlerActor }, HandOffStopMessage.Instance, TimeSpan.FromMilliseconds(10)))
+                Props.Create(() => new ShardRegion.HandOffStopper(typeName, shard, probe.Ref, ImmutableHashSet.Create(emptyHandlerActor), HandOffStopMessage.Instance, TimeSpan.FromMilliseconds(10)))
               );
 
             Watch(emptyHandlerActor);
             ExpectTerminated(emptyHandlerActor, TimeSpan.FromSeconds(1));
 
-            probe.ExpectMsg(new PersistentShardCoordinator.ShardStopped(shard), TimeSpan.FromSeconds(1));
+            probe.ExpectMsg(new ShardCoordinator.ShardStopped(shard), TimeSpan.FromSeconds(1));
             probe.LastSender.Should().BeSameAs(handOffStopper);
 
             Watch(handOffStopper);
@@ -103,7 +107,7 @@ namespace Akka.Cluster.Sharding.Tests
 
         internal class HandOffStopMessage : INoSerializationVerificationNeeded
         {
-            public static readonly HandOffStopMessage Instance = new HandOffStopMessage();
+            public static readonly HandOffStopMessage Instance = new();
             private HandOffStopMessage()
             {
             }

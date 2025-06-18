@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="RestartNode2Spec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -11,6 +11,7 @@ using System.Linq;
 using Akka.Actor;
 using Akka.Cluster.TestKit;
 using Akka.Configuration;
+using Akka.MultiNode.TestAdapter;
 using Akka.Remote.TestKit;
 using FluentAssertions;
 
@@ -64,16 +65,17 @@ namespace Akka.Cluster.Tests.MultiNode
         private Lazy<ActorSystem> seed1System;
         private Lazy<ActorSystem> restartedSeed1System;
         private static Address seedNode1Address;
-        private ImmutableList<Address> SeedNodes
-        {
-            get
-            {
-                return ImmutableList.Create(seedNode1Address, GetAddress(_config.Seed2));
-            }
-        }
 
+        #region SeedNodesProperty
+        private ImmutableList<Address> SeedNodes => 
+            ImmutableList.Create(seedNode1Address, GetAddress(_config.Seed2));
+        #endregion
+
+        #region PublicConstructor
         public RestartNode2Spec() : this(new RestartNode2SpecConfig()) { }
+        #endregion
 
+        #region ProtectedConstructor
         protected RestartNode2Spec(RestartNode2SpecConfig config) : base(config, typeof(RestartNode2Spec))
         {
             _config = config;
@@ -83,6 +85,7 @@ namespace Akka.Cluster.Tests.MultiNode
                     .ParseString("akka.remote.netty.tcp.port = " + SeedNodes.First().Port)
                     .WithFallback(Sys.Settings.Config)));
         }
+        #endregion
 
         protected override void AfterTermination()
         {
@@ -92,16 +95,19 @@ namespace Akka.Cluster.Tests.MultiNode
             }, _config.Seed1);
         }
 
+        #region MultiNodeFact
         [MultiNodeFact]
         public void RestartNode2Specs()
         {
             Cluster_seed_nodes_must_be_able_to_restart_first_seed_node_and_join_other_seed_nodes();
         }
+        #endregion
 
         public void Cluster_seed_nodes_must_be_able_to_restart_first_seed_node_and_join_other_seed_nodes()
         {
             Within(TimeSpan.FromSeconds(60), () =>
             {
+                #region RunOnSample
                 RunOn(() =>
                 {
                     // seed1System is a separate ActorSystem, to be able to simulate restart
@@ -121,14 +127,15 @@ namespace Akka.Cluster.Tests.MultiNode
                         ExpectMsg("ok", TimeSpan.FromSeconds(5));
                     }
                 }, _config.Seed1);
+                #endregion
                 EnterBarrier("seed1-address-transfered");
 
                 // now we can join seed1System, seed2 together
                 RunOn(() =>
                 {
                     Cluster.Get(seed1System.Value).JoinSeedNodes(SeedNodes);
-                    AwaitAssert(() => Cluster.Get(seed1System.Value).ReadView.Members.Count.Should().Be(2));
-                    AwaitAssert(() => Cluster.Get(seed1System.Value).ReadView.Members.All(x => x.Status == MemberStatus.Up).Should().BeTrue());
+                    AwaitAssert(() => Cluster.Get(seed1System.Value).State.Members.Count.Should().Be(2));
+                    AwaitAssert(() => Cluster.Get(seed1System.Value).State.Members.All(x => x.Status == MemberStatus.Up).Should().BeTrue());
                 }, _config.Seed1);
 
                 RunOn(() =>
@@ -150,8 +157,8 @@ namespace Akka.Cluster.Tests.MultiNode
                     Cluster.Get(restartedSeed1System.Value).JoinSeedNodes(SeedNodes);
                     Within(TimeSpan.FromSeconds(30), () =>
                     {
-                        AwaitAssert(() => Cluster.Get(restartedSeed1System.Value).ReadView.Members.Count.Should().Be(2));
-                        AwaitAssert(() => Cluster.Get(restartedSeed1System.Value).ReadView.Members.All(x => x.Status == MemberStatus.Up).Should().BeTrue());
+                        AwaitAssert(() => Cluster.Get(restartedSeed1System.Value).State.Members.Count.Should().Be(2));
+                        AwaitAssert(() => Cluster.Get(restartedSeed1System.Value).State.Members.All(x => x.Status == MemberStatus.Up).Should().BeTrue());
                     });
                 }, _config.Seed1);
 

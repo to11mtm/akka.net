@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ActorSelection.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -63,10 +63,10 @@ namespace Akka.Actor
         /// <param name="anchor">The anchor.</param>
         /// <param name="path">The path.</param>
         public ActorSelection(IActorRef anchor, string path)
-            : this(anchor, path == "" ? new string[] {} : path.Split('/'))
+            : this(anchor, path == "" ? Array.Empty<string>() : path.Split('/'))
         {
         }
-        
+
         /// <summary>
         /// Initializes a new instance of the <see cref="ActorSelection" /> class.
         /// </summary>
@@ -77,31 +77,34 @@ namespace Akka.Actor
             Anchor = anchor;
 
             var list = new List<SelectionPathElement>();
-            var iter = elements.Iterator();
-            while(!iter.IsEmpty())
+            var hasDoubleWildcard = false;
+
+            foreach (var s in elements)
             {
-                var s = iter.Next();
-                switch(s)
+                switch (s)
                 {
                     case null:
                     case "":
                         break;
                     case "**":
-                        if(!iter.IsEmpty())
-                            throw new IllegalActorNameException("Double wildcard can only appear at the last path entry");
-                        list.Add(new SelectChildRecursive());
+                        list.Add(SelectChildRecursive.Instance);
+                        hasDoubleWildcard = true;
                         break;
-                    case string e when e.Contains("?") || e.Contains("*"):
+                    case string e when e.Contains('?') || e.Contains('*'):
                         list.Add(new SelectChildPattern(e));
                         break;
-                    case string e when e == "..":
-                        list.Add(new SelectParent());
+                    case string and "..":
+                        list.Add(SelectParent.Instance);
                         break;
                     default:
                         list.Add(new SelectChildName(s));
                         break;
                 }
             }
+
+            if(hasDoubleWildcard && list[list.Count-1] != SelectChildRecursive.Instance)
+                throw new IllegalActorNameException("Double wildcard can only appear at the last path entry");
+
             Path = list.ToArray();
         }
 
@@ -115,7 +118,7 @@ namespace Akka.Actor
             if (sender == null && ActorCell.Current != null && ActorCell.Current.Self != null)
                 sender = ActorCell.Current.Self;
 
-            DeliverSelection(Anchor as IInternalActorRef, sender, 
+            DeliverSelection(Anchor as IInternalActorRef, sender,
                 new ActorSelectionMessage(message, Path, wildCardFanOut: false));
         }
 
@@ -124,7 +127,7 @@ namespace Akka.Actor
         /// The result is returned as a Task that is completed with the <see cref="IActorRef"/>
         /// if such an actor exists. It is completed with failure <see cref="ActorNotFoundException"/> if
         /// no such actor exists or the identification didn't complete within the supplied <paramref name="timeout"/>.
-        /// 
+        ///
         /// Under the hood it talks to the actor to verify its existence and acquire its <see cref="IActorRef"/>
         /// </summary>
         /// <param name="timeout">
@@ -141,7 +144,7 @@ namespace Akka.Actor
         /// The result is returned as a Task that is completed with the <see cref="IActorRef"/>
         /// if such an actor exists. It is completed with failure <see cref="ActorNotFoundException"/> if
         /// no such actor exists or the identification didn't complete within the supplied <paramref name="timeout"/>.
-        /// 
+        ///
         /// Under the hood it talks to the actor to verify its existence and acquire its <see cref="IActorRef"/>
         /// </summary>
         /// <param name="timeout">
@@ -161,25 +164,22 @@ namespace Akka.Actor
             try
             {
                 var identity = await this.Ask<ActorIdentity>(new Identify(null), timeout, ct).ConfigureAwait(false);
-                if(identity.Subject == null)
-                    throw new ActorNotFoundException("subject was null");
-
-                return identity.Subject;
+                return identity.Subject ?? throw new ActorNotFoundException("subject was null");
             }
-            catch(Exception ex)
+            catch (Exception ex)
             {
                 throw new ActorNotFoundException("Exception occurred while resolving ActorSelection", ex);
             }
         }
-        
+
         /// <summary>
         /// INTERNAL API
         /// Convenience method used by remoting when receiving <see cref="ActorSelectionMessage" /> from a remote
         /// actor.
         /// </summary>
-        /// <param name="anchor">TBD</param>
-        /// <param name="sender">TBD</param>
-        /// <param name="sel">TBD</param>
+        /// <param name="anchor">The starting actor reference to deliver the selection from.</param>
+        /// <param name="sender">The sender of the message.</param>
+        /// <param name="sel">The actor selection message to deliver.</param>
         internal static void DeliverSelection(IInternalActorRef anchor, IActorRef sender, ActorSelectionMessage sel)
         {
             if (sel.Elements.IsNullOrEmpty())
@@ -194,12 +194,14 @@ namespace Akka.Actor
                 {
                     if (actorRef is ActorRefWithCell refWithCell)
                     {
-                        var emptyRef = new EmptyLocalActorRef(
-                            provider: refWithCell.Provider,
-                            path: anchor.Path / sel.Elements.Select(el => el.ToString()),
-                            eventStream: refWithCell.Underlying.System.EventStream);
+                        EmptyLocalActorRef EmptyRef(){
+                            return new EmptyLocalActorRef(
+                                provider: refWithCell.Provider,
+                                path: anchor.Path / sel.Elements.Select(el => el.ToString()),
+                                eventStream: refWithCell.Underlying.System.EventStream);
+                        }
 
-                        switch(iter.Next())
+                        switch (iter.Next())
                         {
                             case SelectParent _:
                                 var parent = actorRef.Parent;
@@ -217,7 +219,7 @@ namespace Akka.Actor
                                 {
                                     // don't send to emptyRef after wildcard fan-out
                                     if (!sel.WildCardFanOut)
-                                        emptyRef.Tell(sel, sender);
+                                        EmptyRef().Tell(sel, sender);
                                 }
                                 else if (iter.IsEmpty())
                                 {
@@ -234,7 +236,7 @@ namespace Akka.Actor
                                 if (allChildren.Count == 0)
                                     return;
 
-                                var msg = new ActorSelectionMessage(sel.Message, new[] { new SelectChildRecursive() }, true);
+                                var msg = new ActorSelectionMessage(sel.Message, new SelectionPathElement[] { SelectChildRecursive.Instance }, true);
                                 foreach (var c in allChildren)
                                 {
                                     c.Tell(sel.Message, sender);
@@ -250,7 +252,7 @@ namespace Akka.Actor
                                 if (iter.IsEmpty())
                                 {
                                     if (matchingChildren.Count == 0 && !sel.WildCardFanOut)
-                                        emptyRef.Tell(sel, sender);
+                                        EmptyRef().Tell(sel, sender);
                                     else
                                     {
                                         for (var i = 0; i < matchingChildren.Count; i++)
@@ -259,9 +261,9 @@ namespace Akka.Actor
                                 }
                                 else
                                 {
-                                    // don't send to emptyRef after wildcard fan-out 
+                                    // don't send to emptyRef after wildcard fan-out
                                     if (matchingChildren.Count == 0 && !sel.WildCardFanOut)
-                                        emptyRef.Tell(sel, sender);
+                                        EmptyRef().Tell(sel, sender);
                                     else
                                     {
                                         var message = new ActorSelectionMessage(
@@ -269,7 +271,7 @@ namespace Akka.Actor
                                             elements: iter.ToVector().ToArray(),
                                             wildCardFanOut: sel.WildCardFanOut || matchingChildren.Count > 1);
 
-                                        for(var i = 0; i < matchingChildren.Count; i++)
+                                        for (var i = 0; i < matchingChildren.Count; i++)
                                             DeliverSelection(matchingChildren[i] as IInternalActorRef, sender, message);
                                     }
                                 }
@@ -287,7 +289,6 @@ namespace Akka.Actor
             }
         }
 
-        /// <inheritdoc/>
         public override bool Equals(object obj)
         {
             if (ReferenceEquals(null, obj)) return false;
@@ -296,13 +297,13 @@ namespace Akka.Actor
             return Equals((ActorSelection)obj);
         }
 
-        /// <inheritdoc/>
+        
         protected bool Equals(ActorSelection other)
         {
             return Equals(Anchor, other.Anchor) && Equals(PathString, other.PathString);
         }
 
-        /// <inheritdoc/>
+        
         public override int GetHashCode()
         {
             unchecked
@@ -311,7 +312,7 @@ namespace Akka.Actor
             }
         }
 
-        /// <inheritdoc/>
+        
         public override string ToString()
         {
             var builder = new StringBuilder();
@@ -326,14 +327,14 @@ namespace Akka.Actor
     /// <summary>
     /// Used to deliver messages via <see cref="ActorSelection"/>.
     /// </summary>
-    public class ActorSelectionMessage : IAutoReceivedMessage, IPossiblyHarmful
+    public class ActorSelectionMessage : IAutoReceivedMessage, IPossiblyHarmful, IWrappedMessage
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="ActorSelectionMessage" /> class.
         /// </summary>
         /// <param name="message">The message.</param>
         /// <param name="elements">The elements.</param>
-        /// <param name="wildCardFanOut">TBD</param>
+        /// <param name="wildCardFanOut">Whether the selection is a result of a wildcard fan-out operation.</param>
         public ActorSelectionMessage(object message, SelectionPathElement[] elements, bool wildCardFanOut = false)
         {
             Message = message;
@@ -356,7 +357,7 @@ namespace Akka.Actor
         /// </summary>
         public bool WildCardFanOut { get; }
 
-        /// <inheritdoc/>
+        
         public override string ToString()
         {
             var elements = string.Join<SelectionPathElement>("/", Elements);
@@ -403,13 +404,13 @@ namespace Akka.Actor
         /// </summary>
         public string Name { get; }
 
-        /// <inheritdoc/>
+        
         protected bool Equals(SelectChildName other)
         {
             return string.Equals(Name, other.Name);
         }
 
-        /// <inheritdoc/>
+        
         public override bool Equals(object obj)
         {
             if (ReferenceEquals(null, obj)) return false;
@@ -418,10 +419,10 @@ namespace Akka.Actor
             return Equals((SelectChildName)obj);
         }
 
-        /// <inheritdoc/>
+        
         public override int GetHashCode() => Name?.GetHashCode() ?? 0;
 
-        /// <inheritdoc/>
+        
         public override string ToString() => Name;
     }
 
@@ -444,10 +445,10 @@ namespace Akka.Actor
         /// </summary>
         public string PatternStr { get; }
 
-        /// <inheritdoc/>
+        
         protected bool Equals(SelectChildPattern other) => string.Equals(PatternStr, other.PatternStr);
 
-        /// <inheritdoc/>
+        
         public override bool Equals(object obj)
         {
             if (ReferenceEquals(null, obj)) return false;
@@ -456,28 +457,33 @@ namespace Akka.Actor
             return Equals((SelectChildPattern)obj);
         }
 
-        /// <inheritdoc/>
+        
         public override int GetHashCode() => PatternStr?.GetHashCode() ?? 0;
 
-        /// <inheritdoc/>
+        
         public override string ToString() => PatternStr;
     }
 
     public class SelectChildRecursive : SelectionPathElement
     {
-        /// <inheritdoc/>
+        
         public override bool Equals(object obj)
         {
             if (obj is null) return false;
             if (ReferenceEquals(this, obj)) return true;
-            if(!(obj is SelectChildRecursive)) return false;
+            if (!(obj is SelectChildRecursive)) return false;
             return true;
         }
 
-        /// <inheritdoc/>
+        /// <summary>
+        ///  Use this instead of calling the default constructor
+        /// </summary>
+        public static readonly SelectChildRecursive Instance = new();
+
+        
         public override int GetHashCode() => "**".GetHashCode();
 
-        /// <inheritdoc/>
+        
         public override string ToString() => "**";
 
     }
@@ -487,13 +493,18 @@ namespace Akka.Actor
     /// </summary>
     public class SelectParent : SelectionPathElement
     {
-        /// <inheritdoc/>
+        /// <summary>
+        ///  Use this instead of calling the default constructor
+        /// </summary>
+        public static readonly SelectParent Instance = new();
+
+        
         public override bool Equals(object obj) => !ReferenceEquals(obj, null) && obj is SelectParent;
 
-        /// <inheritdoc/>
+        
         public override int GetHashCode() => nameof(SelectParent).GetHashCode();
 
-        /// <inheritdoc/>
+        
         public override string ToString() => "..";
     }
 }

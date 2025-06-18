@@ -1,15 +1,17 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="AutoDown.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using System.Collections.Immutable;
 using Akka.Actor;
+using Akka.Annotations;
 using Akka.Event;
 using Akka.Configuration;
+using static Akka.Cluster.MembershipState;
 
 namespace Akka.Cluster
 {
@@ -23,16 +25,17 @@ namespace Akka.Cluster
     /// The implementation is split into two classes AutoDown and AutoDownBase to be
     /// able to unit test the logic without running cluster.
     /// </summary>
-    internal class AutoDown : AutoDownBase
+    internal sealed class AutoDown : AutoDownBase
     {
         /// <summary>
         /// TBD
         /// </summary>
         /// <param name="autoDownUnreachableAfter">TBD</param>
+        /// <param name="cluster"></param>
         /// <returns>TBD</returns>
-        public static Props Props(TimeSpan autoDownUnreachableAfter)
+        public static Props Props(TimeSpan autoDownUnreachableAfter, Cluster cluster)
         {
-            return Actor.Props.Create<AutoDown>(autoDownUnreachableAfter);
+            return Actor.Props.Create(() => new AutoDown(autoDownUnreachableAfter, cluster));
         }
 
         /// <summary>
@@ -64,7 +67,7 @@ namespace Akka.Cluster
             {
                 if (ReferenceEquals(null, obj)) return false;
                 if (ReferenceEquals(this, obj)) return true;
-                return obj is UnreachableTimeout && Equals((UnreachableTimeout)obj);
+                return obj is UnreachableTimeout timeout && Equals(timeout);
             }
 
             /// <inheritdoc/>
@@ -75,14 +78,10 @@ namespace Akka.Cluster
         }
 
         private readonly Cluster _cluster;
-
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <param name="autoDownUnreachableAfter">TBD</param>
-        public AutoDown(TimeSpan autoDownUnreachableAfter) : base(autoDownUnreachableAfter)
+        
+        public AutoDown(TimeSpan autoDownUnreachableAfter, Cluster cluster) : base(autoDownUnreachableAfter)
         {
-            _cluster = Cluster.Get(Context.System);
+            _cluster = cluster;
         }
 
         /// <summary>
@@ -140,7 +139,7 @@ namespace Akka.Cluster
     internal abstract class AutoDownBase : UntypedActor
     {
         private readonly ImmutableHashSet<MemberStatus> _skipMemberStatus =
-            Gossip.ConvergenceSkipUnreachableWithMemberStatus;
+           ConvergenceSkipUnreachableWithMemberStatus;
 
         private ImmutableDictionary<UniqueAddress, ICancelable> _scheduledUnreachable =
             ImmutableDictionary.Create<UniqueAddress, ICancelable>();
@@ -272,23 +271,22 @@ namespace Akka.Cluster
     /// <summary>
     /// Used when no custom provider is configured and 'auto-down-unreachable-after' is enabled.
     /// </summary>
+    [InternalApi] // really only used during MNTR for Akka.Cluster.Sharding
     public sealed class AutoDowning : IDowningProvider
     {
-        private readonly ClusterSettings _clusterSettings;
-
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <param name="system">TBD</param>
-        public AutoDowning(ActorSystem system)
+        private readonly ActorSystem _system;
+        private readonly Cluster _cluster;
+        
+        public AutoDowning(ActorSystem system, Cluster cluster)
         {
-            _clusterSettings = Cluster.Get(system).Settings;
+            _system = system;
+            _cluster = cluster;
         }
 
         /// <summary>
         /// TBD
         /// </summary>
-        public TimeSpan DownRemovalMargin => _clusterSettings.DownRemovalMargin;
+        public TimeSpan DownRemovalMargin => _cluster.Settings.DownRemovalMargin;
 
         /// <summary>
         /// TBD
@@ -300,10 +298,13 @@ namespace Akka.Cluster
         {
             get
             {
-                if (_clusterSettings.AutoDownUnreachableAfter.HasValue)
-                    return AutoDown.Props(_clusterSettings.AutoDownUnreachableAfter.Value);
-                else 
+#pragma warning disable CS0618 // disable obsolete warning here because this entire class is obsolete
+                var autoDownUnreachableAfter = _cluster.Settings.AutoDownUnreachableAfter;
+#pragma warning restore CS0618
+                if (!autoDownUnreachableAfter.HasValue)
                     throw new ConfigurationException("AutoDowning downing provider selected but 'akka.cluster.auto-down-unreachable-after' not set");
+
+                return AutoDown.Props(autoDownUnreachableAfter.Value, _cluster);                    
             }
         }
     }

@@ -1,16 +1,19 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="DirectBufferPool.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Runtime.Serialization;
 using Akka.Actor;
 using Akka.Configuration;
+using Akka.Event;
+using Debug = System.Diagnostics.Debug;
 
 namespace Akka.IO.Buffers
 {
@@ -21,8 +24,34 @@ namespace Akka.IO.Buffers
         public BufferPoolAllocationException(string message) : base(message)
         {
         }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="BufferPoolAllocationException" /> class.
+        /// </summary>
+        /// <param name="info">The <see cref="SerializationInfo" /> that holds the serialized object data about the exception being thrown.</param>
+        /// <param name="context">The <see cref="StreamingContext" /> that contains contextual information about the source or destination.</param>
+        protected BufferPoolAllocationException(SerializationInfo info, StreamingContext context)
+            : base(info, context)
+        {
+        }
     }
 
+    public class BufferPoolInfo
+    {
+        public BufferPoolInfo(Type type, long totalSize, long free, long used)
+        {
+            Type = type;
+            TotalSize = totalSize;
+            Free = free;
+            Used = used;
+        }
+
+        public Type Type { get; }
+        public long TotalSize { get; }
+        public long Free { get; }
+        public long Used { get; }
+    }
+    
     /// <summary>
     /// An interface used to acquire/release recyclable chunks of 
     /// bytes to be reused without need to triggering GC.
@@ -60,6 +89,8 @@ namespace Akka.IO.Buffers
         /// </summary>
         /// <param name="buf"></param>
         void Release(IEnumerable<ByteBuffer> buf);
+
+        BufferPoolInfo Diagnostics();
     }
 
     /// <summary>
@@ -79,14 +110,14 @@ namespace Akka.IO.Buffers
     internal sealed class DirectBufferPool : IBufferPool
     {
         private const int Retries = 30;
-        private readonly object _syncRoot = new object();
+        private readonly object _syncRoot = new();
 
         private readonly int _bufferSize;
         private readonly int _buffersPerSegment;
         private readonly int _segmentSize;
         private readonly int _maxSegmentCount;
 
-        private readonly ConcurrentStack<ByteBuffer> _buffers = new ConcurrentStack<ByteBuffer>();
+        private readonly ConcurrentStack<ByteBuffer> _buffers = new();
         private readonly List<byte[]> _segments;
 
         /// <summary>
@@ -121,6 +152,17 @@ namespace Akka.IO.Buffers
             }
         }
 
+        public BufferPoolInfo Diagnostics()
+            => new(
+                type: typeof(DirectBufferPool),
+                totalSize: _segments.Count * _segmentSize,
+                free: _buffers.Count * _bufferSize,
+                used: (_segments.Count * _segmentSize) - (_buffers.Count * _bufferSize));
+        
+        public override string ToString()
+            => $"_bufferSize: [{_buffers}], _bufferPerSegment: [{_buffersPerSegment}], _segmentSize: [{_segmentSize}], " +
+               $"_segments.Count: [{_segments.Count}], _buffers.Count: [{_buffers.Count}]";
+        
         private void AllocateSegment()
         {
             lock (_syncRoot)
@@ -142,8 +184,7 @@ namespace Akka.IO.Buffers
         {
             for (int i = 0; i < Retries; i++)
             {
-                ByteBuffer buf;
-                if (_buffers.TryPop(out buf))
+                if (_buffers.TryPop(out var buf))
                     return buf;
                 AllocateSegment();
             }
@@ -160,10 +201,9 @@ namespace Akka.IO.Buffers
             {
                 for (int i = 0; i < Retries; i++)
                 {
-                    ByteBuffer buf;
                     while (received < buffersToGet)
                     {
-                        if (!_buffers.TryPop(out buf)) break;
+                        if (!_buffers.TryPop(out var buf)) break;
                         result[received] = buf;
                         received++;
                     }
@@ -173,7 +213,7 @@ namespace Akka.IO.Buffers
                     AllocateSegment();
                 }
 
-                throw new BufferPoolAllocationException($"Couldn't allocate enough byte buffer to fill the tolal requested size of {minimumSize} bytes");
+                throw new BufferPoolAllocationException($"Couldn't allocate enough byte buffer to fill the total requested size of {minimumSize} bytes");
             }
             catch 
             {
@@ -185,8 +225,13 @@ namespace Akka.IO.Buffers
         public void Release(ByteBuffer buf)
         {
             // only release buffers that have actually been taken from one of the segments
-            if (buf.Count == _bufferSize && _segments.Contains(buf.Array))
-                _buffers.Push(buf);
+            if (buf.Count != _bufferSize || !_segments.Contains(buf.Array))
+            {
+                Debug.Assert(false, "Wrong ArraySegment<byte> was returned to the pool. WARNING: This can lead to memory leak.");
+                return;
+            }
+            
+            _buffers.Push(buf);
         }
 
         public void Release(IEnumerable<ByteBuffer> buffers)

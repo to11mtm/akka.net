@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="DeltaPropagationSelector.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -12,6 +12,7 @@ using System.Linq;
 using Akka.Actor;
 using Akka.DistributedData.Internal;
 using Akka.Event;
+using Akka.Util.Internal;
 
 namespace Akka.DistributedData
 {
@@ -68,24 +69,22 @@ namespace Akka.DistributedData
                 if (all.Length <= sliceSize) slice = all;
                 else
                 {
-                    var start = (int)(_deltaNodeRoundRobinCounter % all.Length);
-                    var buffer = new Address[sliceSize];
-                    for (var i = 0; i < sliceSize; i++)
-                    {
-                        buffer[i] = all[(start + i) % all.Length];
-                    }
-                    slice = ImmutableArray.CreateRange(buffer);
+                    var i = (int)(_deltaNodeRoundRobinCounter % all.Length);
+                    slice = all.Slice(i, sliceSize).ToImmutableArray();
+                
+                    if (slice.Length != sliceSize)
+                        slice = slice.AddRange(all.Take(sliceSize - slice.Length));
                 }
 
                 _deltaNodeRoundRobinCounter += sliceSize;
 
-                var result = ImmutableDictionary<Address, DeltaPropagation>.Empty.ToBuilder();
+                var result = ImmutableDictionary.CreateBuilder<Address, DeltaPropagation>();
                 var cache = new Dictionary<(string, long, long), IReplicatedData>();
                 foreach (var node in slice)
                 {
                     // collect the deltas that have not already been sent to the node and merge
                     // them into a delta group
-                    var deltas = ImmutableDictionary<string, (IReplicatedData, long, long)>.Empty.ToBuilder();
+                    var deltas = ImmutableDictionary.CreateBuilder<string, (IReplicatedData, long, long)>();
                     foreach (var entry in _deltaEntries)
                     {
                         var key = entry.Key;
@@ -105,19 +104,17 @@ namespace Akka.DistributedData
                             var cacheKey = (key, fromSeqNr, toSeqNr);
                             if (!cache.TryGetValue(cacheKey, out var deltaGroup))
                             {
-                                using (var e = deltaEntriesAfterJ.Values.GetEnumerator())
+                                deltaGroup = deltaEntriesAfterJ.Values.Aggregate((d1, d2) =>
                                 {
-                                    e.MoveNext();
-                                    deltaGroup = e.Current;
-                                    while (e.MoveNext())
-                                    {
-                                        deltaGroup = deltaGroup.Merge(e.Current);
-                                        if (deltaGroup is IReplicatedDeltaSize s && s.DeltaSize > MaxDeltaSize)
-                                        {
-                                            deltaGroup = DeltaPropagation.NoDeltaPlaceholder;
-                                        }
-                                    }
-                                }
+                                    var merged = ReferenceEquals(d2, DeltaPropagation.NoDeltaPlaceholder) 
+                                        ? DeltaPropagation.NoDeltaPlaceholder 
+                                        : d1.Merge(d2);
+
+                                    if (merged is IReplicatedDeltaSize s && s.DeltaSize > MaxDeltaSize)
+                                        return DeltaPropagation.NoDeltaPlaceholder; // discard too large deltas
+
+                                    return merged;
+                                });
 
                                 cache[cacheKey] = deltaGroup;
                             }
@@ -142,8 +139,7 @@ namespace Akka.DistributedData
 
         public bool HasDeltaEntries(string key)
         {
-            ImmutableSortedDictionary<long, IReplicatedData> entries;
-            if (_deltaEntries.TryGetValue(key, out entries))
+            if (_deltaEntries.TryGetValue(key, out var entries))
             {
                 return !entries.IsEmpty;
             }

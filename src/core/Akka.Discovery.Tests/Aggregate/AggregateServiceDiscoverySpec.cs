@@ -1,7 +1,7 @@
-//-----------------------------------------------------------------------
-// <copyright file="Lease.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+﻿//-----------------------------------------------------------------------
+// <copyright file="AggregateServiceDiscoverySpec.cs" company="Akka.NET Project">
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -11,7 +11,9 @@ using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Configuration;
 using FluentAssertions;
+using FluentAssertions.Extensions;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace Akka.Discovery.Tests.Aggregate
 {
@@ -63,47 +65,47 @@ namespace Akka.Discovery.Tests.Aggregate
 
         private readonly ServiceDiscovery _discovery;
 
-        public AggregateServiceDiscoverySpec()
-            : base(Config, "AggregateDiscoverySpec")
+        public AggregateServiceDiscoverySpec(ITestOutputHelper output)
+            : base(Config, "AggregateDiscoverySpec", output)
         {
             _discovery = Discovery.Get(Sys).Default;
         }
 
         [Fact]
-        public void Aggregate_service_discovery_must_only_call_first_one_if_returns_results()
+        public async Task Aggregate_service_discovery_must_only_call_first_one_if_returns_results()
         {
-            var result = _discovery.Lookup("stubbed", 100.Milliseconds()).Result;
+            var result = await _discovery.Lookup("stubbed", 100.Milliseconds());
             result.Should().Be(new ServiceDiscovery.Resolved(
                 "stubbed",
                 new List<ServiceDiscovery.ResolvedTarget>
                 {
-                    new ServiceDiscovery.ResolvedTarget("stubbed1", 1234)
+                    new("stubbed1", 1234)
                 }));
         }
 
         [Fact]
-        public void Aggregate_service_discovery_must_move_onto_the_next_if_no_resolved_targets()
+        public async Task Aggregate_service_discovery_must_move_onto_the_next_if_no_resolved_targets()
         {
-            var result = _discovery.Lookup("config1", 100.Milliseconds()).Result;
+            var result = await _discovery.Lookup("config1", 100.Milliseconds());
             result.Should().Be(new ServiceDiscovery.Resolved(
                 "config1",
                 new List<ServiceDiscovery.ResolvedTarget>
                 {
-                    new ServiceDiscovery.ResolvedTarget("cat", 1233),
-                    new ServiceDiscovery.ResolvedTarget("dog", 1234)
+                    new("cat", 1233),
+                    new("dog", 1234)
                 }));
         }
-        
+
         [Fact]
-        public void Aggregate_service_discovery_must_move_onto_next_if_fails()
+        public async Task Aggregate_service_discovery_must_move_onto_next_if_fails()
         {
-            var result = _discovery.Lookup("fail", 100.Milliseconds()).Result;
+            var result = await _discovery.Lookup("fail", 100.Milliseconds());
             // Stub fails then result comes from config
             result.Should().Be(new ServiceDiscovery.Resolved(
                 "fail",
                 new List<ServiceDiscovery.ResolvedTarget>
                 {
-                    new ServiceDiscovery.ResolvedTarget("from-config")
+                    new("from-config")
                 }));
         }
     }

@@ -1,12 +1,14 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ActorMaterializer.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
+using System.Collections.Concurrent;
 using System.Runtime.Serialization;
+using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Configuration;
 using Akka.Dispatch;
@@ -23,6 +25,53 @@ using Decider = Akka.Streams.Supervision.Decider;
 
 namespace Akka.Streams
 {
+    /// <summary>
+    /// INTERNAL API
+    /// </summary>
+    internal sealed class DefaultMaterializerExt : ExtensionIdProvider<DefaultMaterializer>
+    {
+        public override DefaultMaterializer CreateExtension(ExtendedActorSystem system)
+        {
+            return new DefaultMaterializer(system);
+        }
+    }
+    
+    /// <summary>
+    /// INTERNAL API
+    /// </summary>
+    /// <remarks>
+    /// Caches a default materializer instance for each actor system. Prevents the need to create a new materializer
+    /// for trivial changes.
+    /// </remarks>
+    internal sealed class DefaultMaterializer : IExtension
+    {
+        public ActorMaterializer Materializer { get; }
+        
+        public DefaultMaterializer(ActorSystem system)
+        {
+            var haveShutDown = new AtomicBoolean();
+            
+            // Inject the top-level fallback config for the Materializer once, and only once.
+            // This is a performance optimization to avoid having to do this on every materialization.
+            system.Settings.InjectTopLevelFallback(ActorMaterializer.DefaultConfig());
+            
+            var settings = ActorMaterializerSettings.Create(system);
+            
+            Materializer = new ActorMaterializerImpl(
+                system: system,
+                settings: settings,
+                dispatchers: system.Dispatchers,
+                supervisor: system.ActorOf(StreamSupervisor.Props(settings, haveShutDown).WithDispatcher(settings.Dispatcher), StreamSupervisor.NextName()),
+                haveShutDown: haveShutDown,
+                flowNames: EnumerableActorName.Create("Flow"));
+        }
+        
+        public static DefaultMaterializer Get(ActorSystem system)
+        {
+            return system.WithExtension<DefaultMaterializer, DefaultMaterializerExt>();
+        }
+    }
+
     /// <summary>
     /// A ActorMaterializer takes the list of transformations comprising a
     /// <see cref="IFlow{TOut,TMat}"/> and materializes them in the form of
@@ -72,10 +121,21 @@ namespace Akka.Streams
         /// <returns>TBD</returns>
         public static ActorMaterializer Create(IActorRefFactory context, ActorMaterializerSettings settings = null, string namePrefix = null)
         {
-            var haveShutDown = new AtomicBoolean();
             var system = ActorSystemOf(context);
-            system.Settings.InjectTopLevelFallback(DefaultConfig());
-            settings = settings ?? ActorMaterializerSettings.Create(system);
+            
+            // forces settings to get injected into the ActorSystem the first time we materialize
+            var defaultMaterializer = DefaultMaterializer.Get(system).Materializer;
+
+            // optimized paths for non-allocation
+            if (context.Equals(system) && settings == null && namePrefix == null)
+                return defaultMaterializer;
+            if (context.Equals(system) && settings == null && namePrefix != null)
+                return (ActorMaterializer)defaultMaterializer.WithNamePrefix(namePrefix);
+
+            // use the default settings if none have been passed in
+            settings ??= defaultMaterializer.Settings;
+            
+            var haveShutDown = new AtomicBoolean();
 
             return new ActorMaterializerImpl(
                 system: system,
@@ -104,14 +164,14 @@ namespace Akka.Streams
 
         private static ActorSystem ActorSystemOf(IActorRefFactory context)
         {
-            if (context is ExtendedActorSystem)
-                return (ActorSystem)context;
-            if (context is IActorContext)
-                return ((IActorContext)context).System;
-            if (context == null)
-                throw new ArgumentNullException(nameof(context), "IActorRefFactory must be defined");
-
-            throw new ArgumentException($"ActorRefFactory context must be a ActorSystem or ActorContext, got [{context.GetType()}]");
+            return context switch
+            {
+                ExtendedActorSystem system => system,
+                IActorContext actorContext => actorContext.System,
+                null => throw new ArgumentNullException(nameof(context), "IActorRefFactory must be defined"),
+                _ => throw new ArgumentException(
+                    $"ActorRefFactory context must be a ActorSystem or ActorContext, got [{context.GetType()}]")
+            };
         }
 
         #endregion
@@ -205,8 +265,7 @@ namespace Akka.Streams
         /// <returns>The newly created logging adapter.</returns>
         public abstract ILoggingAdapter MakeLogger(object logSource);
 
-        /// <inheritdoc/>
-        public void Dispose() => Shutdown();
+       public void Dispose() => Shutdown();
     }
 
     /// <summary>
@@ -215,18 +274,16 @@ namespace Akka.Streams
     internal static class ActorMaterializerHelper
     {
         /// <summary>
-        /// TBD
+        /// Converts an <see cref="IMaterializer"/> to an <see cref="ActorMaterializer"/>.
         /// </summary>
-        /// <param name="materializer">TBD</param>
+        /// <param name="materializer">The original materializer.</param>
         /// <exception cref="ArgumentException">
         /// This exception is thrown when the specified <paramref name="materializer"/> is not of type <see cref="ActorMaterializer"/>.
         /// </exception>
-        /// <returns>TBD</returns>
         internal static ActorMaterializer Downcast(IMaterializer materializer)
         {
             //FIXME this method is going to cause trouble for other Materializer implementations
-            var downcast = materializer as ActorMaterializer;
-            if (downcast != null)
+            if (materializer is ActorMaterializer downcast)
                 return downcast;
 
             throw new ArgumentException($"Expected {typeof(ActorMaterializer)} but got {materializer.GetType()}");
@@ -256,7 +313,6 @@ namespace Akka.Streams
             Actor = actor;
         }
 
-#if SERIALIZATION
         /// <summary>
         /// Initializes a new instance of the <see cref="AbruptTerminationException" /> class.
         /// </summary>
@@ -266,7 +322,6 @@ namespace Akka.Streams
         {
             Actor = (IActorRef)info.GetValue("Actor", typeof(IActorRef));
         }
-#endif
     }
 
     /// <summary>
@@ -281,14 +336,12 @@ namespace Akka.Streams
         /// <param name="innerException">The exception that is the cause of the current exception.</param>
         public MaterializationException(string message, Exception innerException) : base(message, innerException) { }
 
-#if SERIALIZATION
         /// <summary>
         /// Initializes a new instance of the <see cref="MaterializationException"/> class.
         /// </summary>
         /// <param name="info">The <see cref="SerializationInfo" /> that holds the serialized object data about the exception being thrown.</param>
         /// <param name="context">The <see cref="StreamingContext" /> that contains contextual information about the source or destination.</param>
         protected MaterializationException(SerializationInfo info, StreamingContext context) : base(info, context) { }
-#endif
     }
 
     /// <summary>
@@ -303,6 +356,13 @@ namespace Akka.Streams
         {
 
         }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="AbruptStageTerminationException"/> class.
+        /// </summary>
+        /// <param name="info">The <see cref="SerializationInfo" /> that holds the serialized object data about the exception being thrown.</param>
+        /// <param name="context">The <see cref="StreamingContext" /> that contains contextual information about the source or destination.</param>
+        public AbruptStageTerminationException(SerializationInfo info, StreamingContext context) : base(info, context) { }
     }
 
 
@@ -312,11 +372,6 @@ namespace Akka.Streams
     /// </summary>
     public sealed class ActorMaterializerSettings
     {
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <param name="system">TBD</param>
-        /// <returns>TBD</returns>
         public static ActorMaterializerSettings Create(ActorSystem system)
         {
             // need to make sure the default materializer settings are available
@@ -402,23 +457,7 @@ namespace Akka.Streams
         /// INTERNAL API
         /// </summary>
         public readonly StreamRefSettings StreamRefSettings;
-
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <param name="initialInputBufferSize">TBD</param>
-        /// <param name="maxInputBufferSize">TBD</param>
-        /// <param name="dispatcher">TBD</param>
-        /// <param name="supervisionDecider">TBD</param>
-        /// <param name="subscriptionTimeoutSettings">TBD</param>
-        /// <param name="streamRefSettings">TBD</param>
-        /// <param name="isDebugLogging">TBD</param>
-        /// <param name="outputBurstLimit">TBD</param>
-        /// <param name="isFuzzingMode">TBD</param>
-        /// <param name="isAutoFusing">TBD</param>
-        /// <param name="maxFixedBufferSize">TBD</param>
-        /// <param name="blockingIoDispatcher">TBD</param>
-        /// <param name="syncProcessingLimit">TBD</param>
+        
         public ActorMaterializerSettings(
             int initialInputBufferSize, 
             int maxInputBufferSize, 
@@ -635,8 +674,28 @@ namespace Akka.Streams
                 s.SyncProcessingLimit == SyncProcessingLimit &&
                 s.IsFuzzingMode == IsFuzzingMode &&
                 s.IsAutoFusing == IsAutoFusing &&
-                s.SubscriptionTimeoutSettings == SubscriptionTimeoutSettings &&
+                s.MaxFixedBufferSize == MaxFixedBufferSize &&
                 s.StreamRefSettings == StreamRefSettings;
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                var hash = (17 * 23) ^ InitialInputBufferSize;
+                hash = (hash * 23) ^ MaxInputBufferSize;
+                hash = (hash * 23) ^ Dispatcher.GetHashCode();
+                hash = (hash * 23) ^ SupervisionDecider.GetHashCode();
+                hash = (hash * 23) ^ SubscriptionTimeoutSettings.GetHashCode();
+                hash = (hash * 23) ^ IsDebugLogging.GetHashCode();
+                hash = (hash * 23) ^ OutputBurstLimit;
+                hash = (hash * 23) ^ SyncProcessingLimit;
+                hash = (hash * 23) ^ IsFuzzingMode.GetHashCode();
+                hash = (hash * 23) ^ IsAutoFusing.GetHashCode();
+                hash = (hash * 23) ^ MaxFixedBufferSize;
+                hash = (hash * 23) ^ StreamRefSettings.GetHashCode();
+                return hash;
+            }
         }
 
         internal Attributes ToAttributes()
@@ -710,25 +769,23 @@ namespace Akka.Streams
             Mode = mode;
             Timeout = timeout;
         }
-
-        /// <inheritdoc/>
+               
         public override bool Equals(object obj)
         {
             if (ReferenceEquals(obj, null))
                 return false;
             if (ReferenceEquals(obj, this))
                 return true;
-            if (obj is StreamSubscriptionTimeoutSettings)
-                return Equals((StreamSubscriptionTimeoutSettings) obj);
+            if (obj is StreamSubscriptionTimeoutSettings settings)
+                return Equals(settings);
 
             return false;
         }
-
-        /// <inheritdoc/>
+        
         public bool Equals(StreamSubscriptionTimeoutSettings other)
             => Mode == other.Mode && Timeout.Equals(other.Timeout);
 
-        /// <inheritdoc/>
+       
         public override int GetHashCode()
         {
             unchecked
@@ -737,7 +794,6 @@ namespace Akka.Streams
             }
         }
 
-        /// <inheritdoc/>
         public override string ToString() => $"StreamSubscriptionTimeoutSettings<{Mode}, {Timeout}>";
     }
 

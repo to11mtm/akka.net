@@ -1,31 +1,22 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-  <Import Project="..\..\common.props" />
 
-  <PropertyGroup>
-    <AssemblyTitle>Akka.Persistence.TCK</AssemblyTitle>
-    <Description>Testkit for Persistence actor support for Akka.NET</Description>
-    <TargetFrameworks>$(NetStandardLibVersion)</TargetFrameworks>
-    <PackageTags>$(AkkaPackageTags);persistence;eventsource;tck</PackageTags>
-    <GenerateDocumentationFile>true</GenerateDocumentationFile>
-  </PropertyGroup>
+    <PropertyGroup>
+        <Description>Testkit for Persistence actor support for Akka.NET</Description>
+        <TargetFrameworks>$(NetStandardLibVersion);$(NetLibVersion)</TargetFrameworks>
+        <PackageTags>$(AkkaPackageTags);persistence;eventsource;tck</PackageTags>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    </PropertyGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="..\Akka.Persistence.Query\Akka.Persistence.Query.csproj" />
-    <ProjectReference Include="..\Akka.Persistence\Akka.Persistence.csproj" />
-    <ProjectReference Include="..\..\contrib\testkits\Akka.TestKit.Xunit2\Akka.TestKit.Xunit2.csproj" />
-    <ProjectReference Include="..\Akka.Streams.TestKit\Akka.Streams.TestKit.csproj" />
-  </ItemGroup>
+    <ItemGroup>
+        <ProjectReference Include="..\Akka.Persistence.Query\Akka.Persistence.Query.csproj"/>
+        <ProjectReference Include="..\Akka.Persistence\Akka.Persistence.csproj"/>
+        <ProjectReference Include="..\..\contrib\testkits\Akka.TestKit.Xunit2\Akka.TestKit.Xunit2.csproj"/>
+        <ProjectReference Include="..\Akka.Streams.TestKit\Akka.Streams.TestKit.csproj"/>
+    </ItemGroup>
 
-  <PropertyGroup Condition=" '$(TargetFramework)' == 'net452' ">
-    <DefineConstants>$(DefineConstants);SERIALIZATION</DefineConstants>
-  </PropertyGroup>
-
-  <PropertyGroup Condition=" '$(TargetFramework)' == '$(NetStandardLibVersion)' ">
-    <DefineConstants>$(DefineConstants);CORECLR</DefineConstants>
-  </PropertyGroup>
-
-  <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
-    <DefineConstants>$(DefineConstants);RELEASE</DefineConstants>
-  </PropertyGroup>
+    <ItemGroup>
+        <PackageReference Include="FluentAssertions" Version="$(FluentAssertionsVersion)"/>
+        <PackageReference Include="MathNet.Numerics" Version="5.0.0" />
+    </ItemGroup>
 
 </Project>

@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="CurrentSynchronizationContextDispatcherSpecs.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -34,11 +34,11 @@ namespace Akka.Tests.Actor.Dispatch
         public CurrentSynchronizationContextDispatcherSpecs() : base(_config) { }
 
         [Fact]
-        public void CurrentSynchronizationContextDispatcher_should_start_without_error_Fix2172()
+        public async Task CurrentSynchronizationContextDispatcher_should_start_without_error_Fix2172()
         {
             var uiActor = Sys.ActorOf(EchoActor.Props(this), "some-ui-actor");
             uiActor.Tell("ping");
-            ExpectMsg("ping");
+            await ExpectMsgAsync("ping");
         }
     }
 }

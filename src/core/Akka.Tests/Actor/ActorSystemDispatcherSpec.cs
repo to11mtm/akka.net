@@ -1,4 +1,11 @@
-﻿using System;
+﻿//-----------------------------------------------------------------------
+// <copyright file="ActorSystemDispatcherSpec.cs" company="Akka.NET Project">
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
+// </copyright>
+//-----------------------------------------------------------------------
+
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -28,7 +35,7 @@ namespace Akka.Tests.Actor
         { }
 
         [Fact]
-        public void The_ActorSystem_must_not_use_passed_in_SynchronizationContext_if_executor_is_configured_in()
+        public async Task The_ActorSystem_must_not_use_passed_in_SynchronizationContext_if_executor_is_configured_in()
         {
             var config =
                 ConfigurationFactory.ParseString("akka.actor.default-dispatcher.executor = fork-join-executor")
@@ -42,7 +49,7 @@ namespace Akka.Tests.Actor
 
                 actor.Tell("ping", probe);
 
-                probe.ExpectMsg("ping", TimeSpan.FromSeconds(1));
+                await probe.ExpectMsgAsync("ping", TimeSpan.FromSeconds(1));
             }
             finally
             {
@@ -74,7 +81,7 @@ namespace Akka.Tests.Actor
         public void The_ActorSystem_must_provide_a_good_error_on_a_dispatcher_alias_loop_in_config()
         {
             Sys.Dispatchers.Invoking(d => d.Lookup("dispatcher-loop-1"))
-                .ShouldThrow<ConfigurationException>()
+                .Should().Throw<ConfigurationException>()
                 .And.Message
                 .StartsWith("Could not find a concrete dispatcher config after following").ShouldBeTrue();
         }

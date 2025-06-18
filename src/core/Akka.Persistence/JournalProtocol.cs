@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="JournalProtocol.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -46,8 +46,7 @@ namespace Akka.Persistence
         /// Inclusive upper sequence number bound where a replay should end.
         /// </summary>
         public long ToSequenceNr { get; }
-
-        /// <inheritdoc/>
+        
         public bool Equals(DeleteMessagesSuccess other)
         {
             if (ReferenceEquals(other, null)) return false;
@@ -55,14 +54,11 @@ namespace Akka.Persistence
 
             return ToSequenceNr == other.ToSequenceNr;
         }
-
-        /// <inheritdoc/>
+        
         public override bool Equals(object obj) => Equals(obj as DeleteMessagesSuccess);
-
-        /// <inheritdoc/>
+        
         public override int GetHashCode() => ToSequenceNr.GetHashCode();
-
-        /// <inheritdoc/>
+        
         public override string ToString() => $"DeleteMessagesSuccess<toSequenceNr: {ToSequenceNr}>";
     }
 
@@ -70,7 +66,7 @@ namespace Akka.Persistence
     /// Reply message to failed <see cref="Eventsourced.DeleteMessages"/> request.
     /// </summary>
     [Serializable]
-    public sealed class DeleteMessagesFailure : IEquatable<DeleteMessagesFailure>
+    public sealed class DeleteMessagesFailure : IEquatable<DeleteMessagesFailure>, INoSerializationVerificationNeeded //serialization verification temporary disabled because of Cause serialization issues
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="DeleteMessagesFailure"/> class.
@@ -82,10 +78,7 @@ namespace Akka.Persistence
         /// </exception>
         public DeleteMessagesFailure(Exception cause, long toSequenceNr)
         {
-            if (cause == null)
-                throw new ArgumentNullException(nameof(cause), "DeleteMessagesFailure cause exception cannot be null");
-
-            Cause = cause;
+            Cause = cause ?? throw new ArgumentNullException(nameof(cause), "DeleteMessagesFailure cause exception cannot be null");
             ToSequenceNr = toSequenceNr;
         }
 
@@ -99,7 +92,7 @@ namespace Akka.Persistence
         /// </summary>
         public long ToSequenceNr { get; }
 
-        /// <inheritdoc/>
+        
         public bool Equals(DeleteMessagesFailure other)
         {
             if (ReferenceEquals(other, null)) return false;
@@ -107,11 +100,9 @@ namespace Akka.Persistence
 
             return Equals(Cause, other.Cause) && ToSequenceNr == other.ToSequenceNr;
         }
-
-        /// <inheritdoc/>
+        
         public override bool Equals(object obj) => Equals(obj as DeleteMessagesFailure);
-
-        /// <inheritdoc/>
+        
         public override int GetHashCode()
         {
             unchecked
@@ -119,8 +110,7 @@ namespace Akka.Persistence
                 return ((Cause != null ? Cause.GetHashCode() : 0) * 397) ^ ToSequenceNr.GetHashCode();
             }
         }
-
-        /// <inheritdoc/>
+        
         public override string ToString() => $"DeleteMessagesFailure<cause: {Cause}, toSequenceNr: {ToSequenceNr}>";
     }
 
@@ -134,7 +124,7 @@ namespace Akka.Persistence
         /// Initializes a new instance of the <see cref="DeleteMessagesTo"/> class.
         /// </summary>
         /// <param name="persistenceId">Requesting persistent actor id.</param>
-        /// <param name="toSequenceNr">Sequence number where replay should end (inclusive).</param>
+        /// <param name="toSequenceNr">Sequence number where replay should end (inclusive). <see cref="long.MaxValue"/> may be used to delete all persistent messages.</param>
         /// <param name="persistentActor">Requesting persistent actor.</param>
         /// <exception cref="ArgumentNullException">
         /// This exception is thrown when the specified <paramref name="persistenceId"/> is undefined.
@@ -163,8 +153,7 @@ namespace Akka.Persistence
         /// Requesting persistent actor.
         /// </summary>
         public IActorRef PersistentActor { get; }
-
-        /// <inheritdoc/>
+        
         public bool Equals(DeleteMessagesTo other)
         {
             if (ReferenceEquals(other, null)) return false;
@@ -174,11 +163,9 @@ namespace Akka.Persistence
                    ToSequenceNr == other.ToSequenceNr &&
                    Equals(PersistentActor, other.PersistentActor);
         }
-
-        /// <inheritdoc/>
+        
         public override bool Equals(object obj) => Equals(obj as DeleteMessagesTo);
-
-        /// <inheritdoc/>
+        
         public override int GetHashCode()
         {
             unchecked
@@ -189,8 +176,7 @@ namespace Akka.Persistence
                 return hashCode;
             }
         }
-
-        /// <inheritdoc/>
+        
         public override string ToString() => $"DeleteMessagesTo<pid: {PersistenceId}, seqNr: {ToSequenceNr}, persistentActor: {PersistentActor}>";
     }
 
@@ -227,22 +213,19 @@ namespace Akka.Persistence
         /// TBD
         /// </summary>
         public int ActorInstanceId { get; }
-
-        /// <inheritdoc/>
+        
         public bool Equals(WriteMessages other)
         {
             if (ReferenceEquals(other, null)) return false;
             if (ReferenceEquals(this, other)) return true;
 
-            return Equals(ActorInstanceId, other.ActorInstanceId)
+            return ActorInstanceId == other.ActorInstanceId
                    && Equals(PersistentActor, other.PersistentActor)
                    && Equals(Messages, other.Messages);
         }
-
-        /// <inheritdoc/>
+        
         public override bool Equals(object obj) => Equals(obj as WriteMessages);
-
-        /// <inheritdoc/>
+        
         public override int GetHashCode()
         {
             unchecked
@@ -253,8 +236,7 @@ namespace Akka.Persistence
                 return hashCode;
             }
         }
-
-        /// <inheritdoc/>
+        
         public override string ToString() => $"WriteMessages<actorInstanceId: {ActorInstanceId}, actor: {PersistentActor}>";
     }
 
@@ -268,7 +250,7 @@ namespace Akka.Persistence
         /// <summary>
         /// The singleton instance of <see cref="WriteMessagesSuccessful"/>.
         /// </summary>
-        public static WriteMessagesSuccessful Instance { get; } = new WriteMessagesSuccessful();
+        public static WriteMessagesSuccessful Instance { get; } = new();
 
         private WriteMessagesSuccessful() { }
     }
@@ -280,19 +262,6 @@ namespace Akka.Persistence
     [Serializable]
     public sealed class WriteMessagesFailed : IJournalResponse, IEquatable<WriteMessagesFailed>
     {
-        /// <summary>
-        /// Initializes a new instance of the <see cref="WriteMessagesFailed"/> class.
-        /// </summary>
-        /// <param name="cause">The cause of the failed <see cref="WriteMessages"/> request.</param>
-        /// <exception cref="ArgumentNullException">
-        /// This exception is thrown when the specified <paramref name="cause"/> is undefined.
-        /// </exception>
-        [Obsolete("Deprecated since Akka 1.4.11, use the overloaded one which accepts the number of failed atomic writes instead.")]
-        public WriteMessagesFailed(Exception cause)
-        {
-            Cause = cause ?? throw new ArgumentNullException(nameof(cause), "WriteMessagesFailed cause exception cannot be null");
-        }
-
         /// <summary>
         /// Initializes a new instance of the <see cref="WriteMessagesFailed"/> class.
         /// </summary>
@@ -316,8 +285,7 @@ namespace Akka.Persistence
         /// The number of atomic writes that failed.
         /// </summary>
         public int WriteCount { get; }
-
-        /// <inheritdoc/>
+        
         public bool Equals(WriteMessagesFailed other)
         {
             if (ReferenceEquals(other, null)) return false;
@@ -325,14 +293,11 @@ namespace Akka.Persistence
 
             return Equals(Cause, other.Cause);
         }
-
-        /// <inheritdoc/>
+        
         public override bool Equals(object obj) => Equals(obj as WriteMessagesFailed);
-
-        /// <inheritdoc/>
+        
         public override int GetHashCode() => Cause != null ? Cause.GetHashCode() : 0;
-
-        /// <inheritdoc/>
+        
         public override string ToString() => $"WriteMessagesFailed<cause: {Cause}>";
     }
 
@@ -363,21 +328,18 @@ namespace Akka.Persistence
         /// TBD
         /// </summary>
         public int ActorInstanceId { get; }
-
-        /// <inheritdoc/>
+        
         public bool Equals(WriteMessageSuccess other)
         {
             if (ReferenceEquals(other, null)) return false;
             if (ReferenceEquals(this, other)) return true;
 
-            return Equals(ActorInstanceId, other.ActorInstanceId)
+            return ActorInstanceId == other.ActorInstanceId
                    && Equals(Persistent, other.Persistent);
         }
-
-        /// <inheritdoc/>
+        
         public override bool Equals(object obj) => Equals(obj as WriteMessageSuccess);
-
-        /// <inheritdoc/>
+        
         public override int GetHashCode()
         {
             unchecked
@@ -385,8 +347,7 @@ namespace Akka.Persistence
                 return ((Persistent != null ? Persistent.GetHashCode() : 0) * 397) ^ ActorInstanceId;
             }
         }
-
-        /// <inheritdoc/>
+        
         public override string ToString() => $"WriteMessageSuccess<actorInstanceId: {ActorInstanceId}, message: {Persistent}>";
     }
 
@@ -409,11 +370,8 @@ namespace Akka.Persistence
         /// </exception>
         public WriteMessageRejected(IPersistentRepresentation persistent, Exception cause, int actorInstanceId)
         {
-            if (cause == null)
-                throw new ArgumentNullException(nameof(cause), "WriteMessageRejected cause exception cannot be null");
-
             Persistent = persistent;
-            Cause = cause;
+            Cause = cause ?? throw new ArgumentNullException(nameof(cause), "WriteMessageRejected cause exception cannot be null");
             ActorInstanceId = actorInstanceId;
         }
 
@@ -431,22 +389,19 @@ namespace Akka.Persistence
         /// TBD
         /// </summary>
         public int ActorInstanceId { get; }
-
-        /// <inheritdoc/>
+        
         public bool Equals(WriteMessageRejected other)
         {
             if (ReferenceEquals(other, null)) return false;
             if (ReferenceEquals(this, other)) return true;
 
-            return Equals(ActorInstanceId, other.ActorInstanceId)
+            return ActorInstanceId == other.ActorInstanceId
                    && Equals(Persistent, other.Persistent)
                    && Equals(Cause, other.Cause);
         }
-
-        /// <inheritdoc/>
+        
         public override bool Equals(object obj) => Equals(obj as WriteMessageRejected);
-
-        /// <inheritdoc/>
+        
         public override int GetHashCode()
         {
             unchecked
@@ -457,8 +412,7 @@ namespace Akka.Persistence
                 return hashCode;
             }
         }
-
-        /// <inheritdoc/>
+        
         public override string ToString() => $"WriteMessageRejected<actorInstanceId: {ActorInstanceId}, message: {Persistent}, cause: {Cause}>";
     }
 
@@ -480,11 +434,8 @@ namespace Akka.Persistence
         /// </exception>
         public WriteMessageFailure(IPersistentRepresentation persistent, Exception cause, int actorInstanceId)
         {
-            if (cause == null)
-                throw new ArgumentNullException(nameof(cause), "WriteMessageFailure cause exception cannot be null");
-
             Persistent = persistent;
-            Cause = cause;
+            Cause = cause ?? throw new ArgumentNullException(nameof(cause), "WriteMessageFailure cause exception cannot be null");
             ActorInstanceId = actorInstanceId;
         }
 
@@ -502,22 +453,20 @@ namespace Akka.Persistence
         /// TBD
         /// </summary>
         public int ActorInstanceId { get; }
-
-        /// <inheritdoc/>
+        
         public bool Equals(WriteMessageFailure other)
         {
             if (ReferenceEquals(other, null)) return false;
             if (ReferenceEquals(this, other)) return true;
 
-            return Equals(ActorInstanceId, other.ActorInstanceId)
+            return ActorInstanceId == other.ActorInstanceId
                    && Equals(Persistent, other.Persistent)
                    && Equals(Cause, other.Cause);
         }
-
-        /// <inheritdoc/>
+        
         public override bool Equals(object obj) => Equals(obj as WriteMessageFailure);
 
-        /// <inheritdoc/>
+        
         public override int GetHashCode()
         {
             unchecked
@@ -528,8 +477,7 @@ namespace Akka.Persistence
                 return hashCode;
             }
         }
-
-        /// <inheritdoc/>
+        
         public override string ToString() => $"WriteMessageFailure<actorInstanceId: {ActorInstanceId}, message: {Persistent}, cause: {Cause}>";
     }
 
@@ -559,21 +507,18 @@ namespace Akka.Persistence
         /// TBD
         /// </summary>
         public int ActorInstanceId { get; }
-
-        /// <inheritdoc/>
+        
         public bool Equals(LoopMessageSuccess other)
         {
             if (ReferenceEquals(other, null)) return false;
             if (ReferenceEquals(this, other)) return true;
 
-            return Equals(ActorInstanceId, other.ActorInstanceId)
+            return ActorInstanceId == other.ActorInstanceId
                    && Equals(Message, other.Message);
         }
-
-        /// <inheritdoc/>
+        
         public override bool Equals(object obj) => Equals(obj as LoopMessageSuccess);
 
-        /// <inheritdoc/>
         public override int GetHashCode()
         {
             unchecked
@@ -581,8 +526,7 @@ namespace Akka.Persistence
                 return ((Message != null ? Message.GetHashCode() : 0) * 397) ^ ActorInstanceId;
             }
         }
-
-        /// <inheritdoc/>
+        
         public override string ToString() => $"LoopMessageSuccess<actorInstanceId: {ActorInstanceId}, message: {Message}>";
     }
 
@@ -633,8 +577,7 @@ namespace Akka.Persistence
         /// Requesting persistent actor.
         /// </summary>
         public IActorRef PersistentActor { get; }
-
-        /// <inheritdoc/>
+        
         public bool Equals(ReplayMessages other)
         {
             if (ReferenceEquals(other, null)) return false;
@@ -642,15 +585,13 @@ namespace Akka.Persistence
 
             return Equals(PersistenceId, other.PersistenceId)
                    && Equals(PersistentActor, other.PersistentActor)
-                   && Equals(FromSequenceNr, other.FromSequenceNr)
-                   && Equals(ToSequenceNr, other.ToSequenceNr)
-                   && Equals(Max, other.Max);
+                   && FromSequenceNr == other.FromSequenceNr
+                   && ToSequenceNr == other.ToSequenceNr
+                   && Max == other.Max;
         }
-
-        /// <inheritdoc/>
+        
         public override bool Equals(object obj) => Equals(obj as ReplayMessages);
-
-        /// <inheritdoc/>
+        
         public override int GetHashCode()
         {
             unchecked
@@ -663,8 +604,7 @@ namespace Akka.Persistence
                 return hashCode;
             }
         }
-
-        /// <inheritdoc/>
+        
         public override string ToString() => $"ReplayMessages<fromSequenceNr: {FromSequenceNr}, toSequenceNr: {ToSequenceNr}, max: {Max}, persistenceId: {PersistenceId}>";
     }
 
@@ -687,8 +627,7 @@ namespace Akka.Persistence
         /// Replayed message.
         /// </summary>
         public IPersistentRepresentation Persistent { get; }
-
-        /// <inheritdoc/>
+        
         public bool Equals(ReplayedMessage other)
         {
             if (ReferenceEquals(other, null)) return false;
@@ -696,14 +635,11 @@ namespace Akka.Persistence
 
             return Equals(Persistent, other.Persistent);
         }
-
-        /// <inheritdoc/>
+        
         public override bool Equals(object obj) => Equals(obj as ReplayedMessage);
-
-        /// <inheritdoc/>
+        
         public override int GetHashCode() => Persistent != null ? Persistent.GetHashCode() : 0;
-
-        /// <inheritdoc/>
+        
         public override string ToString() => $"ReplayedMessage<message: {Persistent}>";
     }
 
@@ -730,23 +666,19 @@ namespace Akka.Persistence
         /// Highest stored sequence number.
         /// </summary>
         public long HighestSequenceNr { get; }
-
-        /// <inheritdoc/>
+        
         public bool Equals(RecoverySuccess other)
         {
             if (ReferenceEquals(other, null)) return false;
             if (ReferenceEquals(this, other)) return true;
 
-            return Equals(HighestSequenceNr, other.HighestSequenceNr);
+            return HighestSequenceNr == other.HighestSequenceNr;
         }
-
-        /// <inheritdoc/>
+        
         public override bool Equals(object obj) => Equals(obj as RecoverySuccess);
-
-        /// <inheritdoc/>
+        
         public override int GetHashCode() => HighestSequenceNr.GetHashCode();
-
-        /// <inheritdoc/>
+        
         public override string ToString() => $"RecoverySuccess<highestSequenceNr: {HighestSequenceNr}>";
     }
 
@@ -764,20 +696,14 @@ namespace Akka.Persistence
         /// <exception cref="ArgumentNullException">
         /// This exception is thrown when the specified <paramref name="cause"/> is undefined.
         /// </exception>
-        public ReplayMessagesFailure(Exception cause)
-        {
-            if (cause == null)
-                throw new ArgumentNullException(nameof(cause), "ReplayMessagesFailure cause exception cannot be null");
-
-            Cause = cause;
-        }
+        public ReplayMessagesFailure(Exception cause) =>
+            Cause = cause ?? throw new ArgumentNullException(nameof(cause), "ReplayMessagesFailure cause exception cannot be null");
 
         /// <summary>
         /// The cause of the failure
         /// </summary>
         public Exception Cause { get; }
 
-        /// <inheritdoc/>
         public bool Equals(ReplayMessagesFailure other)
         {
             if (ReferenceEquals(other, null)) return false;
@@ -786,13 +712,10 @@ namespace Akka.Persistence
             return Equals(Cause, other.Cause);
         }
 
-        /// <inheritdoc/>
         public override bool Equals(object obj) => Equals(obj as ReplayMessagesFailure);
 
-        /// <inheritdoc/>
         public override int GetHashCode() => Cause.GetHashCode();
 
-        /// <inheritdoc/>
         public override string ToString() => $"ReplayMessagesFailure<cause: {Cause}>";
     }
 }

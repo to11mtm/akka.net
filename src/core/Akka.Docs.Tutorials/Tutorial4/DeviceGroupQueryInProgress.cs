@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="DeviceGroupQueryInProgress.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -15,7 +15,16 @@ namespace Tutorials.Tutorial4
 {
     public static class DeviceGroupQueryInProgress
     {
+        
+        
+
         #region query-outline
+        public sealed class CollectionTimeout
+        {
+            public static CollectionTimeout Instance { get; } = new();
+            private CollectionTimeout() { }
+        }    
+            
         public class DeviceGroupQuery : UntypedActor
         {
             private ICancelable queryTimeoutTimer;
@@ -66,9 +75,7 @@ namespace Tutorials.Tutorial4
         #region query-added
         public class DeviceGroup : UntypedActor
         {
-            private Dictionary<string, IActorRef> deviceIdToActor = new Dictionary<string, IActorRef>();
-            private Dictionary<IActorRef, string> actorToDeviceId = new Dictionary<IActorRef, string>();
-            private long nextCollectionId = 0L;
+            private Dictionary<IActorRef, string> actorToDeviceId = new();
 
             public DeviceGroup(string groupId)
             {

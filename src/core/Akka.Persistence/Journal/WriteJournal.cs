@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="WriteJournal.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -14,7 +14,7 @@ using Akka.Annotations;
 namespace Akka.Persistence.Journal
 {
     /// <summary>
-    /// TBD
+    /// Base class for the journal persistence
     /// </summary>
     public abstract class WriteJournalBase : ActorBase
     {
@@ -30,20 +30,31 @@ namespace Akka.Persistence.Journal
         }
 
         /// <summary>
-        /// TBD
+        /// Creates a sequence of write actions to be executed based on the given messages.
+        /// Applies any registered EventAdapters to the payloads.
         /// </summary>
-        /// <param name="resequenceables">TBD</param>
-        /// <returns>TBD</returns>
+        /// <param name="resequenceables">list of messages to write</param>
+        /// <returns></returns>
         protected IEnumerable<AtomicWrite> PreparePersistentBatch(IEnumerable<IPersistentEnvelope> resequenceables)
         {
-            return resequenceables
-               .OfType<AtomicWrite>()
-               .Select(aw => new AtomicWrite(((IEnumerable<IPersistentRepresentation>)aw.Payload)
-                    .Select(p => AdaptToJournal(p.Update(p.SequenceNr, p.PersistenceId, p.IsDeleted, ActorRefs.NoSender, p.WriterGuid))).ToImmutableList()));
+            foreach (var resequenceable in resequenceables)
+            {
+                if (resequenceable is not AtomicWrite) continue;
+                
+                var result = ImmutableList.CreateBuilder<IPersistentRepresentation>();
+
+                foreach (var representation in (IEnumerable<IPersistentRepresentation>)resequenceable.Payload)
+                {
+                    var adapted = AdaptToJournal(representation.Update(representation.SequenceNr, representation.PersistenceId, representation.IsDeleted,
+                        ActorRefs.NoSender, representation.WriterGuid));
+                    result.Add(adapted);
+                }
+                yield return new AtomicWrite(result.ToImmutable());
+            }
         }
 
         /// <summary>
-        /// INTERNAL API
+        /// Apply registered eventadapter to the data payload
         /// </summary>
         [InternalApi]
         protected IEnumerable<IPersistentRepresentation> AdaptFromJournal(IPersistentRepresentation representation)
@@ -55,7 +66,7 @@ namespace Akka.Persistence.Journal
         }
 
         /// <summary>
-        /// INTERNAL API
+        /// Apply any registered eventadapter to the data payload
         /// </summary>
         protected IPersistentRepresentation AdaptToJournal(IPersistentRepresentation representation)
         {

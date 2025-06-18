@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="GraphOpsIntegrationSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -9,6 +9,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Akka.Streams.Dsl;
 using Akka.Streams.TestKit;
@@ -106,7 +107,7 @@ namespace Akka.Streams.Tests.Dsl
             })).Run(Materializer);
 
             task.Wait(TimeSpan.FromSeconds(3)).Should().BeTrue();
-            task.Result.ShouldAllBeEquivalentTo(Enumerable.Range(1, 6));
+            task.Result.Should().BeEquivalentTo(Enumerable.Range(1, 6));
         }
 
         [Fact]
@@ -130,7 +131,7 @@ namespace Akka.Streams.Tests.Dsl
             })).Run(Materializer);
 
             task.Wait(TimeSpan.FromSeconds(3)).Should().BeTrue();
-            task.Result.ShouldAllBeEquivalentTo(elements);
+            task.Result.Should().BeEquivalentTo(elements);
         }
 
         [Fact]
@@ -186,9 +187,9 @@ namespace Akka.Streams.Tests.Dsl
             var task = Task.WhenAll(t.Item1, t.Item2, t.Item3);
             task.Wait(TimeSpan.FromSeconds(3)).Should().BeTrue();
 
-            task.Result[0].ShouldAllBeEquivalentTo(new[] {5, 7});
-            task.Result[1].ShouldAllBeEquivalentTo(new[] { 3, 5, 7, 7 });
-            task.Result[2].ShouldAllBeEquivalentTo(new[] { 3, 5, 7 });
+            task.Result[0].Should().BeEquivalentTo(new[] {5, 7});
+            task.Result[1].Should().BeEquivalentTo(new[] { 3, 5, 7, 7 });
+            task.Result[2].Should().BeEquivalentTo(new[] { 3, 5, 7 });
         }
 
         [Fact]
@@ -209,7 +210,7 @@ namespace Akka.Streams.Tests.Dsl
             })).Run(Materializer);
 
             task.Wait(TimeSpan.FromSeconds(3)).Should().BeTrue();
-            task.Result.ShouldAllBeEquivalentTo(new[] {2, 4, 6, 5, 7, 9});
+            task.Result.Should().BeEquivalentTo(new[] {2, 4, 6, 5, 7, 9});
         }
 
         [Fact]
@@ -227,7 +228,7 @@ namespace Akka.Streams.Tests.Dsl
 
             var sub = s.ExpectSubscription();
             sub.Request(10);
-            s.ExpectNext(1*2, 2*2, 3*2).ExpectComplete();
+            s.ExpectNext( 1 *2, 2*2, 3*2).ExpectComplete();
         }
 
         [Fact]
@@ -264,7 +265,7 @@ namespace Akka.Streams.Tests.Dsl
                     })).Run(Materializer).Item4;
 
             task.Wait(TimeSpan.FromSeconds(3)).Should().BeTrue();
-            task.Result.ShouldAllBeEquivalentTo(new[] {4, 5, 6, 13, 14, 15});
+            task.Result.Should().BeEquivalentTo(new[] {4, 5, 6, 13, 14, 15});
         }
     }
 }

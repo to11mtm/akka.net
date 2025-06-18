@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="Deadline.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -56,7 +56,7 @@ namespace Akka.Remote
 
         #region Overrides
 
-        /// <inheritdoc/>
+       
         public override bool Equals(object obj)
         {
             var deadlineObj = ((Deadline) obj);
@@ -68,7 +68,7 @@ namespace Akka.Remote
             return When.Equals(deadlineObj.When);
         }
 
-        /// <inheritdoc/>
+      
         public override int GetHashCode()
         {
             return When.GetHashCode();

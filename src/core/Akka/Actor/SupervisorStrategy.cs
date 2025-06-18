@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="SupervisorStrategy.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -142,9 +142,8 @@ namespace Akka.Actor
         {
             if (LoggingEnabled)
             {
-                var actorInitializationException = cause as ActorInitializationException;
                 string message;
-                if (actorInitializationException != null && actorInitializationException.InnerException != null)
+                if (cause is ActorInitializationException actorInitializationException && actorInitializationException.InnerException != null)
                     message = actorInitializationException.InnerException.Message;
                 else
                     message = cause.Message;
@@ -152,7 +151,7 @@ namespace Akka.Actor
                 switch (directive)
                 {
                     case Directive.Resume:
-                        Publish(context, new Warning(child.Path.ToString(), GetType(), message));
+                        Publish(context, new Warning(cause, child.Path.ToString(), GetType(), message));
                         break;
                     case Directive.Escalate:
                         //Don't log here
@@ -171,7 +170,7 @@ namespace Akka.Actor
         /// </summary>
         protected bool LoggingEnabled { get; set; }
 
-        private void Publish(IActorContext context, LogEvent logEvent)
+        private static void Publish(IActorContext context, LogEvent logEvent)
         {
             try
             {
@@ -194,7 +193,7 @@ namespace Akka.Actor
         ///     This strategy resembles Erlang in that failing children are always
         ///     terminated (one-for-one).
         /// </summary>
-        public static readonly OneForOneStrategy StoppingStrategy = new OneForOneStrategy(ex => Directive.Stop);
+        public static readonly OneForOneStrategy StoppingStrategy = new(_ => Directive.Stop);
 
         /// <summary>
         /// This method is called after the child has been removed from the set of children.
@@ -449,7 +448,6 @@ namespace Akka.Actor
 
         #region Equals
 
-        /// <inheritdoc/>
         public bool Equals(OneForOneStrategy other)
         {
             if (ReferenceEquals(other, null)) return false;
@@ -460,13 +458,13 @@ namespace Akka.Actor
                    Decider.Equals(other.Decider);
         }
 
-        /// <inheritdoc/>
+        
         public override bool Equals(object obj)
         {
             return Equals(obj as OneForOneStrategy);
         }
 
-        /// <inheritdoc/>
+        
         public override int GetHashCode()
         {
             unchecked
@@ -617,15 +615,7 @@ namespace Akka.Actor
             return Decider.Decide(exception);
         }
         
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <param name="context">TBD</param>
-        /// <param name="restart">TBD</param>
-        /// <param name="child">TBD</param>
-        /// <param name="cause">TBD</param>
-        /// <param name="stats">TBD</param>
-        /// <param name="children">TBD</param>
+        /// <inheritdoc/>
         public override void ProcessFailure(IActorContext context, bool restart, IActorRef child, Exception cause, ChildRestartStats stats, IReadOnlyCollection<ChildRestartStats> children)
         {
             if (children.Count > 0)
@@ -647,12 +637,7 @@ namespace Akka.Actor
             }
         }
 
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <param name="actorContext">TBD</param>
-        /// <param name="child">TBD</param>
-        /// <param name="children">TBD</param>
+        /// <inheritdoc/>
         public override void HandleChildTerminated(IActorContext actorContext, IActorRef child, IEnumerable<IInternalActorRef> children)
         {
             //Intentionally left blank
@@ -715,7 +700,6 @@ namespace Akka.Actor
 
         #region Equals
 
-        /// <inheritdoc/>
         public bool Equals(AllForOneStrategy other)
         {
             if (ReferenceEquals(other, null)) return false;
@@ -726,13 +710,11 @@ namespace Akka.Actor
                    Decider.Equals(other.Decider);
         }
 
-        /// <inheritdoc/>
         public override bool Equals(object obj)
         {
             return Equals(obj as AllForOneStrategy);
         }
 
-        /// <inheritdoc/>
         public override int GetHashCode()
         {
             unchecked
@@ -750,6 +732,7 @@ namespace Akka.Actor
     /// <summary>
     /// Collection of failures, used to keep track of how many times a given actor has failed.
     /// </summary>
+    [Obsolete("Use List of Akka.Actor.Status.Failure")]
     public class Failures
     {
         /// <summary>
@@ -769,6 +752,7 @@ namespace Akka.Actor
     /// <summary>
     ///     Represents a single failure.
     /// </summary>
+    [Obsolete("Use Akka.Actor.Status.Failure")]
     public class Failure
     {
         /// <summary>
@@ -975,7 +959,6 @@ namespace Akka.Actor
             return DefaultDirective;
         }
 
-        /// <inheritdoc/>
         public bool Equals(DeployableDecider other)
         {
             if (ReferenceEquals(other, null)) return false;
@@ -985,13 +968,11 @@ namespace Akka.Actor
                    Pairs.SequenceEqual(other.Pairs);
         }
 
-        /// <inheritdoc/>
         public override bool Equals(object obj)
         {
             return Equals(obj as DeployableDecider);
         }
 
-        /// <inheritdoc/>
         public override int GetHashCode()
         {
             unchecked
@@ -1004,14 +985,10 @@ namespace Akka.Actor
     }
 
     /// <summary>
-    /// TBD
+    /// Base configurator class used for configuring the guardian-supervisor-strategy
     /// </summary>
     public abstract class SupervisorStrategyConfigurator
     {
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <returns>TBD</returns>
         public abstract SupervisorStrategy Create();
 
         /// <summary>
@@ -1043,30 +1020,20 @@ namespace Akka.Actor
         }
     }
 
-    /// <summary>
-    /// TBD
-    /// </summary>
+  
     public class DefaultSupervisorStrategy : SupervisorStrategyConfigurator
     {
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <returns>TBD</returns>
+      
         public override SupervisorStrategy Create()
         {
             return SupervisorStrategy.DefaultStrategy;
         }
     }
 
-    /// <summary>
-    /// TBD
-    /// </summary>
+   
     public class StoppingSupervisorStrategy : SupervisorStrategyConfigurator
     {
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <returns>TBD</returns>
+       
         public override SupervisorStrategy Create()
         {
             return SupervisorStrategy.StoppingStrategy;

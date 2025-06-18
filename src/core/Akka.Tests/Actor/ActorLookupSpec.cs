@@ -1,16 +1,18 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ActorLookupSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Actor.Internal;
 using Akka.TestKit;
 using Akka.Util.Internal;
 using FluentAssertions;
+using FluentAssertions.Extensions;
 using Xunit;
 
 namespace Akka.Tests.Actor
@@ -133,16 +135,16 @@ namespace Akka.Tests.Actor
         }
 
         [Fact]
-        public void ActorSystem_must_take_actor_incarnation_into_account_when_comparing_actor_references()
+        public async Task ActorSystem_must_take_actor_incarnation_into_account_when_comparing_actor_references()
         {
             var name = "abcdefg";
             var a1 = Sys.ActorOf(P, name);
             Watch(a1);
             a1.Tell(PoisonPill.Instance);
-            ExpectTerminated(a1);
+            await ExpectTerminatedAsync(a1);
 
             // let it be completely removed from the user guardian
-            ExpectNoMsg(1.Seconds());
+            await ExpectNoMsgAsync(1.Seconds());
 
             // not equal, because it's terminated
             Provider.ResolveActorRef(a1.Path.ToString()).Should().NotBe(a1);
@@ -155,23 +157,27 @@ namespace Akka.Tests.Actor
 
             Watch(a2);
             a2.Tell(PoisonPill.Instance);
-            ExpectTerminated(a2);
+            await ExpectTerminatedAsync(a2);
         }
 
         [Fact]
-        public void ActorSystem_must_find_temporary_actors()
+        public async Task ActorSystem_must_find_temporary_actors()
         {
             var f = c1.Ask(new GetSender(TestActor));
             var a = ExpectMsg<IInternalActorRef>();
             a.Path.Elements.Head().Should().Be("temp");
             Provider.ResolveActorRef(a.Path).Should().Be(a);
             Provider.ResolveActorRef(a.Path.ToString()).Should().Be(a);
-            Provider.ResolveActorRef(a.Path.ToString() + "/hello").AsInstanceOf<IInternalActorRef>().IsTerminated.Should().Be(true);
+            
+            // should already be dead
+            var shouldBeDead = Provider.ResolveActorRef(a.Path + "/hello");
+            await WatchAsync(shouldBeDead);
+            await ExpectTerminatedAsync(shouldBeDead);
+            
             f.IsCompleted.Should().Be(false);
-            a.IsTerminated.Should().Be(false);
             a.Tell(42);
-            AwaitAssert(() => f.IsCompleted.Should().Be(true));
-            AwaitAssert(() => f.Result.Should().Be(42));
+            await AwaitAssertAsync(() => f.IsCompleted.Should().Be(true));
+            await AwaitAssertAsync(() => f.Result.Should().Be(42));
         }
 
         /*

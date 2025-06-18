@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="Helios.Concurrency.DedicatedThreadPool.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -17,6 +17,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Akka.Dispatch;
 
 namespace Helios.Concurrency
 {
@@ -78,12 +79,12 @@ namespace Helios.Concurrency
         public TimeSpan? DeadlockTimeout { get; private set; }
 
         /// <summary>
-        /// TBD
+        /// The name of this thread pool, used to identify the threads.
         /// </summary>
         public string Name { get; private set; }
 
         /// <summary>
-        /// TBD
+        /// The exception handler to use when unhandled exceptions occur in the threads.
         /// </summary>
         public Action<Exception> ExceptionHandler { get; private set; }
 
@@ -107,23 +108,23 @@ namespace Helios.Concurrency
         /// </summary>
         private volatile int _parallelWorkers = 0;
 
-        private readonly LinkedList<Task> _tasks = new LinkedList<Task>();
+        private readonly LinkedList<Task> _tasks = new();
 
         private readonly DedicatedThreadPool _pool;
 
         /// <summary>
-        /// TBD
+        /// Creates a new TaskScheduler that schedules tasks onto the specified thread pool.
         /// </summary>
-        /// <param name="pool">TBD</param>
+        /// <param name="pool">The dedicated thread pool to use for executing tasks.</param>
         public DedicatedThreadPoolTaskScheduler(DedicatedThreadPool pool)
         {
             _pool = pool;
         }
 
         /// <summary>
-        /// TBD
+        /// Queues a task to the scheduler for execution on the dedicated thread pool.
         /// </summary>
-        /// <param name="task">TBD</param>
+        /// <param name="task">The task to be queued.</param>
         protected override void QueueTask(Task task)
         {
             lock (_tasks)
@@ -135,10 +136,11 @@ namespace Helios.Concurrency
         }
 
         /// <summary>
-        /// TBD
+        /// Attempts to execute a task on the current thread if possible.
         /// </summary>
-        /// <param name="task">TBD</param>
-        /// <param name="taskWasPreviouslyQueued">TBD</param>
+        /// <param name="task">The task to try executing.</param>
+        /// <param name="taskWasPreviouslyQueued">Whether the task was previously queued to the scheduler.</param>
+        /// <returns>True if the task was executed; otherwise, false.</returns>
         protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued)
         {
             //current thread isn't running any tasks, can't execute inline
@@ -154,10 +156,10 @@ namespace Helios.Concurrency
         }
 
         /// <summary>
-        /// TBD
+        /// Attempts to remove a previously scheduled task from the scheduler.
         /// </summary>
-        /// <param name="task">TBD</param>
-        /// <returns>TBD</returns>
+        /// <param name="task">The task to remove.</param>
+        /// <returns>True if the task was successfully removed; otherwise, false.</returns>
         protected override bool TryDequeue(Task task)
         {
             lock (_tasks) return _tasks.Remove(task);
@@ -173,12 +175,12 @@ namespace Helios.Concurrency
         }
 
         /// <summary>
-        /// TBD
+        /// Gets an enumerable of the tasks currently scheduled to the scheduler.
         /// </summary>
         /// <exception cref="NotSupportedException">
         /// This exception is thrown if can't ensure a thread-safe return of the list of tasks.
         /// </exception>
-        /// <returns>TBD</returns>
+        /// <returns>An enumerable of the tasks currently scheduled.</returns>
         protected override IEnumerable<Task> GetScheduledTasks()
         {
             var lockTaken = false;
@@ -225,9 +227,16 @@ namespace Helios.Concurrency
             }
         }
 
-        private void RequestWorker()
+        private sealed class RequestWorkerTask : IRunnable
         {
-            _pool.QueueUserWorkItem(() =>
+            private readonly DedicatedThreadPoolTaskScheduler _scheduler;
+
+            public RequestWorkerTask(DedicatedThreadPoolTaskScheduler scheduler)
+            {
+                _scheduler = scheduler;
+            }
+
+            public void Run()
             {
                 // this thread is now available for inlining
                 _currentThreadIsRunningTasks = true;
@@ -237,31 +246,39 @@ namespace Helios.Concurrency
                     while (true)
                     {
                         Task item;
-                        lock (_tasks)
+                        lock (_scheduler._tasks)
                         {
                             // done processing
-                            if (_tasks.Count == 0)
+                            if (_scheduler._tasks.Count == 0)
                             {
-                                ReleaseWorker();
+                                _scheduler.ReleaseWorker();
                                 break;
                             }
 
                             // Get the next item from the queue
-                            item = _tasks.First.Value;
-                            _tasks.RemoveFirst();
+                            item = _scheduler._tasks.First.Value;
+                            _scheduler._tasks.RemoveFirst();
                         }
 
                         // Execute the task we pulled out of the queue
-                        TryExecuteTask(item);
+                        _scheduler.TryExecuteTask(item);
                     }
                 }
                 // We're done processing items on the current thread
                 finally { _currentThreadIsRunningTasks = false; }
-            });
+            }
+
+            public void Execute()
+            {
+                Run();
+            }
+        }
+
+        private void RequestWorker()
+        {
+            _pool.QueueUserWorkItem(new RequestWorkerTask(this));
         }
     }
-
-
 
     /// <summary>
     /// An instanced, dedicated thread pool.
@@ -269,9 +286,9 @@ namespace Helios.Concurrency
     internal sealed class DedicatedThreadPool : IDisposable
     {
         /// <summary>
-        /// TBD
+        /// Creates a new dedicated thread pool with the specified settings.
         /// </summary>
-        /// <param name="settings">TBD</param>
+        /// <param name="settings">The settings that configure this thread pool instance.</param>
         public DedicatedThreadPool(DedicatedThreadPoolSettings settings)
         {
             _workQueue = new ThreadPoolWorkQueue();
@@ -285,7 +302,7 @@ namespace Helios.Concurrency
         }
 
         /// <summary>
-        /// TBD
+        /// Gets the settings used to configure this dedicated thread pool.
         /// </summary>
         public DedicatedThreadPoolSettings Settings { get; private set; }
 
@@ -293,13 +310,13 @@ namespace Helios.Concurrency
         private readonly PoolWorker[] _workers;
 
         /// <summary>
-        /// TBD
+        /// Queues a work item to this thread pool for execution.
         /// </summary>
         /// <exception cref="ArgumentNullException">
         /// This exception is thrown if the given <paramref name="work"/> item is undefined.
         /// </exception>
-        /// <returns>TBD</returns>
-        public bool QueueUserWorkItem(Action work)
+        /// <returns>True if the work was successfully queued; otherwise, false.</returns>
+        public bool QueueUserWorkItem<T>(T work) where T:IRunnable
         {
             if (work == null)
                 throw new ArgumentNullException(nameof(work), "Work item cannot be null.");
@@ -308,7 +325,7 @@ namespace Helios.Concurrency
         }
 
         /// <summary>
-        /// TBD
+        /// Signals the thread pool to stop accepting new work and shut down after all current work is processed.
         /// </summary>
         public void Dispose()
         {
@@ -316,7 +333,7 @@ namespace Helios.Concurrency
         }
 
         /// <summary>
-        /// TBD
+        /// Waits for all threads in the pool to exit, with no timeout.
         /// </summary>
         public void WaitForThreadsExit()
         {
@@ -324,9 +341,9 @@ namespace Helios.Concurrency
         }
 
         /// <summary>
-        /// TBD
+        /// Waits for all threads in the pool to exit, with the specified timeout.
         /// </summary>
-        /// <param name="timeout">TBD</param>
+        /// <param name="timeout">The maximum time to wait for all threads to exit.</param>
         public void WaitForThreadsExit(TimeSpan timeout)
         {
             Task.WaitAll(_workers.Select(worker => worker.ThreadExit).ToArray(), timeout);
@@ -369,7 +386,7 @@ namespace Helios.Concurrency
                     {
                         try
                         {
-                            action();
+                            action.Run();
                         }
                         catch (Exception ex)
                         {
@@ -393,8 +410,8 @@ namespace Helios.Concurrency
             private static readonly int ProcessorCount = Environment.ProcessorCount;
             private const int CompletedState = 1;
 
-            private readonly ConcurrentQueue<Action> _queue = new ConcurrentQueue<Action>();
-            private readonly UnfairSemaphore _semaphore = new UnfairSemaphore();
+            private readonly ConcurrentQueue<IRunnable> _queue = new();
+            private readonly UnfairSemaphore _semaphore = new();
             private int _outstandingRequests;
             private int _isAddingCompleted;
 
@@ -403,7 +420,7 @@ namespace Helios.Concurrency
                 get { return Volatile.Read(ref _isAddingCompleted) == CompletedState; }
             }
 
-            public bool TryAdd(Action work)
+            public bool TryAdd<T>(T work) where T:IRunnable
             {
                 // If TryAdd returns true, it's guaranteed the work item will be executed.
                 // If it returns false, it's also guaranteed the work item won't be executed.
@@ -417,12 +434,11 @@ namespace Helios.Concurrency
                 return true;
             }
 
-            public IEnumerable<Action> GetConsumingEnumerable()
+            public IEnumerable<IRunnable> GetConsumingEnumerable()
             {
                 while (true)
                 {
-                    Action work;
-                    if (_queue.TryDequeue(out work))
+                    if (_queue.TryDequeue(out var work))
                     {
                         yield return work;
                     }

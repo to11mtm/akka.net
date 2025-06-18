@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="RouteeCreationSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -12,6 +12,9 @@ using Akka.Routing;
 using Akka.TestKit;
 using Xunit;
 using FluentAssertions;
+using FluentAssertions.Extensions;
+using System.Threading.Tasks;
+using System.Linq;
 
 namespace Akka.Tests.Routing
 {
@@ -34,7 +37,7 @@ namespace Akka.Tests.Routing
                 _testActor = testActor;
                 Context.Parent.Tell("one");
 
-                Receive<string>(s => s == "one", c =>
+                Receive<string>(s => s == "one", _ =>
                 {
                     _testActor.Forward("two");
                 });
@@ -42,23 +45,23 @@ namespace Akka.Tests.Routing
         }
 
         [Fact]
-        public void Creating_routees_must_result_in_visible_routees()
+        public async Task Creating_routees_must_result_in_visible_routees()
         {
             int n = 100;
             Sys.ActorOf(new RoundRobinPool(n).Props(Props.Create(() => new RouteeActor(TestActor))));
 
             for (int i = 1; i <= n; i++)
             {
-                ExpectMsg<ActorIdentity>().Subject.Should().NotBeNull();
+                (await ExpectMsgAsync<ActorIdentity>()).Subject.Should().NotBeNull();
             }
         }
 
         [Fact]
-        public void Creating_routees_must_allow_sending_to_context_parent()
+        public async Task Creating_routees_must_allow_sending_to_context_parent()
         {
             int n = 100;
             Sys.ActorOf(new RoundRobinPool(n).Props(Props.Create(() => new ForwardActor(TestActor))));
-            var gotIt = ReceiveWhile<string>(msg =>
+            var gotIt = await ReceiveWhileAsync(msg =>
             {
                 if (msg.Equals("two"))
                 {
@@ -66,9 +69,9 @@ namespace Akka.Tests.Routing
                 }
 
                 return null;
-            }, msgs: n);
+            }, msgs: n).ToListAsync();
 
-            ExpectNoMsg(100.Milliseconds());
+            await ExpectNoMsgAsync(100.Milliseconds());
 
             gotIt.Count.Should().Be(n, $"Got only {gotIt.Count} from [{string.Join(", ", gotIt)}]");
         }

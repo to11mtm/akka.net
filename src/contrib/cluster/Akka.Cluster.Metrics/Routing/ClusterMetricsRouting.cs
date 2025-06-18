@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ClusterMetricsRouting.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -18,16 +18,20 @@ using Akka.Dispatch;
 using Akka.Routing;
 using Akka.Util;
 using Akka.Util.Extensions;
-using Akka.Configuration;
 
 namespace Akka.Cluster.Metrics
 {
+    public interface IClusterMetricsRoutingLogic
+    {
+        void MetricsChanged(ClusterMetricsChanged @event);
+    }
+    
     /// <summary>
     /// Load balancing of messages to cluster nodes based on cluster metric data.
     ///
     /// It uses random selection of routees based on probabilities derived from the remaining capacity of corresponding node.
     /// </summary>
-    public sealed class AdaptiveLoadBalancingRoutingLogic : RoutingLogic
+    public sealed class AdaptiveLoadBalancingRoutingLogic : RoutingLogic, IClusterMetricsRoutingLogic
     {
         private readonly ActorSystem _system;
         private readonly IMetricsSelector _metricsSelector;
@@ -176,7 +180,7 @@ namespace Akka.Cluster.Metrics
         /// <inheritdoc />
         public override Props RoutingLogicController(RoutingLogic routingLogic)
         {
-            return Actor.Props.Create(() => new AdaptiveLoadBalancingMetricsListener(routingLogic as AdaptiveLoadBalancingRoutingLogic));
+            return Actor.Props.Create(() => new AdaptiveLoadBalancingMetricsListener((IClusterMetricsRoutingLogic)routingLogic));
         }
         
         /// <inheritdoc />
@@ -223,7 +227,7 @@ namespace Akka.Cluster.Metrics
             if (!SupervisorStrategy.Equals(DefaultSupervisorStrategy))
                 return this;
 
-            if (routerConfig is FromConfig || routerConfig is NoRouter)
+            if (routerConfig is FromConfig or NoRouter)
                 return this; // NoRouter is the default, hence â€œneutralâ€
 
             if (routerConfig is AdaptiveLoadBalancingPool adaptiveLoadBalancingPool)
@@ -289,7 +293,6 @@ namespace Akka.Cluster.Metrics
     /// </summary>
     public sealed class AdaptiveLoadBalancingGroup : Group
     {
-        private readonly IEnumerable<string> _paths;
         private readonly IMetricsSelector _metricsSelector;
 
         /// <summary>
@@ -309,7 +312,6 @@ namespace Akka.Cluster.Metrics
         public AdaptiveLoadBalancingGroup(IMetricsSelector metricsSelector = null, IEnumerable<string> paths = null, string routerDispatcher = null) 
             : base(paths, routerDispatcher ?? Dispatchers.DefaultDispatcherId)
         {
-            _paths = paths;
             _metricsSelector = metricsSelector ?? MixMetricsSelector.Instance;
         }
 
@@ -330,7 +332,7 @@ namespace Akka.Cluster.Metrics
         /// <inheritdoc />
         public override Props RoutingLogicController(RoutingLogic routingLogic)
         {
-            return Actor.Props.Create(() => new AdaptiveLoadBalancingMetricsListener(routingLogic as AdaptiveLoadBalancingRoutingLogic));
+            return Actor.Props.Create(() => new AdaptiveLoadBalancingMetricsListener((IClusterMetricsRoutingLogic)routingLogic));
         }
 
         /// <inheritdoc />
@@ -338,21 +340,21 @@ namespace Akka.Cluster.Metrics
         {
             return new AdaptiveLoadBalancingGroupSurrogate()
             {
-                Paths = _paths,
+                Paths = InternalPaths,
                 MetricsSelector = _metricsSelector,
                 RouterDispatcher = RouterDispatcher
             };
         }
 
         /// <inheritdoc />
-        public override IEnumerable<string> GetPaths(ActorSystem system) => _paths;
+        public override IEnumerable<string> GetPaths(ActorSystem system) => InternalPaths;
 
         /// <summary>
         /// Setting the dispatcher to be used for the router head actor, which handles router management messages
         /// </summary>
         public AdaptiveLoadBalancingGroup WithDispatcher(string dispatcherId)
         {
-            return new AdaptiveLoadBalancingGroup(_metricsSelector, _paths, dispatcherId);
+            return new AdaptiveLoadBalancingGroup(_metricsSelector, InternalPaths, dispatcherId);
         }
         
         /// <summary>
@@ -394,10 +396,10 @@ namespace Akka.Cluster.Metrics
     [InternalApi]
     public class AdaptiveLoadBalancingMetricsListener : ActorBase
     {
-        private readonly AdaptiveLoadBalancingRoutingLogic _routingLogic;
+        private readonly IClusterMetricsRoutingLogic _routingLogic;
         private readonly ClusterMetrics _extension = ClusterMetrics.Get(Context.System);
 
-        public AdaptiveLoadBalancingMetricsListener(AdaptiveLoadBalancingRoutingLogic routingLogic)
+        public AdaptiveLoadBalancingMetricsListener(IClusterMetricsRoutingLogic routingLogic)
         {
             _routingLogic = routingLogic;
         }

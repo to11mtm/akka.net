@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ClusterClientSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -17,10 +17,13 @@ using Akka.Cluster.Tools.Client;
 using Akka.Cluster.Tools.PublishSubscribe;
 using Akka.Cluster.Tools.PublishSubscribe.Internal;
 using Akka.Configuration;
+using Akka.Event;
+using Akka.MultiNode.TestAdapter;
 using Akka.Remote.TestKit;
 using Akka.Remote.Transport;
 using Akka.Util.Internal;
 using FluentAssertions;
+using FluentAssertions.Extensions;
 
 namespace Akka.Cluster.Tools.Tests.MultiNode.Client
 {
@@ -80,7 +83,7 @@ namespace Akka.Cluster.Tools.Tests.MultiNode.Client
         {
             public TestService(IActorRef testActorRef)
             {
-                Receive<string>(cmd => cmd.Equals("shutdown"), msg =>
+                Receive<string>(cmd => cmd.Equals("shutdown"), _ =>
                 {
                     Context.System.Terminate();
                 });
@@ -106,7 +109,7 @@ namespace Akka.Cluster.Tools.Tests.MultiNode.Client
             #region TestClientListener messages
             public sealed class GetLatestContactPoints
             {
-                public static readonly GetLatestContactPoints Instance = new GetLatestContactPoints();
+                public static readonly GetLatestContactPoints Instance = new();
                 private GetLatestContactPoints() { }
             }
 
@@ -165,7 +168,7 @@ namespace Akka.Cluster.Tools.Tests.MultiNode.Client
             #region TestReceptionistListener messages
             public sealed class GetLatestClusterClients
             {
-                public static readonly GetLatestClusterClients Instance = new GetLatestClusterClients();
+                public static readonly GetLatestClusterClients Instance = new();
                 private GetLatestClusterClients() { }
             }
 

@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ActorSubscriber.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -91,7 +91,7 @@ namespace Akka.Streams.Actors
         /// <summary>
         /// TBD
         /// </summary>
-        public static readonly OnComplete Instance = new OnComplete();
+        public static readonly OnComplete Instance = new();
         private OnComplete() { }
     }
 
@@ -161,9 +161,8 @@ namespace Akka.Streams.Actors
                     Request(RequestStrategy.RequestDemand(RemainingRequested));
                 }
             }
-            else if (message is OnSubscribe)
+            else if (message is OnSubscribe onSubscribe)
             {
-                var onSubscribe = (OnSubscribe) message;
                 if (_subscription == null)
                 {
                     _subscription = onSubscribe.Subscription;
@@ -182,7 +181,7 @@ namespace Akka.Streams.Actors
                     onSubscribe.Subscription.Cancel();
                 }
             }
-            else if (message is OnComplete || message is OnError)
+            else if (message is OnComplete or OnError)
             {
                 if (!_canceled)
                 {
@@ -320,11 +319,8 @@ namespace Akka.Streams.Actors
         /// <exception cref="ArgumentNullException">
         /// This exception is thrown when the specified <paramref name="impl"/> is undefined.
         /// </exception>
-        public ActorSubscriberImpl(IActorRef impl)
-        {
-            if (impl == null) throw new ArgumentNullException(nameof(impl), "ActorSubscriberImpl requires actor impl to be defined");
-            _impl = impl;
-        }
+        public ActorSubscriberImpl(IActorRef impl) =>
+            _impl = impl ?? throw new ArgumentNullException(nameof(impl), "ActorSubscriberImpl requires actor impl to be defined");
 
         /// <summary>
         /// TBD
@@ -418,11 +414,11 @@ namespace Akka.Streams.Actors
         /// <summary>
         /// TBD
         /// </summary>
-        public static readonly ActorSubscriberState Instance = new ActorSubscriberState();
+        public static readonly ActorSubscriberState Instance = new();
 
         private ActorSubscriberState() { }
 
-        private readonly ConcurrentDictionary<IActorRef, State> _state = new ConcurrentDictionary<IActorRef, State>();
+        private readonly ConcurrentDictionary<IActorRef, State> _state = new();
 
         /// <summary>
         /// TBD
@@ -441,7 +437,7 @@ namespace Akka.Streams.Actors
         /// <param name="actorRef">TBD</param>
         /// <param name="s">TBD</param>
         /// <returns>TBD</returns>
-        public void Set(IActorRef actorRef, State s) => _state.AddOrUpdate(actorRef, s, (@ref, oldState) => s);
+        public void Set(IActorRef actorRef, State s) => _state.AddOrUpdate(actorRef, s, (_, _) => s);
 
         /// <summary>
         /// TBD
@@ -450,8 +446,7 @@ namespace Akka.Streams.Actors
         /// <returns>TBD</returns>
         public State Remove(IActorRef actorRef)
         {
-            State s;
-            return _state.TryRemove(actorRef, out s) ? s : null;
+            return _state.TryRemove(actorRef, out var s) ? s : null;
         }
 
         /// <summary>
@@ -459,6 +454,6 @@ namespace Akka.Streams.Actors
         /// </summary>
         /// <param name="system">TBD</param>
         /// <returns>TBD</returns>
-        public override ActorSubscriberState CreateExtension(ExtendedActorSystem system) => new ActorSubscriberState();
+        public override ActorSubscriberState CreateExtension(ExtendedActorSystem system) => new();
     }
 }

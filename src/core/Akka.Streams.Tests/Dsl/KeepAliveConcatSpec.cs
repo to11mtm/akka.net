@@ -1,23 +1,30 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="KeepAliveConcatSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Akka.TestKit.Extensions;
 using Akka.Streams.Dsl;
 using Akka.Streams.TestKit;
-using Akka.Streams.TestKit.Tests;
 using FluentAssertions;
 using Xunit;
+using Xunit.Abstractions;
+using System.Threading.Tasks;
+using FluentAssertions.Extensions;
 
 namespace Akka.Streams.Tests.Dsl
 {
     public class KeepAliveConcatSpec : Akka.TestKit.Xunit2.TestKit
     {
+        public KeepAliveConcatSpec(ITestOutputHelper output)
+            : base(output: output)
+        { }
+
         private readonly Source<IEnumerable<int>, NotUsed> _sampleSource = Source.From(Enumerable.Range(1, 10).Grouped(3));
 
         private IEnumerable<IEnumerable<int>> Expand(IEnumerable<int> lst)
@@ -26,20 +33,21 @@ namespace Akka.Streams.Tests.Dsl
         }
 
         [Fact]
-        public void KeepAliveConcat_should_not_emit_additional_elements_if_upstream_is_fast_enough()
+        public async Task KeepAliveConcat_should_not_emit_additional_elements_if_upstream_is_fast_enough()
         {
             var t = _sampleSource
                 .Via(new KeepAliveConcat<IEnumerable<int>>(5, TimeSpan.FromSeconds(1), Expand))
                 .Grouped(1000)
                 .RunWith(Sink.First<IEnumerable<IEnumerable<int>>>(), Sys.Materializer());
 
-            t.AwaitResult()
+            var complete = await t.ShouldCompleteWithin(3.Seconds());
+            complete
                 .SelectMany(x => x)
-                .ShouldBeEquivalentTo(Enumerable.Range(1, 10), o => o.WithStrictOrdering());
+                .Should().BeEquivalentTo(Enumerable.Range(1, 10), o => o.WithStrictOrdering());
         }
 
         [Fact]
-        public void KeepAliveConcat_should_emit_elements_periodically_after_silent_periods()
+        public async Task KeepAliveConcat_should_emit_elements_periodically_after_silent_periods()
         {
             var sourceWithIdleGap = Source.From(Enumerable.Range(1, 5).Grouped(3))
                 .Concat
@@ -52,9 +60,10 @@ namespace Akka.Streams.Tests.Dsl
                 .Grouped(1000)
                 .RunWith(Sink.First<IEnumerable<IEnumerable<int>>>(), Sys.Materializer());
 
-            t.AwaitResult()
+            var complete = await t.ShouldCompleteWithin(TimeSpan.FromSeconds(6));
+            complete
                 .SelectMany(x => x)
-                .ShouldBeEquivalentTo(Enumerable.Range(1, 10), o => o.WithStrictOrdering());
+                .Should().BeEquivalentTo(Enumerable.Range(1, 10), o => o.WithStrictOrdering());
         }
 
         [Fact]
@@ -70,7 +79,7 @@ namespace Akka.Streams.Tests.Dsl
             downstream.Request(1);
 
             upstream.SendNext(new[] { 1 });
-            downstream.ExpectNext().ShouldBeEquivalentTo(new[] { 1 });
+            downstream.ExpectNext().Should().BeEquivalentTo(new[] { 1 });
 
             upstream.SendComplete();
             downstream.ExpectComplete();
@@ -90,12 +99,12 @@ namespace Akka.Streams.Tests.Dsl
 
             var actual = downstream.ExpectNextN(6);
             var expected = Enumerable.Range(1, 3).Grouped(1).Concat(Enumerable.Range(4, 7).Grouped(3));
-            actual.ShouldBeEquivalentTo(expected, o => o.WithStrictOrdering());
+            actual.Should().BeEquivalentTo(expected, o => o.WithStrictOrdering());
 
             downstream.Request(1);
 
             upstream.SendNext(new[] { 1 });
-            downstream.ExpectNext().ShouldBeEquivalentTo(new[] { 1 });
+            downstream.ExpectNext().Should().BeEquivalentTo(new[] { 1 });
 
             upstream.SendComplete();
             downstream.ExpectComplete();
@@ -115,7 +124,7 @@ namespace Akka.Streams.Tests.Dsl
 
             var actual = downstream.ExpectNextN(6);
             var expected = Enumerable.Range(1, 3).Grouped(1).Concat(Enumerable.Range(4, 7).Grouped(3));
-            actual.ShouldBeEquivalentTo(expected, o => o.WithStrictOrdering());
+            actual.Should().BeEquivalentTo(expected, o => o.WithStrictOrdering());
 
             downstream.ExpectNoMsg(TimeSpan.FromSeconds(1.5));
             downstream.Request(1);
@@ -139,7 +148,7 @@ namespace Akka.Streams.Tests.Dsl
             upstream.SendComplete();
 
             downstream.Request(2);
-            downstream.ExpectNextN(2).ShouldBeEquivalentTo(new[] { 1, 2 }, o => o.WithStrictOrdering());
+            downstream.ExpectNextN(2).Should().BeEquivalentTo(new[] { 1, 2 }, o => o.WithStrictOrdering());
 
             downstream.Request(1);
             downstream.ExpectComplete();

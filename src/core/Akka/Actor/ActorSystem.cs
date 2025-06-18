@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ActorSystem.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -10,6 +10,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Akka.Actor.Internal;
 using Akka.Actor.Setup;
+using Akka.Configuration;
 using Akka.Dispatch;
 using Akka.Event;
 using Akka.Util;
@@ -44,7 +45,7 @@ namespace Akka.Actor
             {
             }
 
-            public static readonly Local Instance = new Local();
+            public static readonly Local Instance = new();
         }
 
         public sealed class Remote : ProviderSelection
@@ -53,7 +54,7 @@ namespace Akka.Actor
             {
             }
 
-            public static readonly Remote Instance = new Remote();
+            public static readonly Remote Instance = new();
         }
 
         public sealed class Cluster : ProviderSelection
@@ -62,7 +63,7 @@ namespace Akka.Actor
             {
             }
 
-            public static readonly Cluster Instance = new Cluster();
+            public static readonly Cluster Instance = new();
         }
 
         public sealed class Custom : ProviderSelection
@@ -92,7 +93,7 @@ namespace Akka.Actor
     }
 
     /// <summary>
-    /// Core boostrap settings for the <see cref="ActorSystem"/>, which can be created using one of the static factory methods
+    /// Core bootstrap settings for the <see cref="ActorSystem"/>, which can be created using one of the static factory methods
     /// on this class.
     /// </summary>
     public sealed class BootstrapSetup : Setup.Setup
@@ -142,6 +143,11 @@ namespace Akka.Actor
         {
             return new BootstrapSetup(config, ActorRefProvider);
         }
+
+        public BootstrapSetup WithConfigFallback(Config config)
+            => Config.HasValue
+                ? new BootstrapSetup(Config.Value.SafeWithFallback(config), ActorRefProvider)
+                : WithConfig(config);
     }
 
     /// <summary>
@@ -358,7 +364,7 @@ namespace Akka.Actor
         /// </returns>
         public abstract Task Terminate();
 
-        internal abstract void FinalTerminate();
+        internal abstract Task FinalTerminate();
 
         /// <summary>
         /// Returns a task which will be completed after the <see cref="ActorSystem"/> has been
@@ -379,7 +385,6 @@ namespace Akka.Actor
 
         private bool _isDisposed; //Automatically initialized to false;
 
-        /// <inheritdoc/>
         public void Dispose()
         {
             Dispose(true);
@@ -394,26 +399,19 @@ namespace Akka.Actor
             // runtime from inside the finalizer and you should not reference
             // other objects. Only unmanaged resources can be disposed.
 
-            try
+            //Make sure Dispose does not get called more than once, by checking the disposed field
+            if (!_isDisposed)
             {
-                //Make sure Dispose does not get called more than once, by checking the disposed field
-                if (!_isDisposed)
+                if (disposing)
                 {
-                    if (disposing)
-                    {
-                        Log.Debug("Disposing system");
-                        Terminate().Wait(); // System needs to be disposed before method returns
-                    }
-
-                    //Clean up unmanaged resources
+                    Log.Debug("Disposing system");
+                    Terminate().Wait(); // System needs to be disposed before method returns
                 }
 
-                _isDisposed = true;
+                //Clean up unmanaged resources
             }
-            finally
-            {
 
-            }
+            _isDisposed = true;
         }
 
         /// <summary>

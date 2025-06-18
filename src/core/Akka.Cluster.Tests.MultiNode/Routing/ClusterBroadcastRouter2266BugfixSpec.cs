@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ClusterBroadcastRouter2266BugfixSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -11,9 +11,12 @@ using System.Linq;
 using Akka.Actor;
 using Akka.Cluster.TestKit;
 using Akka.Configuration;
+using Akka.Event;
+using Akka.MultiNode.TestAdapter;
 using Akka.Remote.TestKit;
 using Akka.Routing;
 using FluentAssertions;
+using FluentAssertions.Extensions;
 
 namespace Akka.Cluster.Tests.MultiNode.Routing
 {
@@ -47,7 +50,7 @@ namespace Akka.Cluster.Tests.MultiNode.Routing
             public SomeActor(IRouteeType routeeType)
             {
                 _routeeType = routeeType;
-                Receive<string>(s => s == "hit", s =>
+                Receive<string>(s => s == "hit", _ =>
                 {
                     Sender.Tell(new Reply(_routeeType, Self));
                 });
@@ -118,11 +121,10 @@ namespace Akka.Cluster.Tests.MultiNode.Routing
 
         private Dictionary<Address, int> ReceiveReplays(ClusterBroadcastGroupSpecConfig.IRouteeType routeeType, int expectedReplies)
         {
-            var zero = Roles.Select(GetAddress).ToDictionary(c => c, c => 0);
+            var zero = Roles.Select(GetAddress).ToDictionary(c => c, _ => 0);
             var replays = ReceiveWhile(5.Seconds(), msg =>
             {
-                var routee = msg as ClusterBroadcastGroupSpecConfig.Reply;
-                if (routee != null && routee.RouteeType.GetType() == routeeType.GetType())
+                if (msg is ClusterBroadcastGroupSpecConfig.Reply routee && routee.RouteeType.GetType() == routeeType.GetType())
                     return FullAddress(routee.ActorRef);
                 return null;
             }, expectedReplies).Aggregate(zero, (replyMap, address) =>

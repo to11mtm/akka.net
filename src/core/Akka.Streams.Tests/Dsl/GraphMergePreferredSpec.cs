@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="GraphMergePreferredSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -10,7 +10,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Akka.Streams.Dsl;
-using Akka.Streams.TestKit.Tests;
+using Akka.Streams.TestKit;
 using Akka.TestKit;
 using FluentAssertions;
 using Xunit;
@@ -95,7 +95,7 @@ namespace Akka.Streams.Tests.Dsl
             result.Result.Where(i => i > 200 && i <= 300).ShouldOnlyContainInOrder(Enumerable.Range(201, 100));
             result.Result.Where(i => i > 300 && i <= 400).ShouldOnlyContainInOrder(Enumerable.Range(301, 100));
 
-            result.Result.ShouldBeEquivalentTo(Enumerable.Range(1, 400));
+            result.Result.Should().BeEquivalentTo(Enumerable.Range(1, 400));
         }
 
         [Fact]
@@ -115,7 +115,7 @@ namespace Akka.Streams.Tests.Dsl
                 }));
             };
 
-            action.ShouldThrow<ArgumentException>()
+            action.Should().Throw<ArgumentException>()
                 .And.Message.Should()
                 .Contain("The input port [MergePreferred.preferred] is already connected");
         }

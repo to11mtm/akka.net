@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="LeaseProvider.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -83,11 +83,11 @@ namespace Akka.Coordination
         }
 
         private readonly ExtendedActorSystem _system;
-        private readonly ConcurrentDictionary<LeaseKey, Lease> leases = new ConcurrentDictionary<LeaseKey, Lease>();
+        private readonly ConcurrentDictionary<LeaseKey, Lease> _leases = new();
 
         private ILoggingAdapter _log;
 
-        private ILoggingAdapter Log { get { return _log ?? (_log = Logging.GetLogger(_system, "LeaseProvider")); } }
+        private ILoggingAdapter Log { get { return _log ??= Logging.GetLogger(_system, "LeaseProvider"); } }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="LeaseProvider"/> class.
@@ -122,7 +122,7 @@ namespace Akka.Coordination
         {
             var leaseKey = new LeaseKey(leaseName, configPath, ownerName);
 
-            return leases.GetOrAdd(leaseKey, lk =>
+            return _leases.GetOrAdd(leaseKey, _ =>
             {
                 var leaseConfig = _system.Settings.Config
                     .GetConfig(configPath)
@@ -130,27 +130,43 @@ namespace Akka.Coordination
 
                 var settings = LeaseSettings.Create(leaseConfig, leaseName, ownerName);
 
+                var leaseClassName = settings.LeaseConfig.GetString("lease-class", null);
+                if (string.IsNullOrEmpty(leaseClassName))
+                    throw new ArgumentException("lease-class must not be empty");
+                var leaseType = Type.GetType(leaseClassName, true);
+
                 try
                 {
                     try
                     {
-                        return (Lease)Activator.CreateInstance(settings.LeaseType, settings, _system);
+                        return (Lease)Activator.CreateInstance(leaseType, settings, _system);
                     }
-                    catch
+                    catch(MissingMethodException)
                     {
-                        return (Lease)Activator.CreateInstance(settings.LeaseType, settings);
+                        return (Lease)Activator.CreateInstance(leaseType, settings);
                     }
                 }
-                catch (Exception ex)
+                catch (MissingMethodException ex)
                 {
                     Log.Error(
                       ex,
                       "Invalid lease configuration for leaseName [{0}], configPath [{1}] lease-class [{2}]. " +
-                      "The class must implement scaladsl.Lease or javadsl.Lease and have constructor with LeaseSettings parameter and " +
+                      "The class must implement Akka.Coordination.Lease and have constructor with LeaseSettings parameter and " +
                       "optionally ActorSystem parameter.",
                       settings.LeaseName,
                       configPath,
-                      settings.LeaseType);
+                      leaseType);
+
+                    throw;
+                }
+                catch(Exception ex)
+                {
+                    Log.Error(
+                        ex,
+                        "Failed to instantiate lease class [{2}] for leaseName [{0}], configPath [{1}].",
+                        settings.LeaseName,
+                        configPath,
+                        leaseType);
 
                     throw;
                 }

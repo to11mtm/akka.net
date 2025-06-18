@@ -1,3 +1,10 @@
+﻿//-----------------------------------------------------------------------
+// <copyright file="ClusterStartupSpec.cs" company="Akka.NET Project">
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
+// </copyright>
+//-----------------------------------------------------------------------
+
 using System;
 using System.Collections.Generic;
 using System.Text;
@@ -23,7 +30,7 @@ namespace Akka.Cluster.Tests.Performance.Startup
                                              akka.remote.dot-netty.tcp.public-hostname = localhost
                                              akka.cluster.seed-nodes = [""akka.tcp://ClusterSys@localhost:8110""]";
 
-        public TaskCompletionSource<Done> _clusterMemberUp = new TaskCompletionSource<Done>();
+        public TaskCompletionSource<Done> _clusterMemberUp = new();
 
         [PerfSetup]
         public void Setup(BenchmarkContext context)
@@ -50,7 +57,7 @@ namespace Akka.Cluster.Tests.Performance.Startup
             context.Trace.Info($"Started ActorSystem1 on {Cluster.Get(OtherSys).SelfAddress}");
             var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             _clusterMemberUp.Task.Wait(cts.Token);
-            context.Trace.Info($"Successfully joined cluster.");
+            context.Trace.Info("Successfully joined cluster.");
         }
 
         [PerfCleanup]

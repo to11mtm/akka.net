@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="TerminatedChildrenContainer.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -17,8 +17,6 @@ namespace Akka.Actor.Internal
     /// </summary>
     public class TerminatedChildrenContainer : EmptyChildrenContainer
     {
-        private static readonly IChildrenContainer _instance = new TerminatedChildrenContainer();
-
         private TerminatedChildrenContainer()
         {
             //Intentionally left blank
@@ -27,11 +25,8 @@ namespace Akka.Actor.Internal
         /// <summary>
         /// TBD
         /// </summary>
-        public new static IChildrenContainer Instance
-        {
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => _instance;
-        }
+        public new static IChildrenContainer Instance { [MethodImpl(MethodImplOptions.AggressiveInlining)] get; }
+            = new TerminatedChildrenContainer();
 
         /// <summary>
         /// TBD

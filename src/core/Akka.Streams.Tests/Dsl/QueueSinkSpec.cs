@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="QueueSinkSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -13,7 +13,6 @@ using Akka.Actor;
 using Akka.Pattern;
 using Akka.Streams.Dsl;
 using Akka.Streams.TestKit;
-using Akka.Streams.TestKit.Tests;
 using Akka.Streams.Util;
 using Akka.TestKit;
 using Akka.Util;
@@ -39,149 +38,151 @@ namespace Akka.Streams.Tests.Dsl
         }
 
         [Fact]
-        public void QueueSink_should_send_the_elements_as_result_of_future()
+        public async Task QueueSink_should_send_the_elements_as_result_of_future()
         {
-            this.AssertAllStagesStopped(() =>
-            {
+            await this.AssertAllStagesStoppedAsync(async() => {
                 var expected = new List<Option<int>>
                 {
-                    new Option<int>(1),
-                    new Option<int>(2),
-                    new Option<int>(3),
-                    new Option<int>()
+                    Option<int>.Create(1),
+                    Option<int>.Create(2),
+                    Option<int>.Create(3),
+                    Option<int>.None
                 };
                 var queue = Source.From(expected.Where(o => o.HasValue).Select(o => o.Value))
                     .RunWith(Sink.Queue<int>(), _materializer);
 
-                expected.ForEach(v =>
+                foreach(var v in expected)
                 {
+#pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
                     queue.PullAsync().PipeTo(TestActor);
-                    ExpectMsg(v);
-                });
+#pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
+                    await ExpectMsgAsync(v);
+                };
             }, _materializer);
         }
 
         [Fact]
-        public void QueueSink_should_allow_to_have_only_one_future_waiting_for_result_in_each_point_in_time()
+        public async Task QueueSink_should_allow_to_have_only_one_future_waiting_for_result_in_each_point_in_time()
         {
-            this.AssertAllStagesStopped(() =>
-            {
+            await this.AssertAllStagesStoppedAsync(async() => {
                 var probe = this.CreateManualPublisherProbe<int>();
                 var queue = Source.FromPublisher(probe).RunWith(Sink.Queue<int>(), _materializer);
                 var sub = probe.ExpectSubscription();
                 var future = queue.PullAsync();
                 var future2 = queue.PullAsync();
-                future2.Invoking(t => t.Wait(RemainingOrDefault)).ShouldThrow<IllegalStateException>();
+                future2.Invoking(t => t.Wait(RemainingOrDefault)).Should().Throw<IllegalStateException>();
 
                 sub.SendNext(1);
+#pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
                 future.PipeTo(TestActor);
-                ExpectMsg(new Option<int>(1));
+#pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
+                await ExpectMsgAsync(Option<int>.Create(1));
 
                 sub.SendComplete();
-                queue.PullAsync();
+                await queue.PullAsync();
             }, _materializer);
         }
 
         [Fact]
-        public void QueueSink_should_wait_for_next_element_from_upstream()
+        public async Task QueueSink_should_wait_for_next_element_from_upstream()
         {
-            this.AssertAllStagesStopped(() =>
-            {
+            await this.AssertAllStagesStoppedAsync(async() => {
                 var probe = this.CreateManualPublisherProbe<int>();
                 var queue = Source.FromPublisher(probe).RunWith(Sink.Queue<int>(), _materializer);
                 var sub = probe.ExpectSubscription();
 
+#pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
                 queue.PullAsync().PipeTo(TestActor);
-                ExpectNoMsg(_pause);
+#pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
+                await ExpectNoMsgAsync(_pause);
 
                 sub.SendNext(1);
-                ExpectMsg(new Option<int>(1));
+                await ExpectMsgAsync(Option<int>.Create(1));
                 sub.SendComplete();
-                queue.PullAsync();
+                await queue.PullAsync();
             }, _materializer);
         }
 
         [Fact]
-        public void QueueSink_should_fail_future_on_stream_failure()
+        public async Task QueueSink_should_fail_future_on_stream_failure()
         {
-            this.AssertAllStagesStopped(() =>
-            {
+            await this.AssertAllStagesStoppedAsync(async() => {
                 var probe = this.CreateManualPublisherProbe<int>();
                 var queue = Source.FromPublisher(probe).RunWith(Sink.Queue<int>(), _materializer);
-                var sub = probe.ExpectSubscription();
+                var sub = await probe.ExpectSubscriptionAsync();
 
+#pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
                 queue.PullAsync().PipeTo(TestActor);
-                ExpectNoMsg(_pause);
+#pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
+                await ExpectNoMsgAsync(_pause);
 
                 sub.SendError(TestException());
-                ExpectMsg<Status.Failure>(
-                    f => f.Cause is AggregateException && f.Cause.InnerException.Equals(TestException()));
+                await ExpectMsgAsync<Status.Failure>(
+                    f => f.Cause.Equals(TestException()));
             }, _materializer);
         }
 
         [Fact]
-        public void QueueSink_should_fail_future_when_stream_failed()
+        public async Task QueueSink_should_fail_future_when_stream_failed()
         {
-            this.AssertAllStagesStopped(() =>
-            {
+            await this.AssertAllStagesStoppedAsync(async() => {
                 var probe = this.CreateManualPublisherProbe<int>();
                 var queue = Source.FromPublisher(probe).RunWith(Sink.Queue<int>(), _materializer);
-                var sub = probe.ExpectSubscription();
+                var sub = await probe.ExpectSubscriptionAsync();
 
                 sub.SendError(TestException());
                 queue.Invoking(q => q.PullAsync().Wait(RemainingOrDefault))
-                    .ShouldThrow<TestException>();
+                    .Should().Throw<TestException>();
             }, _materializer);
         }
 
         [Fact]
-        public void QueueSink_should_timeout_future_when_stream_cannot_provide_data()
+        public async Task QueueSink_should_timeout_future_when_stream_cannot_provide_data()
         {
-            this.AssertAllStagesStopped(() =>
-            {
+            await this.AssertAllStagesStoppedAsync(async() => {
                 var probe = this.CreateManualPublisherProbe<int>();
                 var queue = Source.FromPublisher(probe).RunWith(Sink.Queue<int>(), _materializer);
-                var sub = probe.ExpectSubscription();
+                var sub = await probe.ExpectSubscriptionAsync();
 
+#pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
                 queue.PullAsync().PipeTo(TestActor);
-                ExpectNoMsg(_pause);
+#pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
+                await ExpectNoMsgAsync(_pause);
 
                 sub.SendNext(1);
-                ExpectMsg(new Option<int>(1));
+                await ExpectMsgAsync(Option<int>.Create(1));
                 sub.SendComplete();
-                queue.PullAsync();
+                await queue.PullAsync();
             }, _materializer);
         }
 
-        [Fact(Skip = "Racy, see https://github.com/akkadotnet/akka.net/pull/4424#issuecomment-632284459")]
-        public void QueueSink_should_fail_pull_future_when_stream_is_completed()
+        [Fact]
+        public async Task QueueSink_should_fail_pull_future_when_stream_is_completed()
         {
-            this.AssertAllStagesStopped(() =>
-            {
+            await this.AssertAllStagesStoppedAsync(async() => {
                 var probe = this.CreateManualPublisherProbe<int>();
                 var queue = Source.FromPublisher(probe).RunWith(Sink.Queue<int>(), _materializer);
-                var sub = probe.ExpectSubscription();
+                var sub = await probe.ExpectSubscriptionAsync();
 
+#pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
                 queue.PullAsync().PipeTo(TestActor);
+#pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
                 sub.SendNext(1);
-                ExpectMsg(new Option<int>(1));
+                await ExpectMsgAsync(Option<int>.Create(1));
 
                 sub.SendComplete();
-                var result = queue.PullAsync().Result;
+                var result = await queue.PullAsync();
                 result.Should().Be(Option<int>.None);
 
-                ((Task)queue.PullAsync()).ContinueWith(t =>
-                {
-                    t.Exception.InnerException.Should().BeOfType<IllegalStateException>();
-                }, TaskContinuationOptions.OnlyOnFaulted).Wait();
+                var exception = await Record.ExceptionAsync(async () => await queue.PullAsync());
+                exception.Should().BeOfType<StreamDetachedException>();
             }, _materializer);
         }
 
         [Fact]
-        public void QueueSink_should_keep_on_sending_even_after_the_buffer_has_been_full()
+        public async Task QueueSink_should_keep_on_sending_even_after_the_buffer_has_been_full()
         {
-            this.AssertAllStagesStopped(() =>
-            {
+            await this.AssertAllStagesStoppedAsync(async() => {
                 const int bufferSize = 16;
                 const int streamElementCount = bufferSize + 4;
                 var sink = Sink.Queue<int>().WithAttributes(Attributes.CreateInputBuffer(bufferSize, bufferSize));
@@ -197,37 +198,43 @@ namespace Akka.Streams.Tests.Dsl
 
                 for (var i = 1; i <= streamElementCount; i++)
                 {
+#pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
                     queue.PullAsync().PipeTo(TestActor);
-                    ExpectMsg(new Option<int>(i));
+#pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
+                    await ExpectMsgAsync(Option<int>.Create(i));
                 }
+#pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
                 queue.PullAsync().PipeTo(TestActor);
-                ExpectMsg(Option<int>.None);
+#pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
+                await ExpectMsgAsync(Option<int>.None);
             }, _materializer);
         }
 
         [Fact]
-        public void QueueSink_should_work_with_one_element_buffer()
+        public async Task QueueSink_should_work_with_one_element_buffer()
         {
-            this.AssertAllStagesStopped(() =>
-            {
+            await this.AssertAllStagesStoppedAsync(async() => {
                 var sink = Sink.Queue<int>().WithAttributes(Attributes.CreateInputBuffer(1, 1));
                 var probe = this.CreateManualPublisherProbe<int>();
                 var queue = Source.FromPublisher(probe).RunWith(sink, _materializer);
-                var sub = probe.ExpectSubscription();
+                var sub = await probe.ExpectSubscriptionAsync();
 
+#pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
                 queue.PullAsync().PipeTo(TestActor);
+#pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
                 sub.SendNext(1); // should pull next element
-                ExpectMsg(new Option<int>(1));
+                await ExpectMsgAsync(Option<int>.Create(1));
 
+#pragma warning disable CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
                 queue.PullAsync().PipeTo(TestActor);
-                ExpectNoMsg(); // element requested but buffer empty
+#pragma warning restore CS4014 // Because this call is not awaited, execution of the current method continues before the call is completed
+                await ExpectNoMsgAsync(); // element requested but buffer empty
                 sub.SendNext(2);
-                ExpectMsg(new Option<int>(2));
+                await ExpectMsgAsync(Option<int>.Create(2));
 
                 sub.SendComplete();
-                var future = queue.PullAsync();
-                future.Wait(_pause).Should().BeTrue();
-                future.Result.Should().Be(Option<int>.None);
+                var result = await queue.PullAsync();
+                result.Should().Be(Option<int>.None);
             }, _materializer);
         }
 
@@ -237,7 +244,7 @@ namespace Akka.Streams.Tests.Dsl
             Source.Single(1)
                 .Invoking(
                     s => s.RunWith(Sink.Queue<int>().WithAttributes(Attributes.CreateInputBuffer(0, 0)), _materializer))
-                .ShouldThrow<ArgumentException>();
+                .Should().Throw<ArgumentException>();
         }
     }
 }

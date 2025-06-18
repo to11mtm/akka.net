@@ -1,13 +1,14 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ReverseArrowSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Akka.Streams.Dsl;
 using Akka.Streams.TestKit;
@@ -47,7 +48,7 @@ namespace Akka.Streams.Tests.Dsl
                 return ClosedShape.Instance;
             })).Run(Materializer);
             task.Wait(TimeSpan.FromSeconds(1)).Should().BeTrue();
-            task.Result.ShouldAllBeEquivalentTo(new[] {1, 2, 3});
+            task.Result.Should().BeEquivalentTo(new[] {1, 2, 3});
         }
 
         [Fact]
@@ -59,7 +60,7 @@ namespace Akka.Streams.Tests.Dsl
                 return ClosedShape.Instance;
             })).Run(Materializer);
             task.Wait(TimeSpan.FromSeconds(1)).Should().BeTrue();
-            task.Result.ShouldAllBeEquivalentTo(new[] { 1, 2, 3 });
+            task.Result.Should().BeEquivalentTo(new[] { 1, 2, 3 });
         }
 
         [Fact]
@@ -75,7 +76,7 @@ namespace Akka.Streams.Tests.Dsl
             })).Run(Materializer);
             
             sub.ExpectSubscription().Request(10);
-            sub.ExpectNext(1, 2, 3);
+            sub.ExpectNext( 1, 2, 3);
             sub.ExpectComplete();
         }
 
@@ -87,7 +88,7 @@ namespace Akka.Streams.Tests.Dsl
                 {
                     var o = b.Add(Source).Outlet;
                     b.Invoking(builder => ((dynamic) builder).To(o).From(Source))
-                        .ShouldThrow<RuntimeBinderException>();
+                        .Should().Throw<RuntimeBinderException>();
                     b.To(Sink).From(o);
                     return ClosedShape.Instance;
                 }));
@@ -101,7 +102,7 @@ namespace Akka.Streams.Tests.Dsl
                 {
                     var o = b.Add(Source);
                     b.Invoking(builder => ((dynamic) builder).To(o).From(Source))
-                        .ShouldThrow<RuntimeBinderException>();
+                        .Should().Throw<RuntimeBinderException>();
                     b.To(Sink).From(o);
                     return ClosedShape.Instance;
                 }));
@@ -111,7 +112,7 @@ namespace Akka.Streams.Tests.Dsl
         public void Reverse_Arrows_in_the_GraphDsl_must_not_work_from_Source()
         {
             var b = new GraphDsl.Builder<NotUsed>();
-            b.Invoking(builder => ((dynamic) builder).To(Source).From(Source)).ShouldThrow<RuntimeBinderException>();
+            b.Invoking(builder => ((dynamic) builder).To(Source).From(Source)).Should().Throw<RuntimeBinderException>();
         }
 
         [Fact]
@@ -125,7 +126,7 @@ namespace Akka.Streams.Tests.Dsl
                 return ClosedShape.Instance;
             })).Run(Materializer);
             task.Wait(TimeSpan.FromSeconds(1)).Should().BeTrue();
-            task.Result.ShouldAllBeEquivalentTo(new[] { 1, 2, 3 });
+            task.Result.Should().BeEquivalentTo(new[] { 1, 2, 3 });
         }
 
         [Fact]
@@ -140,7 +141,7 @@ namespace Akka.Streams.Tests.Dsl
                 return ClosedShape.Instance;
             })).Run(Materializer);
             task.Wait(TimeSpan.FromSeconds(1)).Should().BeTrue();
-            task.Result.ShouldAllBeEquivalentTo(new[] { 1, 2, 3 });
+            task.Result.Should().BeEquivalentTo(new[] { 1, 2, 3 });
         }
 
         [Fact]
@@ -155,7 +156,7 @@ namespace Akka.Streams.Tests.Dsl
                 return ClosedShape.Instance;
             })).Run(Materializer);
             task.Wait(TimeSpan.FromSeconds(1)).Should().BeTrue();
-            task.Result.ShouldAllBeEquivalentTo(new[] { 1, 2, 3 });
+            task.Result.Should().BeEquivalentTo(new[] { 1, 2, 3 });
         }
 
         [Fact]
@@ -168,7 +169,7 @@ namespace Akka.Streams.Tests.Dsl
                 return ClosedShape.Instance;
             })).Run(Materializer);
             task.Wait(TimeSpan.FromSeconds(1)).Should().BeTrue();
-            task.Result.ShouldAllBeEquivalentTo(new[] { 1, 2, 3 });
+            task.Result.Should().BeEquivalentTo(new[] { 1, 2, 3 });
         }
 
         [Fact]
@@ -181,7 +182,7 @@ namespace Akka.Streams.Tests.Dsl
                 return ClosedShape.Instance;
             })).Run(Materializer);
             task.Wait(TimeSpan.FromSeconds(1)).Should().BeTrue();
-            task.Result.ShouldAllBeEquivalentTo(new[] { 1, 2, 3 });
+            task.Result.Should().BeEquivalentTo(new[] { 1, 2, 3 });
         }
 
         [Fact]
@@ -193,7 +194,7 @@ namespace Akka.Streams.Tests.Dsl
                 return ClosedShape.Instance;
             })).Run(Materializer);
             task.Wait(TimeSpan.FromSeconds(1)).Should().BeTrue();
-            task.Result.ShouldAllBeEquivalentTo(new[] { 1, 2, 3 });
+            task.Result.Should().BeEquivalentTo(new[] { 1, 2, 3 });
         }
 
         [Fact]
@@ -207,7 +208,7 @@ namespace Akka.Streams.Tests.Dsl
                 return ClosedShape.Instance;
             })).Run(Materializer);
             task.Wait(TimeSpan.FromSeconds(1)).Should().BeTrue();
-            task.Result.ShouldAllBeEquivalentTo(new[] { 1, 2, 3 });
+            task.Result.Should().BeEquivalentTo(new[] { 1, 2, 3 });
         }
 
         [Fact]
@@ -222,7 +223,7 @@ namespace Akka.Streams.Tests.Dsl
                 return ClosedShape.Instance;
             })).Run(Materializer);
             task.Wait(TimeSpan.FromSeconds(1)).Should().BeTrue();
-            task.Result.ShouldAllBeEquivalentTo(new[] { 1, 2, 3 });
+            task.Result.Should().BeEquivalentTo(new[] { 1, 2, 3 });
         }
 
         [Fact]
@@ -236,13 +237,13 @@ namespace Akka.Streams.Tests.Dsl
                 b.From(src).To(f);
 
                 b.Invoking(builder => builder.To(s).Via(f).From(src))
-                    .ShouldThrow<ArgumentException>()
+                    .Should().Throw<ArgumentException>()
                     .WithMessage("No more inlets on junction");
 
                 return ClosedShape.Instance;
             })).Run(Materializer);
             task.Wait(TimeSpan.FromSeconds(1)).Should().BeTrue();
-            task.Result.ShouldAllBeEquivalentTo(new[] { 1, 2, 3 });
+            task.Result.Should().BeEquivalentTo(new[] { 1, 2, 3 });
         }
 
         [Fact]
@@ -257,7 +258,7 @@ namespace Akka.Streams.Tests.Dsl
                 return ClosedShape.Instance;
             })).Run(Materializer);
             task.Wait(TimeSpan.FromSeconds(1)).Should().BeTrue();
-            task.Result.ShouldAllBeEquivalentTo(new[] { 1, 2, 3 });
+            task.Result.Should().BeEquivalentTo(new[] { 1, 2, 3 });
         }
 
         [Fact]
@@ -272,13 +273,13 @@ namespace Akka.Streams.Tests.Dsl
                 b.To(sink2).From(f);
 
                 b.Invoking(builder => builder.To(s).Via(f).From(src))
-                    .ShouldThrow<ArgumentException>()
+                    .Should().Throw<ArgumentException>()
                     .WithMessage("The output port [StatefulSelectMany.out] is already connected");
 
                 return ClosedShape.Instance;
             })).Run(Materializer);
             task.Wait(TimeSpan.FromSeconds(1)).Should().BeTrue();
-            task.Result.ShouldAllBeEquivalentTo(new[] { 1, 2, 3 });
+            task.Result.Should().BeEquivalentTo(new[] { 1, 2, 3 });
         }
 
         [Fact]
@@ -290,7 +291,7 @@ namespace Akka.Streams.Tests.Dsl
                 return ClosedShape.Instance;
             })).Run(Materializer);
             task.Wait(TimeSpan.FromSeconds(1)).Should().BeTrue();
-            task.Result.ShouldAllBeEquivalentTo(new[] { 1, 2, 3 });
+            task.Result.Should().BeEquivalentTo(new[] { 1, 2, 3 });
         }
 
         [Fact]
@@ -303,7 +304,7 @@ namespace Akka.Streams.Tests.Dsl
                 return ClosedShape.Instance;
             })).Run(Materializer);
             task.Wait(TimeSpan.FromSeconds(1)).Should().BeTrue();
-            task.Result.ShouldAllBeEquivalentTo(new[] { 1, 2, 3 });
+            task.Result.Should().BeEquivalentTo(new[] { 1, 2, 3 });
         }
     }
 }

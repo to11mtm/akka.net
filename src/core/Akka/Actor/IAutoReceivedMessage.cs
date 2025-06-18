@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="IAutoReceivedMessage.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -109,21 +109,21 @@ namespace Akka.Actor
             return Equals(MessageId, other.MessageId);
         }
 
-        /// <inheritdoc/>
+        
         public override bool Equals(object obj)
         {
             if (ReferenceEquals(null, obj)) return false;
             if (ReferenceEquals(this, obj)) return true;
-            return obj is Identify && Equals((Identify)obj);
+            return obj is Identify identify && Equals(identify);
         }
 
-        /// <inheritdoc/>
+        
         public override int GetHashCode()
         {
             return (MessageId != null ? MessageId.GetHashCode() : 0);
         }
 
-        /// <inheritdoc/>
+        
         public override string ToString()
         {
             return $"<Identify>: {MessageId}";
@@ -164,15 +164,15 @@ namespace Akka.Actor
             return Equals(MessageId, other.MessageId) && Equals(Subject, other.Subject);
         }
 
-        /// <inheritdoc/>
+        
         public override bool Equals(object obj)
         {
             if (ReferenceEquals(null, obj)) return false;
             if (ReferenceEquals(this, obj)) return true;
-            return obj is ActorIdentity && Equals((ActorIdentity)obj);
+            return obj is ActorIdentity identity && Equals(identity);
         }
 
-        /// <inheritdoc/>
+        
         public override int GetHashCode()
         {
             unchecked
@@ -181,7 +181,7 @@ namespace Akka.Actor
             }
         }
 
-        /// <inheritdoc/>
+        
         public override string ToString()
         {
             return $"<ActorIdentity>: {Subject} - MessageId={MessageId}";
@@ -204,12 +204,27 @@ namespace Akka.Actor
         /// <summary>
         /// The singleton instance of PoisonPill.
         /// </summary>
-        public static PoisonPill Instance { get; } = new PoisonPill();
+        public static PoisonPill Instance { get; } = new();
 
-        /// <inheritdoc/>
+        
         public override string ToString()
         {
             return "<PoisonPill>";
+        }
+    }
+
+    /// <summary>
+    /// Sending a <see cref="IntentionalRestart"/> message will force it to throw a <see cref="IntentionalActorRestartException"/>
+    /// when it processes the message.
+    /// </summary>
+    public sealed class IntentionalRestart : IAutoReceivedMessage
+    {
+        private IntentionalRestart() { }
+        public static IntentionalRestart Instance { get; } = new();
+        
+        public override string ToString()
+        {
+            return "<Restart>";
         }
     }
 
@@ -227,9 +242,9 @@ namespace Akka.Actor
         /// <summary>
         /// The singleton instance of Kill.
         /// </summary>
-        public static Kill Instance { get; } = new Kill();
+        public static Kill Instance { get; } = new();
 
-        /// <inheritdoc/>
+        
         public override string ToString()
         {
             return "<Kill>";
@@ -243,7 +258,7 @@ namespace Akka.Actor
     /// <see cref="AddressTerminatedTopic"/> when a remote node is detected to be unreachable and / or decided
     /// to be removed.
     /// 
-    /// The watcher <see cref="DeathWatch"/> subscribes to the <see cref="AddressTerminatedTopic"/> and translates this
+    /// The watcher subscribes to the <see cref="AddressTerminatedTopic"/> and translates this
     /// event to <see cref="Terminated"/>, which is sent to itself.
     /// </summary>
     internal class AddressTerminated : IAutoReceivedMessage, IPossiblyHarmful, IDeadLetterSuppression
@@ -262,7 +277,7 @@ namespace Akka.Actor
         /// </summary>
         public Address Address { get; }
 
-        /// <inheritdoc/>
+        
         public override string ToString()
         {
             return $"<AddressTerminated>: {Address}";

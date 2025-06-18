@@ -1,9 +1,12 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="JournalInterceptorsSpecs.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
+
+using System.Threading;
+using FluentAssertions.Extensions;
 
 namespace Akka.Persistence.TestKit.Tests
 {
@@ -12,37 +15,42 @@ namespace Akka.Persistence.TestKit.Tests
     using Akka.Persistence.TestKit;
     using FluentAssertions;
     using Xunit;
+    using static FluentAssertions.FluentActions;
 
     public class JournalInterceptorsSpecs
     {
         [Fact]
-        public void noop_immediately_returns_without_exception()
+        public async Task noop_immediately_returns_without_exception()
         {
-            JournalInterceptors.Noop.Instance
-                .Awaiting(x => x.InterceptAsync(null))
-                .ShouldNotThrow();
+            await Awaiting(async () =>
+            {
+                await JournalInterceptors.Noop.Instance.InterceptAsync(null);
+            }).Should().NotThrowAsync();
         }
 
         [Fact]
-        public void failure_must_throw_specific_exception()
+        public async Task failure_must_throw_specific_exception()
         {
-            JournalInterceptors.Failure.Instance
-                .Awaiting(x => x.InterceptAsync(null))
-                .ShouldThrowExactly<TestJournalFailureException>();
+            await Assert.ThrowsAsync<TestJournalFailureException>(async () =>
+            {
+                await JournalInterceptors.Failure.Instance.InterceptAsync(null);
+            });
         }
 
         [Fact]
-        public void rejection_must_throw_specific_exception()
+        public async Task rejection_must_throw_specific_exception()
         {
-            JournalInterceptors.Rejection.Instance
-                .Awaiting(x => x.InterceptAsync(null))
-                .ShouldThrowExactly<TestJournalRejectionException>();
+            await Assert.ThrowsAsync<TestJournalRejectionException>(async () =>
+            {
+                await JournalInterceptors.Rejection.Instance.InterceptAsync(null);
+            });
         }
 
         [Fact]
         public async Task delay_must_call_next_interceptor_after_specified_delay()
         {
-            var duration = TimeSpan.FromMilliseconds(100);
+            var duration = TimeSpan.FromMilliseconds(200);
+            var epsilon = TimeSpan.FromMilliseconds(50);
             var probe = new InterceptorProbe();
             var delay = new JournalInterceptors.Delay(duration, probe);
 
@@ -50,9 +58,52 @@ namespace Akka.Persistence.TestKit.Tests
             await delay.InterceptAsync(null);
 
             probe.WasCalled.Should().BeTrue();
-            probe.CalledAt.Should().BeOnOrAfter(startedAt + duration);
+            probe.CalledAt.Should().BeOnOrAfter(startedAt + duration - epsilon);
         }
 
+        [Fact]
+        public async Task cancelable_delay_must_call_next_interceptor_immediately_after_cancellation()
+        {
+            var totalDuration = 400.Milliseconds();
+            var delayDuration = 200.Milliseconds();
+            var epsilon = TimeSpan.FromMilliseconds(50);
+            
+            using var cts = new CancellationTokenSource();
+            var synchronizationTcs = new TaskCompletionSource<bool>();
+            
+            // Custom interceptor that signals when it's called
+            var probe = new InterceptorProbe();
+            probe.InterceptAsyncFunc = message =>
+            {
+                synchronizationTcs.TrySetResult(true);
+                return Task.CompletedTask;
+            };
+            
+            var delay = new JournalInterceptors.CancelableDelay(totalDuration, probe, cts.Token);
+
+            var startedAt = DateTime.Now;
+            var task = delay.InterceptAsync(null);
+            
+            // Wait less than the full delay time
+            await Task.Delay(delayDuration);
+            
+            // Ensure the probe hasn't been called yet (not using probe.WasCalled since it might have race conditions)
+            synchronizationTcs.Task.IsCompleted.Should().BeFalse();
+            
+            // Cancel the delay
+            cts.Cancel();
+            
+            // Wait for the probe to be called
+            await synchronizationTcs.Task;
+            
+            // Now we can safely check that the probe was called
+            probe.WasCalled.Should().BeTrue();
+            probe.CalledAt.Should().BeOnOrAfter(startedAt + delayDuration - epsilon);
+            
+            // Wait for the original task to complete
+            await task;
+        }
+        
         [Fact]
         public async Task on_type_must_call_next_interceptor_when_message_is_exactly_awaited_type()
         {
@@ -177,6 +228,7 @@ namespace Akka.Persistence.TestKit.Tests
             public bool WasCalled { get; private set; }
             public DateTime CalledAt { get; private set; }
             public IPersistentRepresentation Message { get; private set; }
+            public Func<IPersistentRepresentation, Task> InterceptAsyncFunc { get; set; }
 
             public Task InterceptAsync(IPersistentRepresentation message)
             {
@@ -184,6 +236,9 @@ namespace Akka.Persistence.TestKit.Tests
                 WasCalled = true;
                 Message = message;
 
+                if (InterceptAsyncFunc != null)
+                    return InterceptAsyncFunc(message);
+            
                 return Task.CompletedTask;
             }
         }

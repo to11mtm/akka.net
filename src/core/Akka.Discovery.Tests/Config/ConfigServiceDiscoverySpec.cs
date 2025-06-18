@@ -1,12 +1,14 @@
 ﻿//-----------------------------------------------------------------------
-// <copyright file="Lease.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+// <copyright file="ConfigServiceDiscoverySpec.cs" company="Akka.NET Project">
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
+using System.Threading.Tasks;
 using Akka.Configuration;
 using FluentAssertions;
+using FluentAssertions.Extensions;
 using Xunit;
 
 namespace Akka.Discovery.Tests.Config
@@ -43,9 +45,9 @@ namespace Akka.Discovery.Tests.Config
         }
 
         [Fact]
-        public void Config_discovery_must_load_from_config()
+        public async Task Config_discovery_must_load_from_config()
         {
-            var result = _discovery.Lookup("service1", 100.Milliseconds()).Result;
+            var result = await _discovery.Lookup("service1", 100.Milliseconds());
             result.ServiceName.Should().Be("service1");
             result.Addresses.Should().Contain(new[]
             {
@@ -55,9 +57,9 @@ namespace Akka.Discovery.Tests.Config
         }
 
         [Fact]
-        public void Config_discovery_must_return_no_resolved_targets_if_not_in_config()
+        public async Task Config_discovery_must_return_no_resolved_targets_if_not_in_config()
         {
-            var result = _discovery.Lookup("dontexist", 100.Milliseconds()).Result;
+            var result = await _discovery.Lookup("dontexist", 100.Milliseconds());
             result.ServiceName.Should().Be("dontexist");
             result.Addresses.Should().BeEmpty();
         }

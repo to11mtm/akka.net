@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="FlowLimitWeightedSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -31,7 +31,7 @@ namespace Akka.Streams.Tests.Dsl
         {
             var input = new List<int>();
             var n = input.Count;
-            Func<int, long> costFunction = e => 999999L; // set to an arbitrarily big value
+            Func<int, long> costFunction = _ => 999999L; // set to an arbitrarily big value
             var future = Source.From(input)
                 .LimitWeighted(n, costFunction)
                 .Grouped(1000)
@@ -46,14 +46,14 @@ namespace Akka.Streams.Tests.Dsl
         {
             var input = Enumerable.Range(1, 15).ToList();
             var n = 1; // must not matter since costFn always evaluates to 0
-            Func<int, long> costFunction = e => 0L;
+            Func<int, long> costFunction = _ => 0L;
             var future = Source.From(input)
                 .LimitWeighted(n, costFunction)
                 .Grouped(1000)
                 .RunWith(Sink.FirstOrDefault<IEnumerable<int>>(), Materializer);
 
             future.Wait(RemainingOrDefault).Should().BeTrue();
-            future.Result.ShouldAllBeEquivalentTo(input);
+            future.Result.Should().BeEquivalentTo(input);
 
         }
 
@@ -62,14 +62,14 @@ namespace Akka.Streams.Tests.Dsl
         {
             var input = Enumerable.Range(1, 16).ToList();
             var n = input.Count;
-            Func<int, long> costFunction = e => 1L;
+            Func<int, long> costFunction = _ => 1L;
             var future = Source.From(input)
                 .LimitWeighted(n, costFunction)
                 .Grouped(1000)
                 .RunWith(Sink.FirstOrDefault<IEnumerable<int>>(), Materializer);
 
             future.Wait(RemainingOrDefault).Should().BeTrue();
-            future.Result.ShouldAllBeEquivalentTo(input);
+            future.Result.Should().BeEquivalentTo(input);
         }
 
         [Fact]
@@ -77,14 +77,14 @@ namespace Akka.Streams.Tests.Dsl
         {
             var input = new[] {"this", "is", "some", "string"};
             var n = input.Length;
-            Func<string, long> costFunction = e => 1L;
+            Func<string, long> costFunction = _ => 1L;
             var future = Source.From(input)
                 .LimitWeighted(n, costFunction)
                 .Grouped(1000)
                 .RunWith(Sink.FirstOrDefault<IEnumerable<string>>(), Materializer);
 
             future.Wait(RemainingOrDefault).Should().BeTrue();
-            future.Result.ShouldAllBeEquivalentTo(input);
+            future.Result.Should().BeEquivalentTo(input);
         }
 
         [Fact]
@@ -98,7 +98,7 @@ namespace Akka.Streams.Tests.Dsl
                 .Grouped(1000)
                 .RunWith(Sink.FirstOrDefault<IEnumerable<string>>(), Materializer);
 
-            future.Invoking(f => f.Wait(RemainingOrDefault)).ShouldThrow<StreamLimitReachedException>();
+            future.Invoking(f => f.Wait(RemainingOrDefault)).Should().Throw<StreamLimitReachedException>();
         }
     }
 }

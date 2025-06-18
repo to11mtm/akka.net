@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
-// <copyright file="ClusterSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+// <copyright file="ActorRefIgnoreSerializationSpec.cs" company="Akka.NET Project">
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -42,12 +42,11 @@ namespace Akka.Cluster.Tests
             system2 = ActorSystem.Create("sys2", Config);
         }
 
-
         protected override void AfterAll()
         {
             base.AfterAll();
-            system1.Terminate();
-            system2.Terminate();
+            Shutdown(system1);
+            Shutdown(system2);
         }
 
         [Fact]

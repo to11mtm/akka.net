@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ThreadLocalRandom.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -19,8 +19,7 @@ namespace Akka.Util
     {
         private static int _seed = Environment.TickCount;
 
-        [ThreadStatic]
-        private static Random _rng;
+        private static ThreadLocal<Random> _rng = new(() => new Random(Interlocked.Increment(ref _seed)));
 
         /// <summary>
         /// The current random number seed available to this thread
@@ -29,13 +28,7 @@ namespace Akka.Util
         {
             get
             {
-                if (_rng == null)
-                {
-                    Interlocked.CompareExchange(ref _rng,
-                        new Random(Interlocked.Increment(ref _seed)), null);
-                }
-
-                return _rng;
+                return _rng.Value;
             }
         }
     }

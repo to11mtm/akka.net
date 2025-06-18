@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="CompletedPublishers.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -38,9 +38,8 @@ namespace Akka.Streams.Implementation
                 ReactiveStreamsCompliance.TryOnComplete(subscriber);
             }
             catch (Exception e)
+                when (e is ISpecViolation)
             {
-                if (!(e is ISpecViolation))
-                    throw;
             }
         }
 
@@ -91,9 +90,8 @@ namespace Akka.Streams.Implementation
                 ReactiveStreamsCompliance.TryOnError(subscriber, Cause);
             }
             catch (Exception e)
+                when (e is ISpecViolation)
             {
-                if (!(e is ISpecViolation))
-                    throw;
             }
         }
 
@@ -129,7 +127,7 @@ namespace Akka.Streams.Implementation
                 if (!_done)
                 {
                     _done = true;
-                    _promise.Task.ContinueWith(t =>
+                    _promise.Task.ContinueWith(_ =>
                     {
                         if (!_promise.Task.Result.IsDefaultForType())
                         {
@@ -198,7 +196,7 @@ namespace Akka.Streams.Implementation
         /// <summary>
         /// TBD
         /// </summary>
-        public static readonly CancelledSubscription Instance = new CancelledSubscription();
+        public static readonly CancelledSubscription Instance = new();
 
         private CancelledSubscription() { }
 
@@ -270,9 +268,8 @@ namespace Akka.Streams.Implementation
                 ReactiveStreamsCompliance.RejectAdditionalSubscriber(subscriber, "Publisher");
             }
             catch (Exception e)
+                when (e is ISpecViolation)
             {
-                if (!(e is ISpecViolation))
-                    throw;
             }
         }
 

@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="AddressCache.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -41,19 +41,14 @@ namespace Akka.Remote.Serialization
     /// </summary>
     internal sealed class AddressCache : LruBoundedCache<string, Address>
     {
-        public AddressCache(int capacity = 1024, int evictAgeThreshold = 600) : base(capacity, evictAgeThreshold)
+        public AddressCache(int capacity = 1024, int evictAgeThreshold = 600) 
+            : base(capacity, evictAgeThreshold, FastHashComparer.Default)
         {
-        }
-
-        protected override int Hash(string k)
-        {
-            return FastHash.OfStringFast(k);
         }
 
         protected override Address Compute(string k)
         {
-            Address addr;
-            if (ActorPath.TryParseAddress(k, out addr))
+            if (ActorPath.TryParseAddress(k, out var addr))
             {
                 return addr;
             }

@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="GraphPartialSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -58,7 +58,7 @@ namespace Akka.Streams.Tests.Dsl
                     })).Run(Materializer).Item3;
 
             task.Wait(TimeSpan.FromSeconds(3)).Should().BeTrue();
-            task.Result.ShouldAllBeEquivalentTo(new[] {4, 8, 12});
+            task.Result.Should().BeEquivalentTo(new[] {4, 8, 12});
         }
 
         [Fact]
@@ -93,9 +93,9 @@ namespace Akka.Streams.Tests.Dsl
 
             var task = Task.WhenAll(t.Item1, t.Item2, t.Item3);
             task.Wait(TimeSpan.FromSeconds(3)).Should().BeTrue();
-            task.Result[0].ShouldAllBeEquivalentTo(new[] {1, 2, 3});
-            task.Result[1].ShouldAllBeEquivalentTo(new[] {2, 4, 6});
-            task.Result[2].ShouldAllBeEquivalentTo(new[] { 4, 8, 12 });
+            task.Result[0].Should().BeEquivalentTo(new[] {1, 2, 3});
+            task.Result[1].Should().BeEquivalentTo(new[] {2, 4, 6});
+            task.Result[2].Should().BeEquivalentTo(new[] { 4, 8, 12 });
         }
 
         [Fact]
@@ -136,16 +136,16 @@ namespace Akka.Streams.Tests.Dsl
 
             var task = Task.WhenAll(t.Item1.Item1, t.Item1.Item2, t.Item2.Item1, t.Item2.Item2);
             task.Wait(TimeSpan.FromSeconds(3)).Should().BeTrue();
-            task.Result.ShouldAllBeEquivalentTo(new[] {6, 12, 12, 24});
+            task.Result.Should().BeEquivalentTo(new[] {6, 12, 12, 24});
             t.Item3.Wait(TimeSpan.FromSeconds(3)).Should().BeTrue();
-            t.Item3.Result.ShouldAllBeEquivalentTo(new [] {4, 8, 12});
+            t.Item3.Result.Should().BeEquivalentTo(new [] {4, 8, 12});
         }
 
         [Fact]
         public void GraphDSLs_Partial_must_be_able_to_expose_the_ports_of_imported_graphs()
         {
             var p = GraphDsl.Create(Flow.Create<int>().Select(x => x + 1),
-                (b, flow) => new FlowShape<int, int>(flow.Inlet, flow.Outlet));
+                (_, flow) => new FlowShape<int, int>(flow.Inlet, flow.Outlet));
 
             var task = RunnableGraph.FromGraph(GraphDsl.Create(Sink.First<int>(), p, Keep.Left,
                 (b, sink, flow) =>

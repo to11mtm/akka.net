@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="Resizer.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -192,7 +192,7 @@ namespace Akka.Routing
             var pressure = Pressure(routees);
             var delta = Filter(pressure, currentSize);
             var proposed = currentSize + delta;
-
+            
             if (proposed < LowerBound)
                 return delta + (LowerBound - proposed);
             if (proposed > UpperBound)
@@ -227,9 +227,9 @@ namespace Akka.Routing
                         if (underlying is ActorCell cell)
                         {
                             if (PressureThreshold == 1)
-                                return cell.Mailbox.IsScheduled() && cell.Mailbox.HasMessages;
+                                return (cell.Mailbox.IsScheduled() || cell.Mailbox.IsSuspended()) && cell.Mailbox.HasMessages;
                             if (PressureThreshold < 1)
-                                return cell.Mailbox.IsScheduled() && cell.CurrentMessage != null;
+                                return (cell.Mailbox.IsScheduled() || cell.Mailbox.IsSuspended()) && cell.CurrentMessage != null;
 
                             return cell.Mailbox.NumberOfMessages >= PressureThreshold;
                         }
@@ -344,7 +344,7 @@ namespace Akka.Routing
         /// </summary>
         public int MessagesPerResize { get; private set; }
 
-        /// <inheritdoc/>
+        
         public bool Equals(DefaultResizer other)
         {
             if (ReferenceEquals(null, other)) return false;
@@ -352,7 +352,7 @@ namespace Akka.Routing
             return MessagesPerResize == other.MessagesPerResize && BackoffRate.Equals(other.BackoffRate) && RampupRate.Equals(other.RampupRate) && BackoffThreshold.Equals(other.BackoffThreshold) && UpperBound == other.UpperBound && PressureThreshold == other.PressureThreshold && LowerBound == other.LowerBound;
         }
 
-        /// <inheritdoc/>
+       
         public override bool Equals(object obj)
         {
             if (ReferenceEquals(null, obj)) return false;
@@ -361,7 +361,7 @@ namespace Akka.Routing
             return Equals((DefaultResizer)obj);
         }
 
-        /// <inheritdoc/>
+        
         public override int GetHashCode()
         {
             unchecked

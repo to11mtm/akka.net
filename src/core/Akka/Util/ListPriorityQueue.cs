@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ListPriorityQueue.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -25,7 +25,7 @@ namespace Akka.Util
         /// <summary>
         /// The default priority generator.
         /// </summary>
-        internal static readonly Func<object, int> DefaultPriorityCalculator = message => 1;
+        internal static readonly Func<object, int> DefaultPriorityCalculator = _ => 1;
         
         /// <summary>
         /// Creates a new priority queue.
@@ -116,9 +116,9 @@ namespace Akka.Util
         }
 
         /// <summary>
-        /// TBD
+        /// Checks if the internal priority queue is in a consistent state.
         /// </summary>
-        /// <returns>TBD</returns>
+        /// <returns>True if the queue is in a consistent state, false otherwise.</returns>
         public bool IsConsistent()
         {
             // is the heap property true for all data?

@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="StreamSubscriptionTimeout.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -36,7 +36,6 @@ namespace Akka.Streams.Implementation
         {
         }
 
-#if SERIALIZATION
         /// <summary>
         /// Initializes a new instance of the <see cref="SubscriptionTimeoutException"/> class.
         /// </summary>
@@ -45,7 +44,6 @@ namespace Akka.Streams.Implementation
         protected SubscriptionTimeoutException(SerializationInfo info, StreamingContext context) : base(info, context)
         {
         }
-#endif
     }
 
     /// <summary>
@@ -57,7 +55,7 @@ namespace Akka.Streams.Implementation
         /// <summary>
         /// TBD
         /// </summary>
-        public static readonly CancelingSubscriber<T> Instance = new CancelingSubscriber<T>();
+        public static readonly CancelingSubscriber<T> Instance = new();
         private CancelingSubscriber() { }
 
         /// <summary>
@@ -100,7 +98,7 @@ namespace Akka.Streams.Implementation
         /// <summary>
         /// TBD
         /// </summary>
-        public static readonly NoopSubscriptionTimeout Instance = new NoopSubscriptionTimeout();
+        public static readonly NoopSubscriptionTimeout Instance = new();
         private NoopSubscriptionTimeout() { }
 
         /// <summary>

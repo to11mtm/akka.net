@@ -1,12 +1,13 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="Attributes.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Text;
 using Akka.Event;
@@ -62,17 +63,9 @@ namespace Akka.Streams
                 if (string.IsNullOrEmpty(value)) throw new ArgumentNullException(nameof(value), "Name attribute cannot be empty");
                 Value = value;
             }
-
-            /// <inheritdoc/>
             public bool Equals(Name other) => !ReferenceEquals(other, null) && Equals(Value, other.Value);
-
-            /// <inheritdoc/>
-            public override bool Equals(object obj) => obj is Name && Equals((Name)obj);
-
-            /// <inheritdoc/>
+            public override bool Equals(object obj) => obj is Name name && Equals(name);
             public override int GetHashCode() => Value.GetHashCode();
-
-            /// <inheritdoc/>
             public override string ToString() => $"Name({Value})";
         }
 
@@ -104,8 +97,6 @@ namespace Akka.Streams
                 Initial = initial;
                 Max = max;
             }
-
-            /// <inheritdoc/>
             public bool Equals(InputBuffer other)
             {
                 if (ReferenceEquals(other, null)) return false;
@@ -113,19 +104,14 @@ namespace Akka.Streams
                 return Initial == other.Initial && Max == other.Max;
             }
 
-            /// <inheritdoc/>
-            public override bool Equals(object obj) => obj is InputBuffer && Equals((InputBuffer) obj);
-
-            /// <inheritdoc/>
+            public override bool Equals(object obj) => obj is InputBuffer buffer && Equals(buffer);
             public override int GetHashCode()
             {
                 unchecked
                 {
-                    return (Initial*397) ^ Max;
+                    return (Initial * 397) ^ Max;
                 }
             }
-
-            /// <inheritdoc/>
             public override string ToString() => $"InputBuffer(initial={Initial}, max={Max})";
         }
 
@@ -165,7 +151,6 @@ namespace Akka.Streams
                 OnFailure = onFailure;
             }
 
-            /// <inheritdoc/>
             public bool Equals(LogLevels other)
             {
                 if (ReferenceEquals(other, null))
@@ -175,23 +160,18 @@ namespace Akka.Streams
 
                 return OnElement == other.OnElement && OnFinish == other.OnFinish && OnFailure == other.OnFailure;
             }
-
-            /// <inheritdoc/>
-            public override bool Equals(object obj) => obj is LogLevels && Equals((LogLevels) obj);
-
-            /// <inheritdoc/>
+            public override bool Equals(object obj) => obj is LogLevels levels && Equals(levels);
             public override int GetHashCode()
             {
                 unchecked
                 {
-                    var hashCode = (int) OnElement;
-                    hashCode = (hashCode*397) ^ (int) OnFinish;
-                    hashCode = (hashCode*397) ^ (int) OnFailure;
+                    var hashCode = (int)OnElement;
+                    hashCode = (hashCode * 397) ^ (int)OnFinish;
+                    hashCode = (hashCode * 397) ^ (int)OnFailure;
                     return hashCode;
                 }
             }
 
-            /// <inheritdoc/>
             public override string ToString() => $"LogLevel(element={OnElement}, finish={OnFinish}, failure={OnFailure})";
         }
 
@@ -200,19 +180,10 @@ namespace Akka.Streams
         /// </summary>
         public sealed class AsyncBoundary : IAttribute, IEquatable<AsyncBoundary>
         {
-            /// <summary>
-            /// TBD
-            /// </summary>
-            public static readonly AsyncBoundary Instance = new AsyncBoundary();
+            public static readonly AsyncBoundary Instance = new();
             private AsyncBoundary() { }
-
-            /// <inheritdoc/>
             public bool Equals(AsyncBoundary other) => other is AsyncBoundary;
-
-            /// <inheritdoc/>
             public override bool Equals(object obj) => obj is AsyncBoundary;
-
-            /// <inheritdoc/>
             public override string ToString() => "AsyncBoundary";
         }
 
@@ -226,9 +197,9 @@ namespace Akka.Streams
         /// is to call `cancelStage` which shuts down the stage completely. 
         /// The given strategy will allow customization of how the shutdown procedure should be done precisely.
         /// </summary>
-        public sealed class CancellationStrategy:IMandatoryAttribute
+        public sealed class CancellationStrategy : IMandatoryAttribute
         {
-            internal static CancellationStrategy Default { get; } = new CancellationStrategy(new PropagateFailure());
+            internal static CancellationStrategy Default { get; } = new(new PropagateFailure());
 
             public IStrategy Strategy { get; }
 
@@ -284,8 +255,8 @@ namespace Akka.Streams
             /// such a delay. During this time, the stream will be mostly "silent", i.e. it cannot make progress because of backpressure,
             /// but you might still be able observe a long delay at the ultimate source.
             /// </summary>
-            public class AfterDelay : IStrategy 
-            { 
+            public class AfterDelay : IStrategy
+            {
                 public TimeSpan Delay { get; }
                 public IStrategy Strategy { get; }
 
@@ -296,28 +267,21 @@ namespace Akka.Streams
                 }
             }
         }
-
-        /// <summary>
-        /// TBD
-        /// </summary>
-        public static readonly Attributes None = new Attributes();
+        
+        public static readonly Attributes None = new();
 
         private readonly IAttribute[] _attributes;
-
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <param name="attributes">TBD</param>
+        
         public Attributes(params IAttribute[] attributes)
         {
-            _attributes = attributes ?? new IAttribute[0];
+            _attributes = attributes ?? [];
         }
 
         /// <summary>
         /// The list is ordered with the most specific attribute first, least specific last.
         /// 
         /// Note that operators in general should not inspect the whole hierarchy but instead use
-        /// <see cref="GetAttribute{TAttr}"/> to get the most specific attribute value.
+        /// <see cref="GetAttribute{TAttr}(TAttr)"/> to get the most specific attribute value.
         /// </summary>
         public IEnumerable<IAttribute> AttributeList => _attributes;
 
@@ -328,41 +292,35 @@ namespace Akka.Streams
         /// INTERNAL API
         /// </summary>
         internal bool IsAsync
-            => _attributes.Count() > 0 && 
+            => _attributes.Length > 0 &&
                 _attributes.Any(
-                    attr => attr is AsyncBoundary || 
-                    attr is ActorAttributes.Dispatcher);
+                    attr => attr is AsyncBoundary or ActorAttributes.Dispatcher);
 
         /// <summary>
         /// Get all attributes of a given type (or subtypes thereof).
         /// 
         /// Note that operators in general should not inspect the whole hierarchy but instead use
-        /// <see cref="GetAttribute{TAttr}"/> to get the most specific attribute value.
+        /// <see cref="GetAttribute{TAttr}(TAttr)"/> to get the most specific attribute value.
         /// 
         /// The list is ordered with the most specific attribute first, least specific last.
         /// </summary>
-        /// <typeparam name="TAttr">TBD</typeparam>
-        /// <returns>TBD</returns>
         public IEnumerable<TAttr> GetAttributeList<TAttr>() where TAttr : IAttribute
-            => _attributes.Length == 0 ? Enumerable.Empty<TAttr>() : _attributes.Where(a => a is TAttr).Cast<TAttr>();
+            => _attributes.Length == 0 ? [] : _attributes.Where(a => a is TAttr).Cast<TAttr>();
 
         /// <summary>
         /// Get the last (most specific) attribute of a given type or subtype thereof.
         /// If no such attribute exists the default value is returned.
         /// </summary>
-        /// <typeparam name="TAttr">TBD</typeparam>
-        /// <param name="defaultIfNotFound">TBD</param>
-        /// <returns>TBD</returns>
-        public TAttr GetAttribute<TAttr>(TAttr defaultIfNotFound) where TAttr : class, IAttribute
+        #nullable enable
+        [return: NotNullIfNotNull("defaultIfNotFound")]
+        public TAttr? GetAttribute<TAttr>(TAttr? defaultIfNotFound) where TAttr : class, IAttribute
             => GetAttribute<TAttr>() ?? defaultIfNotFound;
+        #nullable restore
 
         /// <summary>
         /// Get the first (least specific) attribute of a given type or subtype thereof.
         /// If no such attribute exists the default value is returned.
         /// </summary>
-        /// <typeparam name="TAttr">TBD</typeparam>
-        /// <param name="defaultIfNotFound">TBD</param>
-        /// <returns>TBD</returns>
         [Obsolete("Attributes should always be most specific, use GetAttribute<TAttr>()")]
         public TAttr GetFirstAttribute<TAttr>(TAttr defaultIfNotFound) where TAttr : class, IAttribute
             => GetFirstAttribute<TAttr>() ?? defaultIfNotFound;
@@ -370,16 +328,12 @@ namespace Akka.Streams
         /// <summary>
         /// Get the last (most specific) attribute of a given type or subtype thereof.
         /// </summary>
-        /// <typeparam name="TAttr">TBD</typeparam>
-        /// <returns>TBD</returns>
         public TAttr GetAttribute<TAttr>() where TAttr : class, IAttribute
             => _attributes.LastOrDefault(attr => attr is TAttr) as TAttr;
 
         /// <summary>
         /// Get the first (least specific) attribute of a given type or subtype thereof.
         /// </summary>
-        /// <typeparam name="TAttr">TBD</typeparam>
-        /// <returns>TBD</returns>
         [Obsolete("Attributes should always be most specific, use GetAttribute<TAttr>()")]
         public TAttr GetFirstAttribute<TAttr>() where TAttr : class, IAttribute
             => _attributes.FirstOrDefault(attr => attr is TAttr) as TAttr;
@@ -388,8 +342,6 @@ namespace Akka.Streams
         /// Get the most specific of one of the mandatory attributes. Mandatory attributes are guaranteed
         /// to always be among the attributes when the attributes are coming from a materialization.
         /// </summary>
-        /// <typeparam name="TAttr"></typeparam>
-        /// <returns></returns>
         public TAttr GetMandatoryAttribute<TAttr>() where TAttr : class, IMandatoryAttribute
         {
             if (!(_attributes.First(attr => attr is TAttr) is TAttr result))
@@ -400,8 +352,6 @@ namespace Akka.Streams
         /// <summary>
         /// Adds given attributes to the end of these attributes.
         /// </summary>
-        /// <param name="other">TBD</param>
-        /// <returns>TBD</returns>
         public Attributes And(Attributes other)
         {
             if (_attributes.Length == 0)
@@ -414,21 +364,13 @@ namespace Akka.Streams
         /// <summary>
         /// Adds given attribute to the end of these attributes.
         /// </summary>
-        /// <param name="other">TBD</param>
-        /// <returns>TBD</returns>
-        public Attributes And(IAttribute other) => new Attributes(_attributes.Concat(new[] { other }).ToArray());
+        public Attributes And(IAttribute other) => new(_attributes.Concat([other]).ToArray());
 
         /// <summary>
         /// Extracts Name attributes and concatenates them.
         /// </summary>
-        /// <returns>TBD</returns>
         public string GetNameLifted() => GetNameOrDefault(null);
-
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <param name="defaultIfNotFound">TBD</param>
-        /// <returns>TBD</returns>
+        
         public string GetNameOrDefault(string defaultIfNotFound = "unknown-operation")
         {
             if (_attributes.Length == 0)
@@ -455,11 +397,11 @@ namespace Akka.Streams
         /// Note that operators in general should not inspect the whole hierarchy but instead use
         /// `get` to get the most specific attribute value.
         /// </summary>
-        /// <typeparam name="TAttr">TBD</typeparam>
-        /// <param name="attribute">TBD</param>
-        /// <returns>TBD</returns>
-        public bool Contains<TAttr>(TAttr attribute) where TAttr : IAttribute => _attributes.Contains(attribute);
+        [Obsolete("Use GetAttribute<TAttr>() instead")]
+        public bool Contains<TAttr>(TAttr attribute) where TAttr : IAttribute => _attributes.Any(a => a is TAttr);
 
+        public bool Contains<TAttr>() where TAttr : IAttribute => _attributes.Any(a => a is TAttr);
+        
         /// <summary>
         /// Specifies the name of the operation.
         /// If the name is null or empty the name is ignored, i.e. <see cref="None"/> is returned.
@@ -468,12 +410,10 @@ namespace Akka.Streams
         /// the name is sometimes used as part of actor name. If that is not desired
         /// the name can be added in it's raw format using `.And(new Attributes(new Name(name)))`.
         /// </summary>
-        /// <param name="name">TBD</param>
-        /// <returns>TBD</returns>
         public static Attributes CreateName(string name)
-            => string.IsNullOrEmpty(name) ? 
-                None : 
-                new Attributes(new Name(Uri.EscapeUriString(name)));
+            => string.IsNullOrEmpty(name) ?
+                None :
+                new Attributes(new Name(Uri.EscapeDataString(name)));
 
         /// <summary>
         /// Each asynchronous piece of a materialized stream topology is executed by one Actor
@@ -483,13 +423,13 @@ namespace Akka.Streams
         /// <param name="initial">TBD</param>
         /// <param name="max">TBD</param>
         /// <returns>TBD</returns>
-        public static Attributes CreateInputBuffer(int initial, int max) => new Attributes(new InputBuffer(initial, max));
+        public static Attributes CreateInputBuffer(int initial, int max) => new(new InputBuffer(initial, max));
 
         /// <summary>
         /// TBD
         /// </summary>
         /// <returns>TBD</returns>
-        public static Attributes CreateAsyncBoundary() => new Attributes(AsyncBoundary.Instance);
+        public static Attributes CreateAsyncBoundary() => new(AsyncBoundary.Instance);
 
         ///<summary>
         /// Configures <see cref="FlowOperations.Log{TIn,TOut,TMat}"/> stage log-levels to be used when logging.
@@ -504,7 +444,7 @@ namespace Akka.Streams
         /// <returns>TBD</returns>
         public static Attributes CreateLogLevels(LogLevel onElement = LogLevel.DebugLevel,
             LogLevel onFinish = LogLevel.DebugLevel, LogLevel onError = LogLevel.ErrorLevel)
-            => new Attributes(new LogLevels(onElement, onFinish, onError));
+            => new(new LogLevels(onElement, onFinish, onError));
 
         // TODO: different than scala code, investigate later.
         /// <summary>
@@ -516,14 +456,10 @@ namespace Akka.Streams
         /// <returns>TBD</returns>
         public static string ExtractName(IModule module, string defaultIfNotFound)
         {
-            var copy = module as CopiedModule;
-
-            return copy != null
+            return module is CopiedModule copy
                 ? copy.Attributes.And(copy.CopyOf.Attributes).GetNameOrDefault(defaultIfNotFound)
                 : module.Attributes.GetNameOrDefault(defaultIfNotFound);
         }
-
-        /// <inheritdoc/>
         public override string ToString() => $"Attributes({string.Join(", ", _attributes as IEnumerable<IAttribute>)})";
     }
 
@@ -552,8 +488,6 @@ namespace Akka.Streams
             {
                 Name = name;
             }
-
-            /// <inheritdoc/>
             public bool Equals(Dispatcher other)
             {
                 if (ReferenceEquals(other, null))
@@ -562,14 +496,8 @@ namespace Akka.Streams
                     return true;
                 return Equals(Name, other.Name);
             }
-
-            /// <inheritdoc/>
-            public override bool Equals(object obj) => obj is Dispatcher && Equals((Dispatcher) obj);
-
-            /// <inheritdoc/>
+            public override bool Equals(object obj) => obj is Dispatcher dispatcher && Equals(dispatcher);
             public override int GetHashCode() => Name?.GetHashCode() ?? 0;
-
-            /// <inheritdoc/>
             public override string ToString() => $"Dispatcher({Name})";
         }
 
@@ -591,12 +519,10 @@ namespace Akka.Streams
             {
                 Decider = decider;
             }
-
-            /// <inheritdoc/>
             public override string ToString() => "SupervisionStrategy";
         }
 
-        public static Dispatcher IODispatcher { get; } = new Dispatcher("akka.stream.materializer.blocking-io-dispatcher");
+        public static Dispatcher IODispatcher { get; } = new("akka.stream.materializer.blocking-io-dispatcher");
 
         /// <summary>
         /// Enables additional low level troubleshooting logging at DEBUG log level
@@ -613,22 +539,14 @@ namespace Akka.Streams
             {
                 Enabled = enabled;
             }
-
-            /// <inheritdoc/>
             public bool Equals(DebugLogging other)
             {
                 if (other is null) return false;
                 if (ReferenceEquals(this, other)) return true;
                 return Enabled == other.Enabled;
             }
-
-            /// <inheritdoc/>
             public override bool Equals(object obj) => obj is DebugLogging attr && Equals(attr);
-
-            /// <inheritdoc/>
             public override int GetHashCode() => Enabled.GetHashCode();
-
-            /// <inheritdoc/>
             public override string ToString() => $"DebugLogging(enabled={Enabled})";
         }
 
@@ -658,11 +576,7 @@ namespace Akka.Streams
                 if (ReferenceEquals(this, other)) return true;
                 return Timeout.Equals(other.Timeout) && Mode.Equals(other.Mode);
             }
-
-            /// <inheritdoc/>
             public override bool Equals(object obj) => obj is StreamSubscriptionTimeout attr && Equals(attr);
-
-            /// <inheritdoc/>
             public override int GetHashCode()
             {
                 unchecked
@@ -671,8 +585,6 @@ namespace Akka.Streams
                     return (initial * 397) ^ Mode.GetHashCode();
                 }
             }
-
-            /// <inheritdoc/>
             public override string ToString() => $"StreamSubscriptionTimeout(timeout={Timeout.TotalMilliseconds}ms, mode={Mode})";
         }
 
@@ -699,13 +611,8 @@ namespace Akka.Streams
                 return Limit == other.Limit;
             }
 
-            /// <inheritdoc/>
             public override bool Equals(object obj) => obj is OutputBurstLimit attr && Equals(attr);
-
-            /// <inheritdoc/>
             public override int GetHashCode() => Limit.GetHashCode();
-
-            /// <inheritdoc/>
             public override string ToString() => $"OutputBurstLimit(limit={Limit})";
         }
 
@@ -733,13 +640,8 @@ namespace Akka.Streams
                 return Enabled == other.Enabled;
             }
 
-            /// <inheritdoc/>
             public override bool Equals(object obj) => obj is FuzzingMode attr && Equals(attr);
-
-            /// <inheritdoc/>
             public override int GetHashCode() => Enabled.GetHashCode();
-
-            /// <inheritdoc/>
             public override string ToString() => $"FuzzingMode(enabled={Enabled})";
         }
 
@@ -768,13 +670,8 @@ namespace Akka.Streams
                 return Size == other.Size;
             }
 
-            /// <inheritdoc/>
             public override bool Equals(object obj) => obj is MaxFixedBufferSize attr && Equals(attr);
-
-            /// <inheritdoc/>
             public override int GetHashCode() => Size.GetHashCode();
-
-            /// <inheritdoc/>
             public override string ToString() => $"MaxFixedBufferSize(size={Size})";
         }
 
@@ -802,13 +699,8 @@ namespace Akka.Streams
                 return Limit == other.Limit;
             }
 
-            /// <inheritdoc/>
             public override bool Equals(object obj) => obj is SyncProcessingLimit attr && Equals(attr);
-
-            /// <inheritdoc/>
             public override int GetHashCode() => Limit.GetHashCode();
-
-            /// <inheritdoc/>
             public override string ToString() => $"SyncProcessingLimit(limit={Limit})";
         }
 
@@ -817,7 +709,7 @@ namespace Akka.Streams
         /// </summary>
         /// <param name="dispatcherName">TBD</param>
         /// <returns>TBD</returns>
-        public static Attributes CreateDispatcher(string dispatcherName) => new Attributes(new Dispatcher(dispatcherName));
+        public static Attributes CreateDispatcher(string dispatcherName) => new(new Dispatcher(dispatcherName));
 
         /// <summary>
         /// Decides how exceptions from user are to be handled
@@ -829,7 +721,7 @@ namespace Akka.Streams
         /// <param name="strategy">TBD</param>
         /// <returns>TBD</returns>
         public static Attributes CreateSupervisionStrategy(Decider strategy)
-            => new Attributes(new SupervisionStrategy(strategy));
+            => new(new SupervisionStrategy(strategy));
 
         /// <summary>
         /// Enables additional low level troubleshooting logging at DEBUG log level
@@ -837,7 +729,7 @@ namespace Akka.Streams
         /// <param name="enabled"></param>
         /// <returns></returns>
         public static Attributes CreateDebugLogging(bool enabled)
-            => new Attributes(new DebugLogging(enabled));
+            => new(new DebugLogging(enabled));
 
         /// <summary>
         /// Defines a timeout for stream subscription and what action to take when that hits.
@@ -846,9 +738,9 @@ namespace Akka.Streams
         /// <param name="mode"></param>
         /// <returns></returns>
         public static Attributes CreateStreamSubscriptionTimeout(
-            TimeSpan timeout, 
+            TimeSpan timeout,
             StreamSubscriptionTimeoutTerminationMode mode)
-            => new Attributes(new StreamSubscriptionTimeout(timeout, mode));
+            => new(new StreamSubscriptionTimeout(timeout, mode));
 
         /// <summary>
         /// Maximum number of elements emitted in batch if downstream signals large demand.
@@ -856,7 +748,7 @@ namespace Akka.Streams
         /// <param name="limit"></param>
         /// <returns></returns>
         public static Attributes CreateOutputBurstLimit(int limit)
-            => new Attributes(new OutputBurstLimit(limit));
+            => new(new OutputBurstLimit(limit));
 
         /// <summary>
         /// Test utility: fuzzing mode means that GraphStage events are not processed
@@ -865,7 +757,7 @@ namespace Akka.Streams
         /// <param name="enabled"></param>
         /// <returns></returns>
         public static Attributes CreateFuzzingMode(bool enabled)
-            => new Attributes(new FuzzingMode(enabled));
+            => new(new FuzzingMode(enabled));
 
         /// <summary>
         /// Configure the maximum buffer size for which a FixedSizeBuffer will be preallocated.
@@ -875,7 +767,7 @@ namespace Akka.Streams
         /// <param name="size"></param>
         /// <returns></returns>
         public static Attributes CreateMaxFixedBufferSize(int size)
-            => new Attributes(new MaxFixedBufferSize(size));
+            => new(new MaxFixedBufferSize(size));
 
         /// <summary>
         /// Limit for number of messages that can be processed synchronously in stream to substream communication
@@ -883,9 +775,9 @@ namespace Akka.Streams
         /// <param name="limit"></param>
         /// <returns></returns>
         public static Attributes CreateSyncProcessingLimit(int limit)
-            => new Attributes(new SyncProcessingLimit(limit));
+            => new(new SyncProcessingLimit(limit));
     }
-    
+
     /// <summary>
     /// Attributes for stream refs (<see cref="ISourceRef{TOut}"/> and <see cref="ISinkRef{TIn}"/>).
     /// Note that more attributes defined in <see cref="Attributes"/> and <see cref="ActorAttributes"/>.
@@ -921,13 +813,8 @@ namespace Akka.Streams
                 return Timeout.Equals(other.Timeout);
             }
 
-            /// <inheritdoc/>
             public override bool Equals(object obj) => obj is SubscriptionTimeout attr && Equals(attr);
-
-            /// <inheritdoc/>
             public override int GetHashCode() => Timeout.GetHashCode();
-
-            /// <inheritdoc/>
             public override string ToString() => $"SubscriptionTimeout(timeout={Timeout.TotalMilliseconds}ms)";
         }
 
@@ -937,7 +824,7 @@ namespace Akka.Streams
         public sealed class BufferCapacity : IStreamRefAttribute, IEquatable<BufferCapacity>
         {
             public int Capacity { get; }
-            public BufferCapacity (int capacity)
+            public BufferCapacity(int capacity)
             {
                 if (capacity <= 0)
                     throw new ArgumentException("Capacity must be greater than zero", nameof(capacity));
@@ -951,13 +838,9 @@ namespace Akka.Streams
                 return Capacity == other.Capacity;
             }
 
-            /// <inheritdoc/>
             public override bool Equals(object obj) => obj is BufferCapacity attr && Equals(attr);
-
-            /// <inheritdoc/>
             public override int GetHashCode() => Capacity.GetHashCode();
 
-            /// <inheritdoc/>
             public override string ToString() => $"BufferCapacity(capacity={Capacity})";
         }
 
@@ -983,13 +866,10 @@ namespace Akka.Streams
                 return Timeout.Equals(other.Timeout);
             }
 
-            /// <inheritdoc/>
             public override bool Equals(object obj) => obj is DemandRedeliveryInterval attr && Equals(attr);
 
-            /// <inheritdoc/>
             public override int GetHashCode() => Timeout.GetHashCode();
 
-            /// <inheritdoc/>
             public override string ToString() => $"DemandRedeliveryInterval(timeout={Timeout.TotalMilliseconds}ms)";
         }
 
@@ -1014,39 +894,33 @@ namespace Akka.Streams
                 if (ReferenceEquals(this, other)) return true;
                 return Timeout.Equals(other.Timeout);
             }
-
-            /// <inheritdoc/>
             public override bool Equals(object obj) => obj is FinalTerminationSignalDeadline attr && Equals(attr);
-
-            /// <inheritdoc/>
             public override int GetHashCode() => Timeout.GetHashCode();
-
-            /// <inheritdoc/>
             public override string ToString() => $"FinalTerminationSignalDeadline(timeout={Timeout.TotalMilliseconds}ms)";
         }
 
         /// <summary>
         /// Specifies the subscription timeout within which the remote side MUST subscribe to the handed out stream reference.
         /// </summary>
-        public static Attributes CreateSubscriptionTimeout(TimeSpan timeout) => new Attributes(new SubscriptionTimeout(timeout));
+        public static Attributes CreateSubscriptionTimeout(TimeSpan timeout) => new(new SubscriptionTimeout(timeout));
 
         /// <summary>
         /// Specifies the size of the buffer on the receiving side that is eagerly filled even without demand.
         /// </summary>
         public static Attributes CreateBufferCapacity(int capacity)
-            => new Attributes(new BufferCapacity(capacity));
+            => new(new BufferCapacity(capacity));
 
 
         /// <summary>
         /// If no new elements arrive within this timeout, demand is redelivered.
         /// </summary>
-        public static Attributes CreateDemandRedeliveryInterval(TimeSpan timeout) 
-            => new Attributes(new DemandRedeliveryInterval(timeout));
+        public static Attributes CreateDemandRedeliveryInterval(TimeSpan timeout)
+            => new(new DemandRedeliveryInterval(timeout));
 
         /// <summary>
         /// The time between the Terminated signal being received and when the local SourceRef determines to fail itself
         /// </summary>
-        public static Attributes CreateFinalTerminationSignalDeadline(TimeSpan timeout) 
-            => new Attributes(new FinalTerminationSignalDeadline(timeout));
+        public static Attributes CreateFinalTerminationSignalDeadline(TimeSpan timeout)
+            => new(new FinalTerminationSignalDeadline(timeout));
     }
 }

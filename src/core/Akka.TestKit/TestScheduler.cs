@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="TestScheduler.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -11,6 +11,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
 using Akka.Configuration;
+using Akka.Dispatch;
 using Akka.Event;
 
 namespace Akka.TestKit
@@ -56,8 +57,7 @@ namespace Akka.TestKit
                     si.DeliveryCount++;
                 }
 
-                ConcurrentQueue<ScheduledItem> removed;
-                _scheduledWork.TryRemove(t.Key, out removed);
+                _scheduledWork.TryRemove(t.Key, out var removed);
 
                 foreach (var i in removed.Where(r => r.Repeating && (r.Cancelable == null || !r.Cancelable.IsCancellationRequested)))
                 {
@@ -87,10 +87,14 @@ namespace Akka.TestKit
         {
             var scheduledTime = _now.Add(initialDelay ?? delay).UtcTicks;
 
-            if (!_scheduledWork.TryGetValue(scheduledTime, out var tickItems))
+            ConcurrentQueue<ScheduledItem> tickItems;
+            while (!_scheduledWork.TryGetValue(scheduledTime, out tickItems))
             {
                 tickItems = new ConcurrentQueue<ScheduledItem>();
-                _scheduledWork.TryAdd(scheduledTime, tickItems);
+                if (_scheduledWork.TryAdd(scheduledTime, tickItems))
+                {
+                    break;
+                }
             }
             
             var type = message == null ? ScheduledItem.ScheduledItemType.Action : ScheduledItem.ScheduledItemType.Message;
@@ -310,5 +314,26 @@ namespace Akka.TestKit
                 DeliveryCount = 0;
             }
         }
+
+         // don't need these methods - not used during testing
+         public void ScheduleOnce(TimeSpan delay, IRunnable action, ICancelable cancelable)
+         {
+             throw new NotImplementedException();
+         }
+
+         public void ScheduleOnce(TimeSpan delay, IRunnable action)
+         {
+             throw new NotImplementedException();
+         }
+
+         public void ScheduleRepeatedly(TimeSpan initialDelay, TimeSpan interval, IRunnable action, ICancelable cancelable)
+         {
+             throw new NotImplementedException();
+         }
+
+         public void ScheduleRepeatedly(TimeSpan initialDelay, TimeSpan interval, IRunnable action)
+         {
+             throw new NotImplementedException();
+         }
     }
 }

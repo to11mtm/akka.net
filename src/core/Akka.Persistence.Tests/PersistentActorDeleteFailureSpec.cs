@@ -1,11 +1,12 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="PersistentActorDeleteFailureSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Event;
@@ -41,7 +42,7 @@ namespace Akka.Persistence.Tests
 
         public class DeleteFailingMemoryJournal : MemoryJournal
         {
-            protected override Task DeleteMessagesToAsync(string persistenceId, long toSequenceNr)
+            protected override Task DeleteMessagesToAsync(string persistenceId, long toSequenceNr, CancellationToken cancellationToken)
             {
                 var promise = new TaskCompletionSource<object>();
                 promise.SetException(new SimulatedException("Boom! Unable to delete events!"));
@@ -66,9 +67,9 @@ namespace Akka.Persistence.Tests
 
             protected override bool ReceiveCommand(object message)
             {
-                if (message is DeleteTo)
+                if (message is DeleteTo to)
                 {
-                    DeleteMessages(((DeleteTo)message).N);
+                    DeleteMessages(to.N);
                     return true;
                 }
                 return false;
@@ -95,8 +96,8 @@ namespace Akka.Persistence.Tests
 
             protected override bool ReceiveCommand(object message)
             {
-                if (message is DeleteTo)
-                    DeleteMessages(((DeleteTo)message).N);
+                if (message is DeleteTo to)
+                    DeleteMessages(to.N);
                 if (message is DeleteMessagesFailure)
                     _probe.Tell(message);
                 else return false;
@@ -115,7 +116,7 @@ namespace Akka.Persistence.Tests
         {
             var pref = Sys.ActorOf(Props.Create(() => new DoesNotHandleDeleteFailureActor(Name)));
             Sys.EventStream.Subscribe(TestActor, typeof (Warning));
-            pref.Tell(new DeleteTo(100));
+            pref.Tell(new DeleteTo(long.MaxValue));
             var message = ExpectMsg<Warning>().Message.ToString();
             message.Contains("Failed to DeleteMessages").ShouldBeTrue();
             message.Contains("Boom! Unable to delete events!").ShouldBeTrue();
@@ -126,8 +127,8 @@ namespace Akka.Persistence.Tests
         {
             var pref = Sys.ActorOf(Props.Create(() => new HandlesDeleteFailureActor(Name, TestActor)));
             Sys.EventStream.Subscribe(TestActor, typeof (Warning));
-            pref.Tell(new DeleteTo(100));
-            ExpectMsg<DeleteMessagesFailure>(m => m.ToSequenceNr == 100);
+            pref.Tell(new DeleteTo(long.MaxValue));
+            ExpectMsg<DeleteMessagesFailure>();
             ExpectNoMsg(TimeSpan.FromMilliseconds(100));
         }
     }

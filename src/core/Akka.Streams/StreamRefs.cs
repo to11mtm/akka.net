@@ -1,17 +1,19 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="StreamRefs.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
+using System.Runtime.Serialization;
 using Akka.Actor;
 using Akka.Pattern;
 using Akka.Streams.Dsl;
 using Akka.Streams.Implementation;
 using Akka.Util;
 
+#pragma warning disable 628
 namespace Akka.Streams
 {
     /// <summary>
@@ -28,7 +30,7 @@ namespace Akka.Streams
     /// For additional configuration see `reference.conf` as well as <see cref="StreamRefAttributes"/>.
     /// </summary>
     /// <seealso cref="ISourceRef{TOut}"/>
-    public interface ISinkRef<TIn>
+    public interface ISinkRef<TIn> : ISurrogated
     {
         Sink<TIn, NotUsed> Sink { get; }
     }
@@ -58,6 +60,16 @@ namespace Akka.Streams
             "This should not happen due to proper flow-control, please open a ticket on the issue tracker: https://github.com/akkadotnet/akka.net")
         {
         }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="TargetRefNotInitializedYetException"/> class.
+        /// </summary>
+        /// <param name="info">The <see cref="SerializationInfo"/> that holds the serialized object data about the exception being thrown.</param>
+        /// <param name="context">The <see cref="StreamingContext"/> that contains contextual information about the source or destination.</param>
+        protected TargetRefNotInitializedYetException(SerializationInfo info, StreamingContext context)
+            : base(info, context)
+        {
+        }
     }
 
     public sealed class StreamRefSubscriptionTimeoutException : IllegalStateException
@@ -65,14 +77,34 @@ namespace Akka.Streams
         public StreamRefSubscriptionTimeoutException(string message) : base(message)
         {
         }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="StreamRefSubscriptionTimeoutException"/> class.
+        /// </summary>
+        /// <param name="info">The <see cref="SerializationInfo"/> that holds the serialized object data about the exception being thrown.</param>
+        /// <param name="context">The <see cref="StreamingContext"/> that contains contextual information about the source or destination.</param>
+        protected StreamRefSubscriptionTimeoutException(SerializationInfo info, StreamingContext context)
+            : base(info, context)
+        {
+        }
     }
 
     public sealed class RemoteStreamRefActorTerminatedException : Exception
     {
         internal static readonly RemoteStreamRefActorTerminatedException Default =
-            new RemoteStreamRefActorTerminatedException("Remote target receiver of data terminated. Local stream terminating, message loss (on remote side) may have happened.");
+            new("Remote target receiver of data terminated. Local stream terminating, message loss (on remote side) may have happened.");
 
         public RemoteStreamRefActorTerminatedException(string message) : base(message)
+        {
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="RemoteStreamRefActorTerminatedException"/> class.
+        /// </summary>
+        /// <param name="info">The <see cref="SerializationInfo"/> that holds the serialized object data about the exception being thrown.</param>
+        /// <param name="context">The <see cref="StreamingContext"/> that contains contextual information about the source or destination.</param>
+        protected RemoteStreamRefActorTerminatedException(SerializationInfo info, StreamingContext context)
+            : base(info, context)
         {
         }
     }
@@ -87,6 +119,16 @@ namespace Akka.Streams
         {
             ExpectedSeqNr = expectedSeqNr;
             GotSeqNr = gotSeqNr;
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="InvalidSequenceNumberException"/> class.
+        /// </summary>
+        /// <param name="info">The <see cref="SerializationInfo"/> that holds the serialized object data about the exception being thrown.</param>
+        /// <param name="context">The <see cref="StreamingContext"/> that contains contextual information about the source or destination.</param>
+        protected InvalidSequenceNumberException(SerializationInfo info, StreamingContext context)
+            : base(info, context)
+        {
         }
     }
 
@@ -110,6 +152,16 @@ namespace Akka.Streams
             "This may happen due to 'double-materialization' on the other side of this stream ref. " +
             "Do note that stream refs are one-shot references and have to be paired up in 1:1 pairs. " +
             "Multi-cast such as broadcast etc can be implemented by sharing multiple new stream references. ")
+        {
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="InvalidPartnerActorException"/> class.
+        /// </summary>
+        /// <param name="info">The <see cref="SerializationInfo"/> that holds the serialized object data about the exception being thrown.</param>
+        /// <param name="context">The <see cref="StreamingContext"/> that contains contextual information about the source or destination.</param>
+        protected InvalidPartnerActorException(SerializationInfo info, StreamingContext context)
+            : base(info, context)
         {
         }
     }

@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="SubscriberManagement.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -70,7 +70,7 @@ namespace Akka.Streams.Implementation
             /// <summary>
             /// TBD
             /// </summary>
-            public static readonly NotReached Instance = new NotReached();
+            public static readonly NotReached Instance = new();
             private NotReached() { }
 
             /// <summary>
@@ -93,7 +93,7 @@ namespace Akka.Streams.Implementation
             /// <summary>
             /// TBD
             /// </summary>
-            public static readonly Completed Instance = new Completed();
+            public static readonly Completed Instance = new();
             private Completed() { }
 
             /// <summary>
@@ -230,7 +230,7 @@ namespace Akka.Streams.Implementation
             }
             else
             {
-                if (_endOfStream is SubscriberManagement.NotReached || _endOfStream is SubscriberManagement.Completed)
+                if (_endOfStream is SubscriberManagement.NotReached or SubscriberManagement.Completed)
                 {
                     var d = subscription.TotalDemand + elements;
                     // Long overflow, Reactive Streams Spec 3:17: effectively unbounded
@@ -265,14 +265,10 @@ namespace Akka.Streams.Implementation
                         goOn = true;
                     }
                     catch (Exception e)
+                        when (e is ISpecViolation)
                     {
-                        if (e is ISpecViolation)
-                        {
-                            UnregisterSubscriptionInternal(subscription);
-                            goOn = false;
-                        }
-                        else
-                            throw;
+                        UnregisterSubscriptionInternal(subscription);
+                        goOn = false;
                     }
 
                     if (!goOn)

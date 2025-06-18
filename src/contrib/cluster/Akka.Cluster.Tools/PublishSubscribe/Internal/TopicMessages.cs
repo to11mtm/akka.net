@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="TopicMessages.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -10,7 +10,9 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using Akka.Actor;
+using Akka.Annotations;
 using Akka.Event;
+using Akka.Remote;
 using Akka.Routing;
 
 namespace Akka.Cluster.Tools.PublishSubscribe.Internal
@@ -24,7 +26,7 @@ namespace Akka.Cluster.Tools.PublishSubscribe.Internal
         /// <summary>
         /// TBD
         /// </summary>
-        public static Prune Instance { get; } = new Prune();
+        public static Prune Instance { get; } = new();
         private Prune() { }
     }
 
@@ -37,14 +39,15 @@ namespace Akka.Cluster.Tools.PublishSubscribe.Internal
         /// <summary>
         /// TBD
         /// </summary>
-        public static Count Instance { get; } = new Count();
+        public static Count Instance { get; } = new();
         private Count() { }
     }
 
     /// <summary>
-    /// TBD
+    /// Get all subscribers for a given topic.
     /// </summary>
-    internal sealed class CountSubscribers
+    [ApiMayChange]
+    public sealed class CountSubscribers
     {
         public string Topic { get; }
 
@@ -159,7 +162,7 @@ namespace Akka.Cluster.Tools.PublishSubscribe.Internal
         /// <summary>
         /// TBD
         /// </summary>
-        public Routee Routee { get { return _routee ?? (_routee = Ref != null ? new ActorRefRoutee(Ref) : null); } }
+        public Routee Routee { get { return _routee ??= Ref != null ? new ActorRefRoutee(Ref) : null; } }
 
         /// <inheritdoc/>
         public bool Equals(ValueHolder other)
@@ -199,16 +202,16 @@ namespace Akka.Cluster.Tools.PublishSubscribe.Internal
         /// </summary>
         /// <param name="versions">TBD</param>
         /// <param name="isReplyToStatus">TBD</param>
-        public Status(IDictionary<Address, long> versions, bool isReplyToStatus)
+        public Status(IImmutableDictionary<Address, long> versions, bool isReplyToStatus)
         {
-            Versions = versions ?? new Dictionary<Address, long>(0);
+            Versions = versions ?? ImmutableDictionary<Address, long>.Empty;
             IsReplyToStatus = isReplyToStatus;
         }
 
         /// <summary>
         /// TBD
         /// </summary>
-        public IDictionary<Address, long> Versions { get; }
+        public IImmutableDictionary<Address, long> Versions { get; }
 
         /// <summary>
         /// TBD
@@ -225,7 +228,7 @@ namespace Akka.Cluster.Tools.PublishSubscribe.Internal
             if (other == null)
                 return false;
 
-            return Versions.SequenceEqual(other.Versions) 
+            return Versions.SequenceEqual(other.Versions)
                 && IsReplyToStatus.Equals(other.IsReplyToStatus);
         }
 
@@ -256,15 +259,15 @@ namespace Akka.Cluster.Tools.PublishSubscribe.Internal
         /// <summary>
         /// TBD
         /// </summary>
-        public Bucket[] Buckets { get; }
+        public IImmutableList<Bucket> Buckets { get; }
 
         /// <summary>
         /// TBD
         /// </summary>
         /// <param name="buckets">TBD</param>
-        public Delta(Bucket[] buckets)
+        public Delta(IImmutableList<Bucket> buckets)
         {
-            Buckets = buckets ?? new Bucket[0];
+            Buckets = buckets ?? ImmutableList<Bucket>.Empty;
         }
 
         /// <inheritdoc/>
@@ -299,7 +302,7 @@ namespace Akka.Cluster.Tools.PublishSubscribe.Internal
         /// <summary>
         /// TBD
         /// </summary>
-        public static readonly DeltaCount Instance = new DeltaCount();
+        public static readonly DeltaCount Instance = new();
 
         private DeltaCount() { }
     }
@@ -308,16 +311,32 @@ namespace Akka.Cluster.Tools.PublishSubscribe.Internal
     /// TBD
     /// </summary>
     [Serializable]
-    internal sealed class GossipTick
+    internal sealed class GossipTick: IDeadLetterSuppression
     {
-        /// <summary>
-        /// TBD
-        /// </summary>
-        public static GossipTick Instance { get; } = new GossipTick();
-
+        public static GossipTick Instance { get; } = new();
         private GossipTick() { }
     }
 
+    /// <summary>
+    /// Internal event signalling that a new subscriber has been added to the registry
+    /// either locally using <see cref="Put"/>, <see cref="Subscribe"/>, or from a <see cref="Delta"/>.
+    /// </summary>
+    internal sealed record NewBucketKeysAdded(IReadOnlyList<string> Topics): IDeadLetterSuppression;
+    
+    /// <summary>
+    /// Container for buffered <see cref="Publish"/> or <see cref="Send"/> messages
+    /// </summary>
+    /// <param name="Message">The original message being buffered</param>
+    /// <param name="Deadline">The deadline where this buffered message should be timed out</param>
+    /// <param name="Sender">The original sender of the message</param>
+    internal readonly record struct BufferedMessage(IWrappedMessage Message, Deadline Deadline, IActorRef Sender);
+
+    internal sealed class PruneBufferTick: IDeadLetterSuppression
+    {
+        public static PruneBufferTick Instance { get; } = new();
+        private PruneBufferTick() { }
+    }
+    
     /// <summary>
     /// TBD
     /// </summary>
@@ -424,7 +443,7 @@ namespace Akka.Cluster.Tools.PublishSubscribe.Internal
         {
             if (ReferenceEquals(null, obj)) return false;
             if (ReferenceEquals(this, obj)) return true;
-            return obj is SendToOneSubscriber && Equals((SendToOneSubscriber)obj);
+            return obj is SendToOneSubscriber subscriber && Equals(subscriber);
         }
 
         public override int GetHashCode()
@@ -458,7 +477,7 @@ namespace Akka.Cluster.Tools.PublishSubscribe.Internal
         /// <summary>
         /// TBD
         /// </summary>
-        public static NoMoreSubscribers Instance { get; } = new NoMoreSubscribers();
+        public static NoMoreSubscribers Instance { get; } = new();
         private NoMoreSubscribers() {}
     }
 
@@ -471,7 +490,7 @@ namespace Akka.Cluster.Tools.PublishSubscribe.Internal
         /// <summary>
         /// TBD
         /// </summary>
-        public static TerminateRequest Instance { get; } = new TerminateRequest();
+        public static TerminateRequest Instance { get; } = new();
         private TerminateRequest() {}
     }
 
@@ -485,7 +504,7 @@ namespace Akka.Cluster.Tools.PublishSubscribe.Internal
         /// <summary>
         /// TBD
         /// </summary>
-        public static NewSubscriberArrived Instance { get; } = new NewSubscriberArrived();
+        public static NewSubscriberArrived Instance { get; } = new();
         private NewSubscriberArrived() { }
     }
 

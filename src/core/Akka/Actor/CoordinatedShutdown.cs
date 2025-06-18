@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="CoordinatedShutdown.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -91,7 +91,7 @@ namespace Akka.Actor
         {
             if (ReferenceEquals(null, obj)) return false;
             if (ReferenceEquals(this, obj)) return true;
-            return obj is Phase && Equals((Phase)obj);
+            return obj is Phase phase && Equals(phase);
         }
 
         /// <inheritdoc/>
@@ -156,7 +156,23 @@ namespace Akka.Actor
         public const string PhaseBeforeActorSystemTerminate = "before-actor-system-terminate";
         public const string PhaseActorSystemTerminate = "actor-system-terminate";
 
-
+        /// <summary>
+        /// Common exit codes supported out of the box.
+        /// Note: When adding new exit codes, make sure that the exit code adheres
+        ///       to the Linux standard.
+        /// See: https://manpages.ubuntu.com/manpages/lunar/man3/sysexits.h.3head.html
+        /// See: https://manpages.ubuntu.com/manpages/noble/man3/EXIT_SUCCESS.3const.html
+        /// </summary>
+        internal enum CommonExitCodes
+        {
+            Ok = 0,
+            UnknownReason = 1,
+            // Exit code 2 is reserved for Linux Bash for "Incorrect Usage"
+            ClusterDowned = 3,
+            ClusterJoinFailed = 4,
+            // Exit codes 64-78 is reserved by Linux sysexits.h
+            // Exit codes 126 and above is reserved by Linux shell
+        }
 
         /// <summary>
         /// Reason for the shutdown, which can be used by tasks in case they need to do
@@ -164,8 +180,9 @@ namespace Akka.Actor
         /// predefined reasons, but external libraries applications may also define
         /// other reasons.
         /// </summary>
-        public class Reason
+        public abstract class Reason
         {
+            public abstract int ExitCode { get; }
             protected Reason()
             {
 
@@ -178,6 +195,8 @@ namespace Akka.Actor
         public class UnknownReason : Reason
         {
             public static readonly Reason Instance = new UnknownReason();
+
+            public override int ExitCode => (int)CommonExitCodes.UnknownReason;
 
             private UnknownReason()
             {
@@ -192,6 +211,8 @@ namespace Akka.Actor
         {
             public static readonly Reason Instance = new ActorSystemTerminateReason();
 
+            public override int ExitCode => (int)CommonExitCodes.Ok;
+
             private ActorSystemTerminateReason()
             {
 
@@ -204,6 +225,8 @@ namespace Akka.Actor
         public class ClrExitReason : Reason
         {
             public static readonly Reason Instance = new ClrExitReason();
+
+            public override int ExitCode => (int)CommonExitCodes.Ok;
 
             private ClrExitReason()
             {
@@ -219,6 +242,8 @@ namespace Akka.Actor
         {
             public static readonly Reason Instance = new ClusterDowningReason();
 
+            public override int ExitCode => (int)CommonExitCodes.ClusterDowned;
+
             private ClusterDowningReason()
             {
 
@@ -233,6 +258,8 @@ namespace Akka.Actor
         {
             public static readonly Reason Instance = new ClusterLeavingReason();
 
+            public override int ExitCode => (int)CommonExitCodes.Ok;
+
             private ClusterLeavingReason()
             {
 
@@ -245,6 +272,9 @@ namespace Akka.Actor
         public class ClusterJoinUnsuccessfulReason : Reason
         {
             public static readonly Reason Instance = new ClusterJoinUnsuccessfulReason();
+            
+            public override int ExitCode => (int)CommonExitCodes.ClusterJoinFailed;
+
             private ClusterJoinUnsuccessfulReason() { }
         }
 
@@ -270,12 +300,12 @@ namespace Akka.Actor
         /// </summary>
         internal readonly List<string> OrderedPhases;
 
-        private readonly ConcurrentBag<Func<Task<Done>>> _clrShutdownTasks = new ConcurrentBag<Func<Task<Done>>>();
-        private readonly ConcurrentDictionary<string, ImmutableList<(string, Func<Task<Done>>)>> _tasks = new ConcurrentDictionary<string, ImmutableList<(string, Func<Task<Done>>)>>();
-        private readonly AtomicReference<Reason> _runStarted = new AtomicReference<Reason>(null);
-        private readonly AtomicBoolean _clrHooksStarted = new AtomicBoolean(false);
-        private readonly TaskCompletionSource<Done> _runPromise = new TaskCompletionSource<Done>();
-        private readonly TaskCompletionSource<Done> _hooksRunPromise = new TaskCompletionSource<Done>();
+        private readonly ConcurrentSet<Func<Task<Done>>> _clrShutdownTasks = new();
+        private readonly ConcurrentDictionary<string, ImmutableList<(string, Func<Task<Done>>)>> _tasks = new();
+        private readonly AtomicReference<Reason> _runStarted = new(null);
+        private readonly AtomicBoolean _clrHooksStarted = new(false);
+        private readonly TaskCompletionSource<Done> _runPromise = new();
+        private readonly TaskCompletionSource<Done> _hooksRunPromise = new();
 
         private volatile bool _runningClrHook = false;
 
@@ -333,9 +363,9 @@ namespace Akka.Actor
         /// <param name="hook">A task that will be executed during shutdown.</param>
         internal void AddClrShutdownHook(Func<Task<Done>> hook)
         {
-            if (!_clrHooksStarted)
+            if (!_clrHooksStarted.Value)
             {
-                _clrShutdownTasks.Add(hook);
+                _clrShutdownTasks.TryAdd(hook);
             }
         }
 
@@ -421,7 +451,7 @@ namespace Akka.Actor
 
                         // note that tasks within same phase are performed in parallel
                         var recoverEnabled = Phases[phase].Recover;
-                        var result = Task.WhenAll<Done>(phaseTasks.Select(x =>
+                        var result = Task.WhenAll(phaseTasks.Select(x =>
                             {
                                 var taskName = x.Item1;
                                 var task = x.Item2;
@@ -493,7 +523,7 @@ namespace Akka.Actor
                             timeoutFunction = result;
                         }
 
-                        phaseResult = Task.WhenAny<Done>(result, timeoutFunction).Unwrap();
+                        phaseResult = Task.WhenAny(result, timeoutFunction).Unwrap();
                     }
 
                     if (!remaining.Any())
@@ -505,7 +535,7 @@ namespace Akka.Actor
                             var r = tr.Result;
                             return Loop(remaining);
                         })
-                        .Unwrap<Done>();
+                        .Unwrap();
                 }
 
                 var runningPhases = (fromPhase == null
@@ -646,26 +676,26 @@ namespace Akka.Actor
                         {
                             if (!system.WhenTerminated.Wait(timeout) && !coord._runningClrHook)
                             {
-                                Environment.Exit(0);
+                                Environment.Exit(coord.ShutdownReason?.ExitCode ?? 0);
                             }
                         });
                     }
 
                     if (terminateActorSystem)
                     {
-                        system.FinalTerminate();
-                        return system.Terminate().ContinueWith(tr =>
+                        return system.FinalTerminate().ContinueWith(_ =>
                         {
                             if (exitClr && !coord._runningClrHook)
                             {
                                 Environment.Exit(0);
                             }
+
                             return Done.Instance;
                         });
                     }
                     else if (exitClr)
                     {
-                        Environment.Exit(0);
+                        Environment.Exit(coord.ShutdownReason?.ExitCode ?? 0);
                         return TaskEx.Completed;
                     }
                     else
@@ -691,7 +721,10 @@ namespace Akka.Actor
                 var exitTask = TerminateOnClrExit(coord);
                 // run all hooks during termination sequence
                 AppDomain.CurrentDomain.ProcessExit += exitTask;
-                system.WhenTerminated.ContinueWith(tr => { AppDomain.CurrentDomain.ProcessExit -= exitTask; });
+                system.WhenTerminated.ContinueWith(_ =>
+                {
+                    AppDomain.CurrentDomain.ProcessExit -= exitTask;
+                });
 
                 coord.AddClrShutdownHook(() =>
                 {
@@ -718,7 +751,7 @@ namespace Akka.Actor
 
         private static EventHandler TerminateOnClrExit(CoordinatedShutdown coord)
         {
-            return (sender, args) =>
+            return (_, _) =>
             {
                 // have to block, because if this method exits the process exits.
                 coord.RunClrHooks().Wait(coord.TotalTimeout);

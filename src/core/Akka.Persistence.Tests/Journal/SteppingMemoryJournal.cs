@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="SteppingMemoryJournal.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -10,6 +10,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Configuration;
@@ -33,22 +34,22 @@ namespace Akka.Persistence.Tests.Journal
         /// </summary>
         internal class Token
         {
-            public static readonly Token Instance = new Token();
+            public static readonly Token Instance = new();
             private Token() { }
         }
 
         internal class TokenConsumed
         {
-            public static readonly TokenConsumed Instance = new TokenConsumed();
+            public static readonly TokenConsumed Instance = new();
             private TokenConsumed() { }
         }
 
         private static readonly TaskContinuationOptions _continuationOptions = TaskContinuationOptions.ExecuteSynchronously;
         // keep it in a thread safe global so that tests can get their hand on the actor ref and send Steps to it
-        private static readonly ConcurrentDictionary<string, IActorRef> _current = new ConcurrentDictionary<string, IActorRef>();
+        private static readonly ConcurrentDictionary<string, IActorRef> _current = new();
         private readonly string _instanceId;
-        private readonly Queue<Func<Task>> _queuedOps = new Queue<Func<Task>>();
-        private readonly Queue<IActorRef> _queuedTokenRecipients = new Queue<IActorRef>();
+        private readonly Queue<Func<Task>> _queuedOps = new();
+        private readonly Queue<IActorRef> _queuedTokenRecipients = new();
 
 
         public SteppingMemoryJournal()
@@ -90,7 +91,7 @@ akka.persistence.journal.stepping-inmem.instance-id = """ + instanceId + @"""");
                 {
                     var op = _queuedOps.Dequeue();
                     var tokenConsumer = Sender;
-                    op().ContinueWith(t => tokenConsumer.Tell(TokenConsumed.Instance), _continuationOptions).Wait();
+                    op().ContinueWith(_ => tokenConsumer.Tell(TokenConsumed.Instance), _continuationOptions).Wait();
                 }
                 return true;
             }
@@ -99,7 +100,7 @@ akka.persistence.journal.stepping-inmem.instance-id = """ + instanceId + @"""");
 
         protected override void PreStart()
         {
-            _current.AddOrUpdate(_instanceId, id => Self, (id, old) => Self);
+            _current.AddOrUpdate(_instanceId, _ => Self, (_, _) => Self);
             base.PreStart();
         }
 
@@ -110,14 +111,14 @@ akka.persistence.journal.stepping-inmem.instance-id = """ + instanceId + @"""");
             _current.TryRemove(_instanceId, out foo);
         }
 
-        protected override Task<IImmutableList<Exception>> WriteMessagesAsync(IEnumerable<AtomicWrite> messages)
+        protected override Task<IImmutableList<Exception>> WriteMessagesAsync(IEnumerable<AtomicWrite> messages, CancellationToken cancellationToken)
         {
             var tasks = messages.Select(message =>
             {
                 return
                     WrapAndDoOrEnqueue(
                         () =>
-                            base.WriteMessagesAsync(new[] {message})
+                            base.WriteMessagesAsync(new[] {message}, cancellationToken)
                                 .ContinueWith(t => t.Result != null ? t.Result.FirstOrDefault() : null,
                                     _continuationOptions | TaskContinuationOptions.OnlyOnRanToCompletion));
             });
@@ -127,19 +128,19 @@ akka.persistence.journal.stepping-inmem.instance-id = """ + instanceId + @"""");
                     _continuationOptions | TaskContinuationOptions.OnlyOnRanToCompletion);
         }
 
-        protected override Task DeleteMessagesToAsync(string persistenceId, long toSequenceNr)
+        protected override Task DeleteMessagesToAsync(string persistenceId, long toSequenceNr, CancellationToken cancellationToken)
         {
             return
                 WrapAndDoOrEnqueue(
                     () =>
-                        base.DeleteMessagesToAsync(persistenceId, toSequenceNr)
-                            .ContinueWith(t => new object(),
+                        base.DeleteMessagesToAsync(persistenceId, toSequenceNr, cancellationToken)
+                            .ContinueWith(_ => new object(),
                                 _continuationOptions | TaskContinuationOptions.OnlyOnRanToCompletion));
         }
 
-        public override Task<long> ReadHighestSequenceNrAsync(string persistenceId, long fromSequenceNr)
+        public override Task<long> ReadHighestSequenceNrAsync(string persistenceId, long fromSequenceNr, CancellationToken cancellationToken)
         {
-            return WrapAndDoOrEnqueue(() => base.ReadHighestSequenceNrAsync(persistenceId, fromSequenceNr));
+            return WrapAndDoOrEnqueue(() => base.ReadHighestSequenceNrAsync(persistenceId, fromSequenceNr, cancellationToken));
         }
 
         public override Task ReplayMessagesAsync(IActorContext context, string persistenceId, long fromSequenceNr, long toSequenceNr, long max,
@@ -150,7 +151,7 @@ akka.persistence.journal.stepping-inmem.instance-id = """ + instanceId + @"""");
                     () =>
                         base.ReplayMessagesAsync(context, persistenceId, fromSequenceNr, toSequenceNr, max,
                             recoveryCallback)
-                            .ContinueWith(t => new object(),
+                            .ContinueWith(_ => new object(),
                                 _continuationOptions | TaskContinuationOptions.OnlyOnRanToCompletion));
         }
 
@@ -181,7 +182,7 @@ akka.persistence.journal.stepping-inmem.instance-id = """ + instanceId + @"""");
             {
                 var completed = op();
                 var tokenRecipient = _queuedTokenRecipients.Dequeue();
-                completed.ContinueWith(t => tokenRecipient.Tell(TokenConsumed.Instance), _continuationOptions).Wait();
+                completed.ContinueWith(_ => tokenRecipient.Tell(TokenConsumed.Instance), _continuationOptions).Wait();
             }
             else
                 _queuedOps.Enqueue(op);

@@ -1,12 +1,14 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="PluginSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
+using System.Threading.Tasks;
 using Akka.Actor;
+using Akka.Actor.Setup;
 using Akka.Configuration;
 using Akka.Util.Internal;
 using Xunit.Abstractions;
@@ -15,12 +17,28 @@ namespace Akka.Persistence.TCK
 {
     public abstract class PluginSpec : Akka.TestKit.Xunit2.TestKit, IDisposable
     {
-        private static readonly AtomicCounter Counter = new AtomicCounter(0);
+        private static readonly AtomicCounter Counter = new(0);
 
         protected int ActorInstanceId = 1;
 
         protected PluginSpec(Config config = null, string actorSystemName = null, ITestOutputHelper output = null) 
             : base(FromConfig(config), actorSystemName, output)
+        {
+            Extension = Persistence.Instance.Apply(Sys as ExtendedActorSystem);
+            Pid = "p-" + Counter.IncrementAndGet();
+            WriterGuid = Guid.NewGuid().ToString();
+        }
+
+        protected PluginSpec(ActorSystemSetup setup, string actorSystemName = null, ITestOutputHelper output = null)
+            : base(setup, actorSystemName, output)
+        {
+            Extension = Persistence.Instance.Apply(Sys as ExtendedActorSystem);
+            Pid = "p-" + Counter.IncrementAndGet();
+            WriterGuid = Guid.NewGuid().ToString();
+        }
+
+        protected PluginSpec(ActorSystem system = null, ITestOutputHelper output = null)
+            : base(system, output)
         {
             Extension = Persistence.Instance.Apply(Sys as ExtendedActorSystem);
             Pid = "p-" + Counter.IncrementAndGet();
@@ -46,23 +64,6 @@ namespace Akka.Persistence.TCK
         public void Subscribe<T>(IActorRef subscriber)
         {
             Sys.EventStream.Subscribe(subscriber, typeof (T));
-        }
-
-        /// <inheritdoc/>
-        public void Dispose()
-        {
-            Dispose(true);
-            GC.SuppressFinalize(this);
-        }
-
-        /// <summary>Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.</summary>
-        /// <param name="disposing">if set to <c>true</c> the method has been called directly or indirectly by a
-        /// user's code. Managed and unmanaged resources will be disposed.<br />
-        /// if set to <c>false</c> the method has been called by the runtime from inside the finalizer and only
-        /// unmanaged resources can be disposed.</param>
-        protected virtual void Dispose(bool disposing)
-        {
-            //if (disposing) FSMBase.Shutdown();
         }
     }
 }

@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="PingPongBenchmarks.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -10,45 +10,45 @@ using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Benchmarks.Configurations;
 using BenchmarkDotNet.Attributes;
-using BenchmarkDotNet.Engines;
+using static Akka.Benchmarks.Configurations.BenchmarkCategories;
 
 namespace Akka.Benchmarks.Actor
 {
-    [Config(typeof(MonitoringConfig))]
-    [SimpleJob(RunStrategy.Monitoring, launchCount: 3, warmupCount: 3, targetCount: 3)]
+    [Config(typeof(MacroBenchmarkConfig))]
     public class PingPongBenchmarks
     {
-        public const int Operations = 1_000_000;
-        private TimeSpan timeout;
-        private ActorSystem system;
-        private IActorRef ping;
+        private const int Operations = 1_000_000;
+        private TimeSpan _timeout;
+        private ActorSystem _system;
+        private IActorRef _ping;
 
-        [GlobalSetup]
+        [IterationSetup]
         public void Setup()
         {
-            timeout = TimeSpan.FromMinutes(1);
-            system = ActorSystem.Create("system");
-            var pong = system.ActorOf(Props.Create(() => new Pong()));
-            ping = system.ActorOf(Props.Create(() => new Ping(pong)));
+            _timeout = TimeSpan.FromMinutes(1);
+            _system = ActorSystem.Create("system");
+            var pong = _system.ActorOf(Props.Create(() => new Pong()));
+            _ping = _system.ActorOf(Props.Create(() => new Ping(pong)));
         }
 
-        [GlobalCleanup]
+        [IterationCleanup]
         public void Cleanup()
         {
-            system.Dispose();
+            _system.Dispose();
         }
 
-        [Benchmark(OperationsPerInvoke = Operations)]
+        [Benchmark(OperationsPerInvoke = Operations * 2)]
+        [BenchmarkCategory(MacroBenchmark, ActorMessagingBenchmark)]
         public async Task Actor_ping_pong_single_pair_in_memory()
         {
-            await ping.Ask(StartTest.Instance, timeout);
+            await _ping.Ask(StartTest.Instance, _timeout);
         }
 
         #region actors
 
         sealed class StartTest
         {
-            public static readonly StartTest Instance = new StartTest();
+            public static readonly StartTest Instance = new();
             private StartTest() { }
         }
 
@@ -64,7 +64,7 @@ namespace Akka.Benchmarks.Actor
 
         sealed class TestDone
         {
-            public static readonly TestDone Instance = new TestDone();
+            public static readonly TestDone Instance = new();
             private TestDone() { }
         }
 

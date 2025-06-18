@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="UdpListener.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -23,7 +23,7 @@ namespace Akka.IO
     /// INTERNAL API
     /// </summary>
     [InternalApi]
-    class UdpListener : WithUdpSend, IRequiresMessageQueue<IUnboundedMessageQueueSemantics>
+    internal class UdpListener : WithUdpSend, IRequiresMessageQueue<IUnboundedMessageQueueSemantics>
     {
         private readonly IActorRef _bindCommander;
         private readonly Bind _bind;
@@ -37,7 +37,8 @@ namespace Akka.IO
 
             Context.Watch(bind.Handler);        // sign death pact
 
-            Socket = (bind.Options.OfType<Inet.DatagramChannelCreator>().FirstOrDefault() ?? new Inet.DatagramChannelCreator()).Create();
+            Socket = (bind.Options.OfType<Inet.DatagramChannelCreator>().FirstOrDefault() ??
+                      new Inet.DatagramChannelCreator()).Create(bind.LocalAddress.AddressFamily);
             Socket.Blocking = false;
             
             try
@@ -92,9 +93,8 @@ namespace Akka.IO
                 case ResumeReading _:
                     ReceiveAsync();
                     return true;
-                case SocketReceived _:
-                    var received = (SocketReceived) message;
-                    DoReceive(received.EventArgs, _bind.Handler);
+                case SocketReceived received:
+                    DoReceive(received, _bind.Handler);
                     return true;
                 case Unbind _:
                     Log.Debug("Unbinding endpoint [{0}]", _bind.LocalAddress);
@@ -114,19 +114,20 @@ namespace Akka.IO
             return false;
         }
 
-        private void DoReceive(SocketAsyncEventArgs e, IActorRef handler)
+        private void DoReceive(SocketReceived e, IActorRef handler)
         {
-            try
+            if(e.IsIcmpError)
             {
-                handler.Tell(new Received(ByteString.CopyFrom(e.Buffer, e.Offset, e.BytesTransferred), e.RemoteEndPoint));
+                Log.Debug("Ignoring client connection reset.");
                 ReceiveAsync();
+                return;
             }
-            finally
-            {
-                var buffer = new ByteBuffer(e.Buffer, e.Offset, e.Count);
-                Udp.SocketEventArgsPool.Release(e);
-                Udp.BufferPool.Release(buffer);
-            }
+
+            if (e.SocketError != SocketError.Success)
+                throw new SocketException((int)e.SocketError);
+
+            handler.Tell(new Received(e.Data, e.RemoteEndPoint));
+            ReceiveAsync();
         }
 
         /// <summary>
@@ -151,11 +152,12 @@ namespace Akka.IO
         private void ReceiveAsync()
         {
             var e = Udp.SocketEventArgsPool.Acquire(Self);
-            var buffer = Udp.BufferPool.Rent();
-            e.SetBuffer(buffer.Array, buffer.Offset, buffer.Count);
             e.RemoteEndPoint = Socket.LocalEndPoint;
             if (!Socket.ReceiveFromAsync(e))
+            {
                 Self.Tell(new SocketReceived(e));
+                Udp.SocketEventArgsPool.Release(e);
+            }
         }
     }
 }

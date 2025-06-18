@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="Internal.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -26,7 +26,7 @@ namespace Akka.DistributedData.Internal
         /// <summary>
         /// TBD
         /// </summary>
-        internal static readonly GossipTick Instance = new GossipTick();
+        internal static readonly GossipTick Instance = new();
         private GossipTick() { }
         /// <summary>
         /// TBD
@@ -44,7 +44,7 @@ namespace Akka.DistributedData.Internal
         /// <summary>
         /// Singleton instance
         /// </summary>
-        public static DeltaPropagationTick Instance { get; } = new DeltaPropagationTick();
+        public static DeltaPropagationTick Instance { get; } = new();
 
         private DeltaPropagationTick() { }
     }
@@ -58,7 +58,7 @@ namespace Akka.DistributedData.Internal
         /// <summary>
         /// TBD
         /// </summary>
-        internal static readonly RemovedNodePruningTick Instance = new RemovedNodePruningTick();
+        internal static readonly RemovedNodePruningTick Instance = new();
         private RemovedNodePruningTick() { }
         /// <summary>
         /// TBD
@@ -76,7 +76,7 @@ namespace Akka.DistributedData.Internal
         /// <summary>
         /// TBD
         /// </summary>
-        internal static readonly ClockTick Instance = new ClockTick();
+        internal static readonly ClockTick Instance = new();
         private ClockTick() { }
         /// <summary>
         /// TBD
@@ -85,11 +85,21 @@ namespace Akka.DistributedData.Internal
         public override string ToString() => "ClockTick";
     }
 
+    internal interface ISendingSystemUid
+    {
+        UniqueAddress FromNode { get; }
+    }
+
+    internal interface IDestinationSystemUid
+    {
+        long? ToSystemUid { get; }
+    }
+
     /// <summary>
     /// TBD
     /// </summary>
     [Serializable]
-    internal sealed class Write : IReplicatorMessage, IEquatable<Write>
+    internal sealed class Write : IReplicatorMessage, IEquatable<Write>, ISendingSystemUid
     {
         /// <summary>
         /// TBD
@@ -127,7 +137,7 @@ namespace Akka.DistributedData.Internal
         }
 
         /// <inheritdoc/>
-        public override bool Equals(object obj) => obj is Write && Equals((Write)obj);
+        public override bool Equals(object obj) => obj is Write write && Equals(write);
 
         /// <inheritdoc/>
         public override int GetHashCode()
@@ -151,7 +161,7 @@ namespace Akka.DistributedData.Internal
         /// <summary>
         /// TBD
         /// </summary>
-        internal static readonly WriteAck Instance = new WriteAck();
+        internal static readonly WriteAck Instance = new();
 
         private WriteAck() { }
         /// <inheritdoc/>
@@ -174,7 +184,7 @@ namespace Akka.DistributedData.Internal
         /// <summary>
         /// TBD
         /// </summary>
-        internal static readonly WriteNack Instance = new WriteNack();
+        internal static readonly WriteNack Instance = new();
 
         private WriteNack() { }
         /// <summary>
@@ -205,7 +215,7 @@ namespace Akka.DistributedData.Internal
     /// TBD
     /// </summary>
     [Serializable]
-    internal sealed class Read : IReplicatorMessage, IEquatable<Read>
+    internal sealed class Read : IReplicatorMessage, IEquatable<Read>, ISendingSystemUid
     {
         /// <summary>
         /// TBD
@@ -235,7 +245,7 @@ namespace Akka.DistributedData.Internal
         }
 
         /// <inheritdoc/>
-        public override bool Equals(object obj) => obj is Read && Equals((Read)obj);
+        public override bool Equals(object obj) => obj is Read read && Equals(read);
 
         /// <inheritdoc/>
         public override int GetHashCode() => Key?.GetHashCode() ?? 0;
@@ -274,7 +284,7 @@ namespace Akka.DistributedData.Internal
         }
 
         /// <inheritdoc/>
-        public override bool Equals(object obj) => obj is ReadResult && Equals((ReadResult)obj);
+        public override bool Equals(object obj) => obj is ReadResult result && Equals(result);
 
         /// <inheritdoc/>
         public override int GetHashCode() => Envelope?.GetHashCode() ?? 0;
@@ -319,7 +329,7 @@ namespace Akka.DistributedData.Internal
         }
 
         /// <inheritdoc/>
-        public override bool Equals(object obj) => obj is ReadRepair && Equals((ReadRepair)obj);
+        public override bool Equals(object obj) => obj is ReadRepair repair && Equals(repair);
 
         /// <inheritdoc/>
         public override int GetHashCode()
@@ -343,12 +353,12 @@ namespace Akka.DistributedData.Internal
         /// <summary>
         /// TBD
         /// </summary>
-        public static readonly ReadRepairAck Instance = new ReadRepairAck();
+        public static readonly ReadRepairAck Instance = new();
 
         private ReadRepairAck() { }
 
         /// <inheritdoc/>
-        public override string ToString() => $"ReadRepairAck";
+        public override string ToString() => "ReadRepairAck";
     }
 
     /// <summary>
@@ -360,7 +370,7 @@ namespace Akka.DistributedData.Internal
         /// <summary>
         /// TBD
         /// </summary>
-        public static DataEnvelope DeletedEnvelope => new DataEnvelope(DeletedData.Instance);
+        public static DataEnvelope DeletedEnvelope => new(DeletedData.Instance);
 
         /// <summary>
         /// TBD
@@ -386,14 +396,11 @@ namespace Akka.DistributedData.Internal
             DeltaVersions = deltaVersions ?? VersionVector.Empty;
         }
 
-        internal DataEnvelope WithData(IReplicatedData data) =>
-            new DataEnvelope(data, Pruning, DeltaVersions);
+        internal DataEnvelope WithData(IReplicatedData data) => new(data, Pruning, DeltaVersions);
 
-        internal DataEnvelope WithPruning(ImmutableDictionary<UniqueAddress, IPruningState> pruning) =>
-            new DataEnvelope(Data, pruning, DeltaVersions);
+        internal DataEnvelope WithPruning(ImmutableDictionary<UniqueAddress, IPruningState> pruning) => new(Data, pruning, DeltaVersions);
 
-        internal DataEnvelope WithDeltaVersions(VersionVector deltaVersions) =>
-            new DataEnvelope(Data, Pruning, deltaVersions);
+        internal DataEnvelope WithDeltaVersions(VersionVector deltaVersions) => new(Data, Pruning, deltaVersions);
 
         internal DataEnvelope WithoutDeltaVersions() =>
             DeltaVersions.IsEmpty
@@ -425,7 +432,7 @@ namespace Akka.DistributedData.Internal
         /// <param name="owner">TBD</param>
         /// <returns>TBD</returns>
         internal DataEnvelope InitRemovedNodePruning(UniqueAddress removed, UniqueAddress owner) =>
-            new DataEnvelope(Data, Pruning.SetItem(removed, new PruningInitialized(owner, ImmutableHashSet<Address>.Empty)));
+            new(Data, Pruning.SetItem(removed, new PruningInitialized(owner, ImmutableHashSet<Address>.Empty)));
 
         /// <summary>
         /// TBD
@@ -515,7 +522,7 @@ namespace Akka.DistributedData.Internal
             return new DataEnvelope(mergedData, Pruning, DeltaVersions);
         }
 
-        private IReplicatedData Cleaned(IReplicatedData c, IImmutableDictionary<UniqueAddress, IPruningState> p) => p.Aggregate(c, (state, kvp) =>
+        private IReplicatedData Cleaned(IReplicatedData c, IImmutableDictionary<UniqueAddress, IPruningState> p) => p.Aggregate(c, (_, kvp) =>
         {
             if (c is IRemovedNodePruning pruning
                 && kvp.Value is PruningPerformed
@@ -558,7 +565,15 @@ namespace Akka.DistributedData.Internal
 
             foreach (var entry in Pruning)
             {
-                if (!Equals(entry.Value, other.Pruning[entry.Key])) return false;
+                //"it's possible that one node that begins pruning may"
+                //"have different data than another node that hasn't started"
+                if (other.Pruning.TryGetValue(entry.Key, out var state))
+                {
+                    if (!Equals(entry.Value, state))
+                        return false;
+                }
+                else
+                    return false;
             }
 
             return true;
@@ -617,7 +632,7 @@ namespace Akka.DistributedData.Internal
     [Serializable]
     internal sealed class DeletedData : IReplicatedData<DeletedData>, IEquatable<DeletedData>, IReplicatedDataSerialization
     {
-        public static readonly DeletedData Instance = new DeletedData();
+        public static readonly DeletedData Instance = new();
 
         private DeletedData() { }
 
@@ -643,7 +658,7 @@ namespace Akka.DistributedData.Internal
     /// TBD
     /// </summary>
     [Serializable]
-    internal sealed class Status : IReplicatorMessage, IEquatable<Status>
+    internal sealed class Status : IReplicatorMessage, IEquatable<Status>, IDestinationSystemUid
     {
         /// <summary>
         /// TBD
@@ -689,15 +704,15 @@ namespace Akka.DistributedData.Internal
             if (ReferenceEquals(other, null)) return false;
             if (ReferenceEquals(this, other)) return true;
 
-            return other.Chunk.Equals(Chunk) 
-                && other.TotalChunks.Equals(TotalChunks) 
+            return other.Chunk.Equals(Chunk)
+                && other.TotalChunks.Equals(TotalChunks)
                 && Digests.SequenceEqual(other.Digests)
                 && ToSystemUid.Equals(other.ToSystemUid)
                 && FromSystemUid.Equals(other.FromSystemUid);
         }
 
         /// <inheritdoc/>
-        public override bool Equals(object obj) => obj is Status && Equals((Status)obj);
+        public override bool Equals(object obj) => obj is Status status && Equals(status);
 
         /// <inheritdoc/>
         public override int GetHashCode()
@@ -730,7 +745,7 @@ namespace Akka.DistributedData.Internal
     /// TBD
     /// </summary>
     [Serializable]
-    internal sealed class Gossip : IReplicatorMessage, IEquatable<Gossip>
+    internal sealed class Gossip : IReplicatorMessage, IEquatable<Gossip>, IDestinationSystemUid
     {
         /// <summary>
         /// TBD
@@ -770,14 +785,14 @@ namespace Akka.DistributedData.Internal
             if (ReferenceEquals(other, null)) return false;
             if (ReferenceEquals(this, other)) return true;
 
-            return other.SendBack.Equals(SendBack) 
+            return other.SendBack.Equals(SendBack)
                 && UpdatedData.SequenceEqual(other.UpdatedData)
                 && ToSystemUid.Equals(other.ToSystemUid)
                 && FromSystemUid.Equals(other.FromSystemUid);
         }
 
         /// <inheritdoc/>
-        public override bool Equals(object obj) => obj is Gossip && Equals((Gossip)obj);
+        public override bool Equals(object obj) => obj is Gossip gossip && Equals(gossip);
 
         /// <inheritdoc/>
         public override int GetHashCode()
@@ -805,9 +820,9 @@ namespace Akka.DistributedData.Internal
 
     public sealed class Delta : IEquatable<Delta>
     {
-        public readonly DataEnvelope DataEnvelope;
-        public readonly long FromSeqNr;
-        public readonly long ToSeqNr;
+        public DataEnvelope DataEnvelope { get; }
+        public long FromSeqNr { get; }
+        public long ToSeqNr { get; }
 
         public Delta(DataEnvelope dataEnvelope, long fromSeqNr, long toSeqNr)
         {
@@ -815,6 +830,8 @@ namespace Akka.DistributedData.Internal
             FromSeqNr = fromSeqNr;
             ToSeqNr = toSeqNr;
         }
+
+        public bool RequiresCausalDeliveryOfDeltas => DataEnvelope.Data is IRequireCausualDeliveryOfDeltas;
 
         public bool Equals(Delta other)
         {
@@ -827,7 +844,7 @@ namespace Akka.DistributedData.Internal
         {
             if (ReferenceEquals(null, obj)) return false;
             if (ReferenceEquals(this, obj)) return true;
-            return obj is Delta && Equals((Delta)obj);
+            return obj is Delta delta && Equals(delta);
         }
 
         public override int GetHashCode()
@@ -842,11 +859,11 @@ namespace Akka.DistributedData.Internal
         }
     }
 
-    public sealed class DeltaPropagation : IReplicatorMessage, IEquatable<DeltaPropagation>
+    public sealed class DeltaPropagation : IReplicatorMessage, IEquatable<DeltaPropagation>, ISendingSystemUid
     {
         private sealed class NoDelta : IDeltaReplicatedData<IReplicatedData, IReplicatedDelta>, IRequireCausualDeliveryOfDeltas
         {
-            public static readonly NoDelta Instance = new NoDelta();
+            public static readonly NoDelta Instance = new();
             private NoDelta() { }
 
             IReplicatedDelta IDeltaReplicatedData.Delta => Delta;
@@ -864,15 +881,15 @@ namespace Akka.DistributedData.Internal
         /// treated as a delta that increase the version counter in <see cref="DeltaPropagationSelector"/>`.
         /// Otherwise a later delta might be applied before the full state gossip is received
         /// and thereby violating <see cref="IRequireCausualDeliveryOfDeltas"/>.
-        /// 
+        ///
         /// This is used as a placeholder for such `null` delta. It's filtered out
-        /// in <see cref="DeltaPropagationSelector.CreateDeltaPropagation(ImmutableDictionary{string, Tuple{IReplicatedData, long, long}})"/>, i.e. never sent to the other replicas.
+        /// in <see cref="DeltaPropagationSelector.CreateDeltaPropagation"/>, i.e. never sent to the other replicas.
         /// </summary>
         public static readonly IReplicatedDelta NoDeltaPlaceholder = NoDelta.Instance;
 
-        public readonly UniqueAddress FromNode;
-        public readonly bool ShouldReply;
-        public readonly ImmutableDictionary<string, Delta> Deltas;
+        public UniqueAddress FromNode { get; }
+        public bool ShouldReply { get; }
+        public ImmutableDictionary<string, Delta> Deltas { get; }
 
         public DeltaPropagation(UniqueAddress fromNode, bool shouldReply, ImmutableDictionary<string, Delta> deltas)
         {
@@ -900,7 +917,7 @@ namespace Akka.DistributedData.Internal
         {
             if (ReferenceEquals(null, obj)) return false;
             if (ReferenceEquals(this, obj)) return true;
-            return obj is DeltaPropagation && Equals((DeltaPropagation)obj);
+            return obj is DeltaPropagation propagation && Equals(propagation);
         }
 
         public override int GetHashCode()
@@ -917,7 +934,7 @@ namespace Akka.DistributedData.Internal
 
     public sealed class DeltaNack : IReplicatorMessage, IDeadLetterSuppression, IEquatable<DeltaNack>
     {
-        public static readonly DeltaNack Instance = new DeltaNack();
+        public static readonly DeltaNack Instance = new();
         private DeltaNack() { }
         public bool Equals(DeltaNack other) => true;
         public override bool Equals(object obj) => obj is DeltaNack;

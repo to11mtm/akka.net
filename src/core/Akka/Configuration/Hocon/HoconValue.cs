@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="HoconValue.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2018 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2018 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -20,8 +20,8 @@ namespace Akka.Configuration.Hocon
     /// </summary>
     public class HoconValue : IMightBeAHoconObject
     {
-        private static readonly Regex EscapeRegex = new Regex("[ \t:]{1}", RegexOptions.Compiled);
-        private static readonly Regex TimeSpanRegex = new Regex(@"^(?<value>([0-9]+(\.[0-9]+)?))\s*(?<unit>(nanoseconds|nanosecond|nanos|nano|ns|microseconds|microsecond|micros|micro|us|milliseconds|millisecond|millis|milli|ms|seconds|second|s|minutes|minute|m|hours|hour|h|days|day|d))$", RegexOptions.Compiled);
+        private static readonly Regex EscapeRegex = new("[ \t:]{1}", RegexOptions.Compiled);
+        private static readonly Regex TimeSpanRegex = new(@"^(?<value>([0-9]+(\.[0-9]+)?))\s*(?<unit>(nanoseconds|nanosecond|nanos|nano|ns|microseconds|microsecond|micros|micro|us|milliseconds|millisecond|millis|milli|ms|seconds|second|s|minutes|minute|m|hours|hour|h|days|day|d))$", RegexOptions.Compiled);
 
         /// <summary>
         /// Initializes a new instance of the <see cref="HoconValue"/> class.
@@ -72,6 +72,11 @@ namespace Akka.Configuration.Hocon
         /// serving exclusively to skip rendering such values in <see cref="HoconObject.ToString()"/>
         /// </summary>
         internal bool AdoptedFromFallback { get; private set; }
+
+        public Config ToConfig()
+        {
+            return new Config(new HoconRoot(this, Enumerable.Empty<HoconSubstitution>()));
+        }
 
         /// <summary>
         /// Wraps this <see cref="HoconValue"/> into a new <see cref="Config"/> object at the specified key.
@@ -169,7 +174,7 @@ namespace Akka.Configuration.Hocon
         /// <returns>The element at the given key.</returns>
         public HoconValue GetChildObject(string key)
         {
-            return GetObject().GetKey(key);
+            return GetObject()?.GetKey(key);
         }
 
         /// <summary>
@@ -343,9 +348,9 @@ namespace Akka.Configuration.Hocon
         /// <returns>A list of values represented by this <see cref="HoconValue"/>.</returns>
         public IList<HoconValue> GetArray()
         {
-            IEnumerable<HoconValue> x = from arr in Values
-                where arr.IsArray()
-                from e in arr.GetArray()
+            IEnumerable<HoconValue> x = from element in Values
+                where element.IsArray()
+                from e in element.GetArray()
                 select e;
 
             return x.ToList();
@@ -359,7 +364,7 @@ namespace Akka.Configuration.Hocon
         /// </returns>
         public bool IsArray()
         {
-            return GetArray() != null;
+            return GetArray().Count != 0;
         }
 
         /// <summary>
@@ -443,19 +448,19 @@ namespace Akka.Configuration.Hocon
         private static ByteSize[] ByteSizes { get; } =
             new ByteSize[]
             {
-                new ByteSize { Factor = 1024L * 1024L * 1024L * 1024L * 1024 * 1024L, Suffixes = new string[] { "E", "e", "Ei", "EiB", "exbibyte", "exbibytes" } },
-                new ByteSize { Factor = 1000L * 1000L * 1000L * 1000L * 1000L * 1000L, Suffixes = new string[] { "EB", "exabyte", "exabytes" } },
-                new ByteSize { Factor = 1024L * 1024L * 1024L * 1024L * 1024L, Suffixes = new string[] { "P", "p", "Pi", "PiB", "pebibyte", "pebibytes" } },
-                new ByteSize { Factor = 1000L * 1000L * 1000L * 1000L * 1000L, Suffixes = new string[] { "PB", "petabyte", "petabytes" } },
-                new ByteSize { Factor = 1024L * 1024L * 1024L * 1024L, Suffixes = new string[] { "T", "t", "Ti", "TiB", "tebibyte", "tebibytes" } },
-                new ByteSize { Factor = 1000L * 1000L * 1000L * 1000L, Suffixes = new string[] { "TB", "terabyte", "terabytes" } },
-                new ByteSize { Factor = 1024L * 1024L * 1024L, Suffixes = new string[] { "G", "g", "Gi", "GiB", "gibibyte", "gibibytes" } },
-                new ByteSize { Factor = 1000L * 1000L * 1000L, Suffixes = new string[] { "GB", "gigabyte", "gigabytes" } },
-                new ByteSize { Factor = 1024L * 1024L, Suffixes = new string[] { "M", "m", "Mi", "MiB", "mebibyte", "mebibytes" } },
-                new ByteSize { Factor = 1000L * 1000L, Suffixes = new string[] { "MB", "megabyte", "megabytes" } },
-                new ByteSize { Factor = 1024L, Suffixes = new string[] { "K", "k", "Ki", "KiB", "kibibyte", "kibibytes" } },
-                new ByteSize { Factor = 1000L, Suffixes = new string[] { "kB", "kilobyte", "kilobytes" } },
-                new ByteSize { Factor = 1, Suffixes = new string[] { "b", "B", "byte", "bytes" } }
+                new() { Factor = 1024L * 1024L * 1024L * 1024L * 1024 * 1024L, Suffixes = new string[] { "E", "e", "Ei", "EiB", "exbibyte", "exbibytes" } },
+                new() { Factor = 1000L * 1000L * 1000L * 1000L * 1000L * 1000L, Suffixes = new string[] { "EB", "exabyte", "exabytes" } },
+                new() { Factor = 1024L * 1024L * 1024L * 1024L * 1024L, Suffixes = new string[] { "P", "p", "Pi", "PiB", "pebibyte", "pebibytes" } },
+                new() { Factor = 1000L * 1000L * 1000L * 1000L * 1000L, Suffixes = new string[] { "PB", "petabyte", "petabytes" } },
+                new() { Factor = 1024L * 1024L * 1024L * 1024L, Suffixes = new string[] { "T", "t", "Ti", "TiB", "tebibyte", "tebibytes" } },
+                new() { Factor = 1000L * 1000L * 1000L * 1000L, Suffixes = new string[] { "TB", "terabyte", "terabytes" } },
+                new() { Factor = 1024L * 1024L * 1024L, Suffixes = new string[] { "G", "g", "Gi", "GiB", "gibibyte", "gibibytes" } },
+                new() { Factor = 1000L * 1000L * 1000L, Suffixes = new string[] { "GB", "gigabyte", "gigabytes" } },
+                new() { Factor = 1024L * 1024L, Suffixes = new string[] { "M", "m", "Mi", "MiB", "mebibyte", "mebibytes" } },
+                new() { Factor = 1000L * 1000L, Suffixes = new string[] { "MB", "megabyte", "megabytes" } },
+                new() { Factor = 1024L, Suffixes = new string[] { "K", "k", "Ki", "KiB", "kibibyte", "kibibytes" } },
+                new() { Factor = 1000L, Suffixes = new string[] { "kB", "kilobyte", "kilobytes" } },
+                new() { Factor = 1, Suffixes = new string[] { "b", "B", "byte", "bytes" } }
             };
 
         private static char[] Digits { get; } = "0123456789".ToCharArray();

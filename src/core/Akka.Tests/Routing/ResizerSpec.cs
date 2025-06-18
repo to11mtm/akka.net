@@ -1,19 +1,21 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ResizerSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Configuration;
 using Akka.Routing;
 using Akka.TestKit;
 using Xunit;
 using FluentAssertions;
+using FluentAssertions.Extensions;
 
 namespace Akka.Tests.Routing
 {
@@ -51,15 +53,33 @@ namespace Akka.Tests.Routing
         {
             public PressureActor()
             {
-                Receive<TimeSpan>(d =>
+                ReceiveAsync<TimeSpan>(async d =>
                 {
-                    Thread.Sleep(d);
+                    await Task.Delay(d);
                     Sender.Tell("done");
                 });
 
-                Receive<string>(s => s == "echo", s =>
+                Receive<string>(s => s == "echo", _ =>
                 {
                     Sender.Tell("reply");
+                });
+            }
+        }
+
+        private class PressureAsyncActor : ReceiveActor
+        {
+            public PressureAsyncActor()
+            {
+                ReceiveAsync<TimeSpan>(async d =>
+                {
+                    await Task.Delay(d);
+                    Sender.Tell("done");
+                });
+
+                ReceiveAsync<string>(s => s == "echo", _ =>
+                {
+                    Sender.Tell("reply");
+                    return Task.CompletedTask;
                 });
             }
         }
@@ -72,7 +92,7 @@ namespace Akka.Tests.Routing
             {
                 _dilated = dilated;
 
-                Receive<int>(n =>
+                ReceiveAsync<int>(async n =>
                 {
                     if (n <= 0)
                     {
@@ -80,15 +100,15 @@ namespace Akka.Tests.Routing
                     }
                     else
                     {
-                        Thread.Sleep(_dilated(TimeSpan.FromMilliseconds(n)));
+                        await Task.Delay(_dilated(TimeSpan.FromMilliseconds(n)));
                     }
                 });
             }
         }
 
-        private static int RouteeSize(IActorRef router)
+        private static async Task<int> RouteeSize(IActorRef router)
         {
-            return router.Ask<Routees>(new GetRoutees()).Result.Members.Count();
+            return (await router.Ask<Routees>(new GetRoutees())).Members.Count();
         }
 
         [Fact(Skip = "DefaultOptimalSizeExploringResizer has not implemented yet")]
@@ -184,7 +204,7 @@ namespace Akka.Tests.Routing
         }
 
         [Fact]
-        public void DefaultResizer_must_be_possible_to_define_programmatically()
+        public async Task DefaultResizer_must_be_possible_to_define_programmatically()
         {
             var latch = new TestLatch(3);
             var resizer = new DefaultResizer(lower: 2, upper: 3);
@@ -198,11 +218,11 @@ namespace Akka.Tests.Routing
             latch.Ready(RemainingOrDefault);
 
             // MessagesPerResize is 10 so there is no risk of additional resize
-            RouteeSize(router).Should().Be(2);
+            (await RouteeSize(router)).Should().Be(2);
         }
 
         [Fact]
-        public void DefaultResizer_must_be_possible_to_define_in_configuration()
+        public async Task DefaultResizer_must_be_possible_to_define_in_configuration()
         {
             var latch = new TestLatch(3);
             var router = Sys.ActorOf(FromConfig.Instance.Props(Props.Create<ResizerTestActor>()), "router1");
@@ -213,11 +233,11 @@ namespace Akka.Tests.Routing
 
             latch.Ready(RemainingOrDefault);
 
-            RouteeSize(router).Should().Be(2);
+            (await RouteeSize(router)).Should().Be(2);
         }
 
         [Fact(Skip = "Racy due to Resizer / Mailbox impl")]
-        public void DefaultResizer_must_grow_as_needed_under_pressure()
+        public async Task DefaultResizer_must_grow_as_needed_under_pressure()
         {
             var resizer = new DefaultResizer(
                 lower: 3,
@@ -232,43 +252,94 @@ namespace Akka.Tests.Routing
 
             // first message should create the minimum number of routees
             router.Tell("echo");
-            ExpectMsg("reply");
+            await ExpectMsgAsync("reply");
 
-            RouteeSize(router).Should().Be(resizer.LowerBound);
+            (await RouteeSize(router)).Should().Be(resizer.LowerBound);
 
-            Action<int, TimeSpan> loop = (loops, d) =>
+            Func<int, TimeSpan, Task> loop = async (loops, d) =>
             {
                 for (var i = 0; i < loops; i++)
                 {
                     router.Tell(d);
 
                     //sending too quickly will result in skipped resize due to many ResizeInProgress conflicts
-                    Thread.Sleep(Dilated(20.Milliseconds()));
+                    await Task.Delay(Dilated(20.Milliseconds()));
                 }
 
                 double max = d.TotalMilliseconds * loops / resizer.LowerBound + Dilated(2.Seconds()).TotalMilliseconds;
-                Within(TimeSpan.FromMilliseconds(max), () =>
+                await WithinAsync(TimeSpan.FromMilliseconds(max), async() =>
                 {
                     for (var i = 0; i < loops; i++)
                     {
-                        ExpectMsg("done");
+                        await ExpectMsgAsync("done");
                     }
                 });
             };
 
             // 2 more should go through without triggering more
-            loop(2, 200.Milliseconds());
-            RouteeSize(router).Should().Be(resizer.LowerBound);
+            await loop(2, 200.Milliseconds());
+            (await RouteeSize(router)).Should().Be(resizer.LowerBound);
 
             // a whole bunch should max it out
-            loop(20, 500.Milliseconds());
-            RouteeSize(router).Should().Be(resizer.UpperBound);
+            await loop(20, 500.Milliseconds());
+            (await RouteeSize(router)).Should().Be(resizer.UpperBound);
         }
 
-        [Fact(Skip = "Racy due to Resizer / Mailbox impl")]
-        public void DefaultResizer_must_backoff()
+        [Fact]
+        public async Task DefaultResizer_with_ReceiveAsync_must_grow_as_needed_under_pressure()
         {
-            Within(10.Seconds(), () =>
+            var resizer = new DefaultResizer(
+                lower: 3,
+                upper: 5,
+                rampupRate: 0.1,
+                backoffRate: 0.0,
+                pressureThreshold: 1,
+                messagesPerResize: 1,
+                backoffThreshold: 0.0);
+
+            var router = Sys.ActorOf(new RoundRobinPool(0, resizer).Props(Props.Create<PressureAsyncActor>()));
+
+            // first message should create the minimum number of routees
+            router.Tell("echo");
+            await ExpectMsgAsync("reply");
+
+            (await RouteeSize(router)).Should().Be(resizer.LowerBound);
+
+            // 2 more should go through without triggering more
+            await Loop(2, 200.Milliseconds());
+            (await RouteeSize(router)).Should().Be(resizer.LowerBound);
+
+            // a whole bunch should max it out
+            await Loop(20, 500.Milliseconds());
+            (await RouteeSize(router)).Should().Be(resizer.UpperBound);
+            return;
+
+            async Task Loop(int loops, TimeSpan d)
+            {
+                for (var i = 0; i < loops; i++)
+                {
+                    router.Tell(d);
+
+                    //sending too quickly will result in skipped resize due to many ResizeInProgress conflicts
+                    await Task.Delay(Dilated(20.Milliseconds()));
+                }
+
+                var max = d.TotalMilliseconds * loops / resizer.LowerBound + Dilated(2.Seconds()).TotalMilliseconds;
+                var epsilon = Dilated(TimeSpan.FromSeconds(1)); // used to help hedge against racy / non-determinism
+                await WithinAsync(TimeSpan.FromMilliseconds(max), async () =>
+                {
+                    for (var i = 0; i < loops; i++)
+                    {
+                        await ExpectMsgAsync("done");
+                    }
+                }, epsilonValue:epsilon);
+            }
+        }
+        
+        [Fact(Skip = "Racy due to Resizer / Mailbox impl")]
+        public async Task DefaultResizer_must_backoff()
+        {
+            await WithinAsync(10.Seconds(), async () =>
             {
                 var resizer = new DefaultResizer(
                     lower: 2,
@@ -287,20 +358,20 @@ namespace Akka.Tests.Routing
                 {
                     router.Tell(150);
 
-                    Thread.Sleep(Dilated(20.Milliseconds()));
+                    await Task.Delay(Dilated(20.Milliseconds()));
                 }
 
-                var z = RouteeSize(router);
+                var z = await RouteeSize(router);
                 z.Should().BeGreaterThan(2);
 
-                Thread.Sleep(Dilated(300.Milliseconds()));
+                await Task.Delay(Dilated(300.Milliseconds()));
 
                 // let it cool down
-                AwaitCondition(() =>
+                await AwaitConditionAsync(async () =>
                 {
                     router.Tell(0); //trigger resize
-                    Thread.Sleep(Dilated(20.Milliseconds()));
-                    return RouteeSize(router) < z;
+                    await Task.Delay(Dilated(20.Milliseconds()));
+                    return (await RouteeSize(router)) < z;
                 }, Dilated(500.Milliseconds()));
             });
         }

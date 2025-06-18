@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ActorRefProvider.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -92,6 +92,18 @@ namespace Akka.Actor
         void UnregisterTempActor(ActorPath path);
 
         /// <summary>
+        /// Automatically generates a <see cref="FutureActorRef{T}"/> with a temporary path.
+        /// </summary>
+        /// <remarks>
+        /// Does not call <see cref="RegisterTempActor"/> or <see cref="UnregisterTempActor"/>.
+        /// </remarks>
+        /// <param name="tcs">A typed <see cref="TaskCompletionSource{T}"/></param>
+        /// <typeparam name="T">The type of output this <see cref="FutureActorRef{T}"/> expects.</typeparam>
+        /// <returns>A new, single-use <see cref="FutureActorRef{T}"/> instance.</returns>
+        [InternalApi]
+        FutureActorRef<T> CreateFutureRef<T>(TaskCompletionSource<T> tcs);
+
+        /// <summary>
         /// Actor factory with create-only semantics: will create an actor as
         /// described by <paramref name="props"/> with the given <paramref name="supervisor"/> and <paramref name="path"/> (may be different
         /// in case of remote supervision). If <paramref name="systemService"/> is true, deployment is
@@ -161,8 +173,8 @@ namespace Akka.Actor
         private readonly AtomicCounterLong _tempNumber;
         private readonly ActorPath _tempNode;
         private ActorSystemImpl _system;
-        private readonly Dictionary<string, IInternalActorRef> _extraNames = new Dictionary<string, IInternalActorRef>();
-        private readonly TaskCompletionSource<Status> _terminationPromise = new TaskCompletionSource<Status>();
+        private readonly Dictionary<string, IInternalActorRef> _extraNames = new();
+        private readonly TaskCompletionSource<Status> _terminationPromise = new();
         private readonly SupervisorStrategy _systemGuardianStrategy;
         private readonly SupervisorStrategyConfigurator _userGuardianStrategyConfigurator;
         private VirtualPathContainer _tempContainer;
@@ -172,25 +184,25 @@ namespace Akka.Actor
         private LocalActorRef _systemGuardian;
 
         /// <summary>
-        /// TBD
+        /// Initializes a new instance of the <see cref="LocalActorRefProvider"/> class.
         /// </summary>
-        /// <param name="systemName">TBD</param>
-        /// <param name="settings">TBD</param>
-        /// <param name="eventStream">TBD</param>
+        /// <param name="systemName">The name of the actor system.</param>
+        /// <param name="settings">The settings for the actor system.</param>
+        /// <param name="eventStream">The event stream for logging and events.</param>
         public LocalActorRefProvider(string systemName, Settings settings, EventStream eventStream)
             : this(systemName, settings, eventStream, null, null)
         {
-            //Intentionally left blank
+            // Intentionally left blank
         }
 
         /// <summary>
-        /// TBD
+        /// Initializes a new instance of the <see cref="LocalActorRefProvider"/> class with custom deployer and dead letters factory.
         /// </summary>
-        /// <param name="systemName">TBD</param>
-        /// <param name="settings">TBD</param>
-        /// <param name="eventStream">TBD</param>
-        /// <param name="deployer">TBD</param>
-        /// <param name="deadLettersFactory">TBD</param>
+        /// <param name="systemName">The name of the actor system.</param>
+        /// <param name="settings">The settings for the actor system.</param>
+        /// <param name="eventStream">The event stream for logging and events.</param>
+        /// <param name="deployer">The deployer instance to use.</param>
+        /// <param name="deadLettersFactory">A factory for creating dead letter actor references.</param>
         public LocalActorRefProvider(string systemName, Settings settings, EventStream eventStream, Deployer deployer, Func<ActorPath, IInternalActorRef> deadLettersFactory)
         {
             _settings = settings;
@@ -211,54 +223,57 @@ namespace Akka.Actor
         }
 
         /// <summary>
-        /// TBD
+        /// Gets the dead letters actor reference for this provider.
         /// </summary>
         public IActorRef DeadLetters { get { return _deadLetters; } }
 
+        /// <summary>
+        /// Gets the ignore actor reference for this provider.
+        /// </summary>
         public IActorRef IgnoreRef { get; }
 
         /// <summary>
-        /// TBD
+        /// Gets the deployer instance for this provider.
         /// </summary>
         public Deployer Deployer { get { return _deployer; } }
 
         /// <summary>
-        /// TBD
+        /// Gets the root guardian actor reference.
         /// </summary>
         public IInternalActorRef RootGuardian { get { return _rootGuardian; } }
 
         /// <summary>
-        /// TBD
+        /// Gets the root path for this actor system.
         /// </summary>
         public ActorPath RootPath { get { return _rootPath; } }
 
         /// <summary>
-        /// TBD
+        /// Gets the settings for this provider.
         /// </summary>
         public Settings Settings { get { return _settings; } }
 
         /// <summary>
-        /// TBD
+        /// Gets the system guardian actor reference.
         /// </summary>
         public LocalActorRef SystemGuardian { get { return _systemGuardian; } }
 
         /// <summary>
-        /// TBD
+        /// Gets the temporary container for this provider.
         /// </summary>
         public IInternalActorRef TempContainer { get { return _tempContainer; } }
 
         /// <summary>
-        /// TBD
+        /// Gets the termination task for this provider.
         /// </summary>
         public Task TerminationTask { get { return _terminationPromise.Task; } }
 
         /// <summary>
-        /// TBD
+        /// Gets the user guardian actor reference.
         /// </summary>
         public LocalActorRef Guardian { get { return _userGuardian; } }
 
         /// <summary>
-        /// TBD
+        /// Gets the event stream for this provider.
         /// </summary>
         public EventStream EventStream { get { return _eventStream; } }
 
@@ -267,9 +282,9 @@ namespace Akka.Actor
         private SupervisorStrategy UserGuardianSupervisorStrategy { get { return _userGuardianStrategyConfigurator.Create(); } }
 
         /// <summary>
-        /// TBD
+        /// Generates and returns a unique actor path below "/temp".
         /// </summary>
-        /// <returns>TBD</returns>
+        /// <returns>A unique temporary actor path.</returns>
         public ActorPath TempPath()
         {
             return _tempNode / GetNextTempName();
@@ -386,6 +401,16 @@ namespace Akka.Actor
             _tempContainer.RemoveChild(path.Name);
         }
 
+        /// <inheritdoc cref="IActorRefProvider.CreateFutureRef{T}"/>
+        public FutureActorRef<T> CreateFutureRef<T>(TaskCompletionSource<T> tcs)
+        {
+            //create a new tempcontainer path
+            var path = TempPath();
+
+            var future = new FutureActorRef<T>(tcs, path, this);
+            return future;
+        }
+
         /// <summary>
         /// Initializes the ActorRefProvider
         /// </summary>
@@ -417,9 +442,9 @@ namespace Akka.Actor
         /// <returns>TBD</returns>
         public IActorRef ResolveActorRef(string path)
         {
-            ActorPath actorPath;
-            if (ActorPath.TryParse(path, out actorPath) && actorPath.Address == _rootPath.Address)
+            if (ActorPath.TryParse(path, out var actorPath) && actorPath.Address == _rootPath.Address)
                 return ResolveActorRef(_rootGuardian, actorPath.Elements);
+
             _log.Debug("Resolve of unknown path [{0}] failed. Invalid format.", path);
             return _deadLetters;
         }
@@ -457,12 +482,15 @@ namespace Akka.Actor
         }
 
         /// <summary>
-        /// TBD
+        /// Attempts to resolve a local actor reference using the provided <paramref name="actorRef"/> and <paramref name="pathElements"/>.
         /// </summary>
-        /// <param name="actorRef">TBD</param>
-        /// <param name="pathElements">TBD</param>
-        /// <returns>TBD</returns>
-        internal IInternalActorRef ResolveActorRef(IInternalActorRef actorRef, IReadOnlyCollection<string> pathElements)
+        /// <param name="actorRef">The parent / root actor</param>
+        /// <param name="pathElements">The child path elements</param>
+        /// <remarks>
+        /// This method is most commonly used in <see cref="ActorSelection"/> resolution.
+        /// </remarks>
+        /// <returns>A valid <see cref="IActorRef"/> if one was found, <see cref="EmptyLocalActorRef"/> otherwise</returns>
+        internal IInternalActorRef ResolveActorRef(IInternalActorRef actorRef, IReadOnlyList<string> pathElements)
         {
             if (pathElements.Count == 0)
             {
@@ -518,7 +546,7 @@ namespace Akka.Actor
                 if (Settings.DebugRouterMisconfiguration)
                 {
                     var d = Deployer.Lookup(path);
-                    if (d != null && !(d.RouterConfig is NoRouter))
+                    if (d is { RouterConfig: not NoRouter })
                         Log.Warning("Configuration says that [{0}] should be a router, but code disagrees. Remove the config or add a RouterConfig to its Props.",
                                     path);
                 }
@@ -533,6 +561,8 @@ namespace Akka.Actor
                         props2 = props2.WithMailbox(propsDeploy.Mailbox);
                     if (propsDeploy.Dispatcher != Deploy.NoDispatcherGiven)
                         props2 = props2.WithDispatcher(propsDeploy.Dispatcher);
+                    if(propsDeploy.StashCapacity != Deploy.NoStashSize)
+                        props2 = props2.WithStashCapacity(propsDeploy.StashCapacity);
                 }
 
                 if (!system.Dispatchers.HasDispatcher(props2.Dispatcher))

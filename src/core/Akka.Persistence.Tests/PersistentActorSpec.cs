@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="PersistentActorSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -11,13 +11,14 @@ using System.Linq;
 using System.Threading;
 using Akka.Actor;
 using Akka.TestKit;
+using FluentAssertions;
 using Xunit;
 
 namespace Akka.Persistence.Tests
 {
     public partial class PersistentActorSpec : PersistenceSpec
     {
-        private readonly Random _random = new Random();
+        private readonly Random _random = new();
         public PersistentActorSpec()
             : base(Configuration("PersistentActorSpec"))
         {
@@ -134,7 +135,7 @@ namespace Akka.Persistence.Tests
             ExpectMsgInOrder("a-1", "a-2", "b-0", "c-30", "c-31", "c-32", "d-0", "e-30", "e-31", "e-32");
         }
 
-        [Fact(Skip = "Need https://github.com/akkadotnet/akka.net/pull/3668 merged")]
+        [Fact]
         public void PersistentActor_should_support_snapshotting()
         {
             var pref = ActorOf(Props.Create(() => new SnapshottingPersistentActor(Name, TestActor)));
@@ -151,7 +152,7 @@ namespace Akka.Persistence.Tests
             ExpectMsgInOrder("a-1", "a-2", "b-41", "b-42", "c-41", "c-42");
         }
 
-        [Fact(Skip = "Need https://github.com/akkadotnet/akka.net/pull/3668 merged")]
+        [Fact]
         public void PersistentActor_should_support_Context_Become_during_recovery()
         {
             var pref = ActorOf(Props.Create(() => new SnapshottingPersistentActor(Name, TestActor)));
@@ -238,7 +239,7 @@ namespace Akka.Persistence.Tests
             {
                 foreach (var probe in probes)
                 {
-                    probe.ExpectMsgAllOf<string>();
+                    probe.ExpectMsgAllOf(new string[]{} );
                 }
             });
         }
@@ -432,7 +433,7 @@ namespace Akka.Persistence.Tests
             ExpectNoMsg(TimeSpan.FromMilliseconds(100));
         }
 
-        [Fact(Skip = "Need https://github.com/akkadotnet/akka.net/pull/3668 merged")]
+        [Fact]
         public void PersistentActor_should_receive_RecoveryFinished_if_it_is_handled_after_all_events_have_been_replayed()
         {
             var pref = ActorOf(Props.Create(() => new SnapshottingPersistentActor(Name, TestActor)));
@@ -496,8 +497,8 @@ namespace Akka.Persistence.Tests
             pref.Tell("b");
 
             var msgs = ReceiveN(10).Select(m => m.ToString()).ToArray();
-            var amsgs = msgs.Where(m => m.StartsWith("a")).ToArray();
-            var bmsgs = msgs.Where(m => m.StartsWith("b")).ToArray();
+            var amsgs = msgs.Where(m => m.StartsWith('a')).ToArray();
+            var bmsgs = msgs.Where(m => m.StartsWith('b')).ToArray();
             amsgs.ShouldOnlyContainInOrder("a", "a-outer-1", "a-outer-2", "a-inner-1", "a-inner-2");
             bmsgs.ShouldOnlyContainInOrder("b", "b-outer-1", "b-outer-2", "b-inner-1", "b-inner-2");
         }
@@ -528,14 +529,14 @@ namespace Akka.Persistence.Tests
             var got = ReceiveN(nestedPersistAsyncs).Select(m => m.ToString()).OrderBy(m => m).ToArray();
             got.ShouldOnlyContainInOrder(Enumerable.Range(1, nestedPersistAsyncs).Select(i => "a-" + i).ToArray());
 
-                
+
             pref.Tell("b");
             pref.Tell("c");
-            got = ReceiveN(nestedPersistAsyncs*2 + 2).Select(m => m.ToString()).OrderBy(m => m).ToArray();
+            got = ReceiveN(nestedPersistAsyncs * 2 + 2).Select(m => m.ToString()).OrderBy(m => m).ToArray();
             got.ShouldOnlyContainInOrder(
-                new [] {"b"}
+                new[] { "b" }
                 .Union(Enumerable.Range(1, nestedPersistAsyncs).Select(i => "b-" + i))
-                .Union(new [] {"c"})
+                .Union(new[] { "c" })
                 .Union(Enumerable.Range(1, nestedPersistAsyncs).Select(i => "c-" + i))
                 .ToArray());
         }
@@ -605,6 +606,20 @@ namespace Akka.Persistence.Tests
         }
 
         [Fact]
+        public void PersistentActor_should_not_be_able_to_delete_higher_seqnr_than_current()
+        {
+            var pref = ActorOf(Props.Create(() => new BehaviorOneActor(Name)));
+            pref.Tell(new Cmd("b"));
+            pref.Tell(GetState.Instance);
+            ExpectMsgInOrder("a-1", "a-2", "b-1", "b-2");
+            pref.Tell(new Delete(5)); // > current 4
+            pref.Tell("boom"); // restart, recover
+            ExpectMsg<DeleteMessagesFailure>(m => m.Cause.Message.Should().Contain("less than or equal to LastSequenceNr"));
+            pref.Tell(GetState.Instance);
+            ExpectMsgInOrder("a-1", "a-2", "b-1", "b-2");
+        }
+
+        [Fact]
         public void PersistentActor_should_brecover_the_message_which_caused_the_restart()
         {
             var persistentActor = ActorOf(Props.Create(() => new RecoverMessageCausedRestart(Name)));
@@ -617,7 +632,7 @@ namespace Akka.Persistence.Tests
         {
             var persistentActor = ActorOf(Props.Create(() => new PersistInRecovery(Name)));
             persistentActor.Tell(GetState.Instance);
-            ExpectAnyMsgInOrder(new[]{"a-1", "a-2", "rc-1", "rc-2" }, new[] { "a-1", "a-2", "rc-1", "rc-2", "rc-3" });
+            ExpectAnyMsgInOrder(new[] { "a-1", "a-2", "rc-1", "rc-2" }, new[] { "a-1", "a-2", "rc-1", "rc-2", "rc-3" });
             persistentActor.Tell(new Cmd("invalid"));
             persistentActor.Tell(GetState.Instance);
             ExpectMsgInOrder("a-1", "a-2", "rc-1", "rc-2", "rc-3", "invalid");

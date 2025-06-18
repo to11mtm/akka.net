@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="AkkaSerializationSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -475,7 +475,7 @@ my-settings{
             Sys.EventStream.Subscribe(TestActor, typeof(object));
             var empty = Sys.ActorOf<EmptyActor>();
             empty.Ask("hello");
-            var f = ExpectMsg<FutureActorRef>();
+            var f = ExpectMsg<FutureActorRef<object>>();
 
 
             var message = new SomeMessage

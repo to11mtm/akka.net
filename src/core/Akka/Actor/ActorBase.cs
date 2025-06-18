@@ -1,12 +1,13 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ActorBase.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using Akka.Actor.Internal;
+using Akka.Actor.Scheduler;
 using Akka.Event;
 
 namespace Akka.Actor
@@ -20,8 +21,10 @@ namespace Akka.Actor
         /// <summary>
         /// Indicates the success of some operation which has been performed
         /// </summary>
-        public class Success : Status
+        public sealed class Success : Status
         {
+            public static readonly Success Instance = new(null);
+
             /// <summary>
             /// TBD
             /// </summary>
@@ -35,18 +38,26 @@ namespace Akka.Actor
             {
                 Status = status;
             }
+
+            public override string ToString() => Status is null ? "Success" : $"Success: {Status}";
         }
 
         /// <summary>
         /// Indicates the failure of some operation that was requested and includes an
         /// <see cref="Exception"/> describing the underlying cause of the problem.
         /// </summary>
-        public class Failure : Status
+        public sealed class Failure : Status
         {
             /// <summary>
             /// The cause of the failure
             /// </summary>
             public readonly Exception Cause;
+
+            /// <summary>
+            /// The source state of the failure
+            /// It can be used to send the command message back
+            /// </summary>
+            public readonly object State;
 
             /// <summary>
             /// Initializes a new instance of the <see cref="Failure"/> class.
@@ -55,13 +66,22 @@ namespace Akka.Actor
             public Failure(Exception cause)
             {
                 Cause = cause;
+                State = null;
             }
 
-            /// <inheritdoc/>
-            public override string ToString()
+            /// <summary>
+            /// Initializes a new instance of the <see cref="Failure"/> class.
+            /// </summary>
+            /// <param name="cause">The cause of the failure</param>
+            /// <param name="state">The source state of the failure</param>
+            public Failure(Exception cause, object state)
             {
-                return $"Failure: {Cause}";
+                Cause = cause;
+                State = state;
             }
+
+            public override string ToString()
+                => State is null ? $"Failure: {Cause}" : $"Failure[{State}]: {Cause}";
         }
     }
 
@@ -159,9 +179,9 @@ namespace Akka.Actor
         /// <returns>TBD</returns>
         protected internal virtual bool AroundReceive(Receive receive, object message)
         {
-            if (message is Scheduler.TimerScheduler.ITimerMsg tm)
+            if (message is TimerScheduler.ITimerMsg tm)
             {
-                if (this is IWithTimers withTimers && withTimers.Timers is Scheduler.TimerScheduler timers)
+                if (this is IWithTimers { Timers: TimerScheduler timers })
                 {
                     switch (timers.InterceptTimerMsg(Context.System.Log, tm))
                     {
@@ -173,7 +193,7 @@ namespace Akka.Actor
                             // discard
                             return true;
 
-                        case object m:
+                        case var m:
                             if (this is IActorStash)
                             {
                                 var actorCell = (ActorCell)Context;
@@ -223,8 +243,7 @@ namespace Akka.Actor
         /// </exception>
         protected virtual void Unhandled(object message)
         {
-            var terminatedMessage = message as Terminated;
-            if (terminatedMessage != null)
+            if (message is Terminated terminatedMessage)
             {
                 throw new DeathPactException(terminatedMessage.ActorRef);
             }

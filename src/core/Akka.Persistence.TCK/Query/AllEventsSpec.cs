@@ -1,4 +1,11 @@
-﻿using System;
+﻿//-----------------------------------------------------------------------
+// <copyright file="AllEventsSpec.cs" company="Akka.NET Project">
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
+// </copyright>
+//-----------------------------------------------------------------------
+
+using System;
 using System.Collections.Generic;
 using System.Text;
 using Akka.Actor;
@@ -61,7 +68,6 @@ namespace Akka.Persistence.TCK.Query
             probe.ExpectNext<EventEnvelope>(p => p.PersistenceId == "b" && p.SequenceNr == 1L && p.Event.Equals("test"));
             probe.Cancel();
         }
-
 
         [Fact]
         public virtual void ReadJournal_query_AllEvents_should_find_events_from_offset_exclusive()

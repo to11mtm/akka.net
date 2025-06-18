@@ -1,7 +1,7 @@
-﻿//-----------------------------------------------------------------------
+//-----------------------------------------------------------------------
 // <copyright file="DeadLetterListener.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -34,18 +34,14 @@ namespace Akka.Event
         protected override void PreRestart(Exception reason, object message)
         {
         }
-
-        /// <summary>
-        /// TBD
-        /// </summary>
+        
         protected override void PreStart()
         {
             _eventStream.Subscribe(Self, typeof(DeadLetter));
+            _eventStream.Subscribe(Self, typeof(Dropped));
+            _eventStream.Subscribe(Self, typeof(UnhandledMessage));
         }
-
-        /// <summary>
-        /// TBD
-        /// </summary>
+        
         protected override void PostStop()
         {
             _eventStream.Unsubscribe(Self);
@@ -63,113 +59,132 @@ namespace Akka.Event
                 _count++;
             }
         }
-
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <param name="message">TBD</param>
-        /// <returns>TBD</returns>
         protected override bool Receive(object message)
         {
             if (_isAlwaysLoggingDeadLetters)
             {
-                return ReceiveWithAlwaysLogging()(message);
+                return ReceiveWithAlwaysLogging(message);
             }
 
             return Context.System.Settings.LogDeadLettersSuspendDuration != Timeout.InfiniteTimeSpan
                 ? ReceiveWithSuspendLogging(Context.System.Settings.LogDeadLettersSuspendDuration)(message)
-                : ReceiveWithMaxCountLogging()(message);
+                : ReceiveWithMaxCountLogging(message);
         }
 
-        private Receive ReceiveWithAlwaysLogging()
+        private bool ReceiveWithAlwaysLogging(object message)
         {
-            return message =>
-            {
-                if (message is DeadLetter deadLetter)
-                {
-                    IncrementCount();
-                    LogDeadLetter(deadLetter.Message, deadLetter.Sender, deadLetter.Recipient, "");
-                    return true;
-                }
-                return false;
-            };
+            if (message is not AllDeadLetters d) return false;
+            if (IsWrappedSuppressed(d)) return true;
+            IncrementCount();
+            LogDeadLetter(d, "");
+            return true;
         }
 
-        private Receive ReceiveWithMaxCountLogging()
+        private bool ReceiveWithMaxCountLogging(object message)
         {
-            return message =>
+            if (message is not AllDeadLetters d) return false;
+            if (IsWrappedSuppressed(d)) return true;
+            IncrementCount();
+            if (_count == _maxCount)
             {
-                if (message is DeadLetter deadLetter)
-                {
-                    IncrementCount();
-                    if (_count == _maxCount)
-                    {
-                        LogDeadLetter(deadLetter.Message, deadLetter.Sender, deadLetter.Recipient, ", no more dead letters will be logged");
-                        Context.Stop(Self);
-                    }
-                    else
-                    {
-                        LogDeadLetter(deadLetter.Message, deadLetter.Sender, deadLetter.Recipient, "");
-                    }
-                    return true;
-                }
-                return false;
-            };
+                LogDeadLetter(d, ", no more dead letters will be logged");
+                Context.Stop(Self);
+            }
+            else
+            {
+                LogDeadLetter(d, "");
+            }
+            return true;
         }
 
         private Receive ReceiveWithSuspendLogging(TimeSpan suspendDuration)
         {
             return message =>
             {
-                if (message is DeadLetter deadLetter)
+                if (message is not AllDeadLetters d) return false;
+                if (IsWrappedSuppressed(d)) return true;
+                IncrementCount();
+                if (_count == _maxCount)
                 {
-                    IncrementCount();
-                    if (_count == _maxCount)
-                    {
-                        var doneMsg = $", no more dead letters will be logged in next [{suspendDuration}]";
-                        LogDeadLetter(deadLetter.Message, deadLetter.Sender, deadLetter.Recipient, doneMsg);
-                        Context.Become(ReceiveWhenSuspended(suspendDuration, Deadline.Now + suspendDuration));
-                    }
-                    else
-                    {
-                        LogDeadLetter(deadLetter.Message, deadLetter.Sender, deadLetter.Recipient, "");
-                    }
-                    return true;
+                    var doneMsg = $", no more dead letters will be logged in next [{suspendDuration}]";
+                    LogDeadLetter(d, doneMsg);
+                    Context.Become(ReceiveWhenSuspended(suspendDuration, Deadline.Now + suspendDuration));
                 }
-                return false;
+                else
+                {
+                    LogDeadLetter(d, "");
+                }
+
+                return true;
             };
+
         }
 
         private Receive ReceiveWhenSuspended(TimeSpan suspendDuration, Deadline suspendDeadline)
         {
             return message =>
             {
-                if (message is DeadLetter deadLetter)
-                {
-                    IncrementCount();
-                    if (suspendDeadline.IsOverdue)
-                    {
-                        var doneMsg = $", of which {(_count - _maxCount - 1).ToString()} were not logged. The counter will be reset now";
-                        LogDeadLetter(deadLetter.Message, deadLetter.Sender, deadLetter.Recipient, doneMsg);
-                        _count = 0;
-                        Context.Become(ReceiveWithSuspendLogging(suspendDuration));
-                    }
-                    return true;
-                }
-                return false;
+                if (message is not AllDeadLetters d) return false;
+                if (IsWrappedSuppressed(d)) return true;
+                IncrementCount();
+                if (!suspendDeadline.IsOverdue) return true;
+                var doneMsg = $", of which {(_count - _maxCount - 1)} were not logged. The counter will be reset now";
+                LogDeadLetter(d, doneMsg);
+                _count = 0;
+                Context.Become(ReceiveWithSuspendLogging(suspendDuration));
+                return true;
             };
         }
 
-        private void LogDeadLetter(object message, IActorRef snd, IActorRef recipient, string doneMsg)
+        private void LogDeadLetter(AllDeadLetters d, string doneMsg)
         {
-            var origin = ReferenceEquals(snd, Context.System.DeadLetters) ? "without sender" : $"from {snd.Path}";
-            _eventStream.Publish(new Info(
-                recipient.Path.ToString(),
-                recipient.GetType(),
-                $"Message [{message.GetType().Name}] {origin} to {recipient.Path} was not delivered. [{_count.ToString()}] dead letters encountered{doneMsg}. " +
-                $"If this is not an expected behavior then {recipient.Path} may have terminated unexpectedly. " +
+            var origin = IsReal(d.Sender) ? $" from {d.Sender}" : "";
+            var unwrapped = WrappedMessage.Unwrap(d.Message);
+            var messageStr = unwrapped?.GetType().Name ?? "null";
+            var wrappedIn = (d.Message is IWrappedMessage) ? $" wrapped in [${d.Message.GetType().Name}]" : "";
+
+            string logMessage;
+            switch (d)
+            {
+                case Dropped dropped:
+                    var destination = IsReal(d.Recipient) ? $" to {d.Recipient}" : "";
+                    logMessage = $"Message [{messageStr}]{wrappedIn}{origin}{destination} was dropped. {dropped.Reason}. " +
+                    $"[{_count}] dead letters encountered{doneMsg}. ";
+                    break;
+                case UnhandledMessage:
+                    destination = IsReal(d.Recipient) ? $" to {d.Recipient}" : "";
+                    logMessage = $"Message [{messageStr}]{wrappedIn}{origin}{destination} was unhandled. " +
+                    $"[{_count}] dead letters encountered{doneMsg}. ";
+                    break;
+                default:
+                    logMessage = $"Message [{messageStr}]{wrappedIn}{origin} to {d.Recipient} was not delivered. " +
+                    $"[{_count}] dead letters encountered{doneMsg}. " +
+                    $"If this is not an expected behavior then {d.Recipient} may have terminated unexpectedly. ";
+                    break;
+            }
+
+            logMessage +=
                 "This logging can be turned off or adjusted with configuration settings 'akka.log-dead-letters' " +
-                "and 'akka.log-dead-letters-during-shutdown'."));
+                "and 'akka.log-dead-letters-during-shutdown'.";
+
+            // Check that unwrapped object has an overriden ToString() method
+            var content = unwrapped?.ToString() ?? "null";
+            if (!content.Equals(messageStr))
+            {
+                logMessage += $" Message content: {content}";
+            }
+            
+            _eventStream.Publish(new Info(d.Recipient.Path.ToString(), d.Recipient.GetType(), logMessage));
+        }
+
+        private static bool IsReal(IActorRef snd)
+        {
+            return !ReferenceEquals(snd, ActorRefs.NoSender) && !ReferenceEquals(snd, Context.System.DeadLetters) && snd is not DeadLetterActorRef;
+        }
+
+        private static bool IsWrappedSuppressed(AllDeadLetters d)
+        {
+            return d is IWrappedMessage { Message: IDeadLetterSuppression };
         }
 
         /// <summary>
@@ -209,9 +224,9 @@ namespace Akka.Event
             public TimeSpan TimeLeft { get { return When - DateTime.UtcNow; } }
 
             #region Overrides
-            
+
             /// <inheritdoc/>
-            public override bool Equals(object obj) => 
+            public override bool Equals(object obj) =>
                 obj is Deadline deadline && Equals(deadline);
 
             /// <inheritdoc/>
@@ -227,7 +242,7 @@ namespace Akka.Event
             /// <summary>
             /// A deadline that is due <see cref="DateTime.UtcNow"/>
             /// </summary>
-            public static Deadline Now => new Deadline(DateTime.UtcNow);
+            public static Deadline Now => new(DateTime.UtcNow);
 
             /// <summary>
             /// Adds a given <see cref="TimeSpan"/> to the due time of this <see cref="Deadline"/>

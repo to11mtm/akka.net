@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="StreamTcpException.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -32,7 +32,6 @@ namespace Akka.Streams
         {
         }
 
-#if SERIALIZATION
         /// <summary>
         /// Initializes a new instance of the <see cref="StreamTcpException"/> class.
         /// </summary>
@@ -41,7 +40,34 @@ namespace Akka.Streams
         protected StreamTcpException(SerializationInfo info, StreamingContext context) : base(info, context)
         {
         }
-#endif
+    }
+
+    /// <summary>
+    /// This exception signals that materialized value is already detached from stream. This usually happens
+    /// when stream is completed and an ActorSystem is shut down while materialized object is still available.
+    /// </summary>
+    public class StreamDetachedException : Exception
+    {
+        /// <summary>
+        /// Initializes a single instance of the <see cref="StreamDetachedException"/> class.
+        /// </summary>
+        public static readonly StreamDetachedException Instance = new();
+
+        public StreamDetachedException()
+            : this("Stream is terminated. Materialized value is detached.")
+        {
+        }
+
+        public StreamDetachedException(string message)
+            : base(message)
+        {
+        }
+        
+        public StreamDetachedException(string message, Exception innerException)
+            : base(message, innerException)
+        {
+        }
+        
     }
 
     /// <summary>
@@ -52,13 +78,12 @@ namespace Akka.Streams
         /// <summary>
         /// The single instance of this exception
         /// </summary>
-        public static readonly BindFailedException Instance = new BindFailedException();
+        public static readonly BindFailedException Instance = new();
 
         private BindFailedException() : base("bind failed")
         {
         }
 
-#if SERIALIZATION
         /// <summary>
         /// Initializes a new instance of the <see cref="BindFailedException"/> class.
         /// </summary>
@@ -67,7 +92,6 @@ namespace Akka.Streams
         protected BindFailedException(SerializationInfo info, StreamingContext context) : base(info, context)
         {
         }
-#endif
     }
 
     /// <summary>
@@ -92,7 +116,6 @@ namespace Akka.Streams
         {
         }
 
-#if SERIALIZATION
         /// <summary>
         /// Initializes a new instance of the <see cref="ConnectionException"/> class.
         /// </summary>
@@ -101,6 +124,5 @@ namespace Akka.Streams
         protected ConnectionException(SerializationInfo info, StreamingContext context) : base(info, context)
         {
         }
-#endif
     }
 }

@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
-// <copyright file="Lease.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+// <copyright file="Discovery.cs" company="Akka.NET Project">
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -10,7 +10,8 @@ using System.Collections.Concurrent;
 using Akka.Actor;
 using Akka.Annotations;
 using Akka.Configuration;
-using Akka.Util;
+using Akka.Event;
+using BindingFlags = System.Reflection.BindingFlags;
 
 namespace Akka.Discovery
 {
@@ -18,22 +19,26 @@ namespace Akka.Discovery
     {
         private readonly ExtendedActorSystem _system;
         private readonly Lazy<ServiceDiscovery> _defaultImpl;
-        private readonly ConcurrentDictionary<string, Lazy<ServiceDiscovery>> _implementations =
-            new ConcurrentDictionary<string, Lazy<ServiceDiscovery>>();
+        private readonly ConcurrentDictionary<string, Lazy<ServiceDiscovery>> _implementations = new();
+        private readonly ILoggingAdapter _log;
 
         public Discovery(ExtendedActorSystem system)
         {
             _system = system;
             _system.Settings.InjectTopLevelFallback(DiscoveryProvider.DefaultConfiguration());
 
+            _log = Logging.GetLogger(_system, GetType());
             var defaultImplMethod = new Lazy<string>(() =>
             {
                 var method = system.Settings.Config.GetString("akka.discovery.method");
-                if (method == "<method>")
+                if (string.IsNullOrWhiteSpace(method) || method == "<method>")
                 {
-                    throw new ArgumentException("No default service discovery implementation configured in \n" +
-                        "`akka.discovery.method`. Make sure to configure this setting to your preferred implementation such as \n" +
-                        "'akka-dns' in your application.conf (from the akka-discovery module).");
+                    _log.Warning(
+                        "No default service discovery implementation configured in `akka.discovery.method`.\n" +
+                        "Make sure to configure this setting to your preferred implementation such as 'config'\n" +
+                        "in your application.conf (from the akka-discovery module). Falling back to default config\n" +
+                        "based discovery method");
+                    method = "config";
                 }
                 return method;
             });
@@ -60,32 +65,70 @@ namespace Akka.Discovery
         [InternalApi]
         private ServiceDiscovery CreateServiceDiscovery(string method)
         {
-            var config = _system.Settings.Config;
+            var config = _system.Settings.Config.GetConfig($"akka.discovery.{method}");
+            if (config is null)
+                throw new ArgumentException($"Could not load discovery config from path [akka.discovery.{method}]");
+            if(!config.HasPath("class"))
+                throw new ArgumentException($"akka.discovery.{method} must contain field `class` that is a FQN of an `Akka.Discovery.ServiceDiscovery` implementation");
 
-            string ClassNameFromConfig(string path) => config.HasPath(path)
-                ? config.GetString(path)
-                : throw new ArgumentException($"{path} must contain field `class` that is a FQN of an `Akka.Discovery.ServiceDiscovery` implementation");
+            var className = config.GetString("class");
+            _log.Info($"Starting Discovery service using [{method}] method, class: [{className}]");
 
-            Try<ServiceDiscovery> Create(string typeName)
+            try
             {
-                var dynamic = DynamicAccess.CreateInstanceFor<ServiceDiscovery>(typeName, _system);
-                return dynamic.RecoverWith(ex => ex is TypeLoadException || ex is MissingMethodException 
-                    ? DynamicAccess.CreateInstanceFor<ServiceDiscovery>(typeName) 
-                    : dynamic);
+                return Create(className);
+            }
+            catch (Exception ex)
+                when (ex is TypeLoadException or MissingMethodException)
+            {
+                throw new ArgumentException(
+                    message: $"Illegal akka.discovery.{method}.class value or incompatible class!\n" +
+                             "The implementation class MUST extend Akka.Discovery.ServiceDiscovery with:\n" +
+                             "  * parameterless constructor, " +
+                             $"  * constructor with a single {nameof(ExtendedActorSystem)} parameter, or\n" +
+                             $"  * constructor with {nameof(ExtendedActorSystem)} and {nameof(Configuration.Config)} parameters.",
+                    paramName: nameof(method),
+                    innerException: ex);
             }
 
-            var configName = $"akka.discovery.{method}.class";
-            var instanceTry = Create(ClassNameFromConfig(configName));
-
-            return instanceTry.IsSuccess switch
+            ServiceDiscovery Create(string typeName)
             {
-                true => instanceTry.Get(),
-                false when instanceTry.Failure.Value is TypeLoadException || instanceTry.Failure.Value is MissingMethodException =>
-                    throw new ArgumentException(nameof(method), $"Illegal {configName} value or incompatible class! \n" +
-                        "The implementation class MUST extend Akka.Discovery.ServiceDiscovery and take an \n" +
-                        "ExtendedActorSystem as constructor argument."),
-                _ => throw instanceTry.Failure.Value
-            };
+                var type = Type.GetType(typeName: typeName);
+                if (type is null || !typeof(ServiceDiscovery).IsAssignableFrom(type))
+                    throw new TypeLoadException();
+
+                var bindFlags = BindingFlags.Instance | BindingFlags.Public;
+                
+                var ctor = type.GetConstructor(
+                    bindingAttr: bindFlags,
+                    binder: null,
+                    types: new[]
+                    {
+                        typeof(ExtendedActorSystem), 
+                        typeof(Configuration.Config)
+                    }, 
+                    modifiers: null);
+                if (ctor is not null)
+                    return (ServiceDiscovery) Activator.CreateInstance(type, _system, config);
+                
+                ctor = type.GetConstructor(
+                    bindingAttr: bindFlags, 
+                    binder: null,
+                    types: new[] { typeof(ExtendedActorSystem) }, 
+                    modifiers: null);
+                if (ctor is not null)
+                    return (ServiceDiscovery) Activator.CreateInstance(type, _system);
+                
+                ctor = type.GetConstructor(
+                    bindingAttr: bindFlags, 
+                    binder: null,
+                    types: Array.Empty<Type>(), 
+                    modifiers: null);
+                if (ctor is null)
+                    throw new MissingMethodException();
+                
+                return (ServiceDiscovery) Activator.CreateInstance(type);
+            }
         }
 
         public static Discovery Get(ActorSystem system) => system.WithExtension<Discovery, DiscoveryProvider>();
@@ -93,7 +136,7 @@ namespace Akka.Discovery
 
     public class DiscoveryProvider : ExtensionIdProvider<Discovery>
     {
-        public override Discovery CreateExtension(ExtendedActorSystem system) => new Discovery(system);
+        public override Discovery CreateExtension(ExtendedActorSystem system) => new(system);
 
         /// <summary>
         /// Returns a default configuration for the Akka Discovery module.

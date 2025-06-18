@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="Logging.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -47,7 +47,7 @@ namespace Akka.Event
                     return new LogSource(actorRef.Path.ToString(), SourceType(actorRef));
                 case string str:
                     return new LogSource(str, SourceType(str));
-                case System.Type t:
+                case Type t:
                     return new LogSource(Logging.SimpleName(t), t);
                 default:
                     return new LogSource(Logging.SimpleName(o), SourceType(o));
@@ -64,18 +64,25 @@ namespace Akka.Event
                     return new LogSource(FromActorRef(actorRef, system), SourceType(actorRef));
                 case string str:
                     return new LogSource(FromString(str, system), SourceType(str));
-                case System.Type t:
+                case Type t:
                     return new LogSource(FromType(t, system), t);
+                case LogSource logSource:
+                    return logSource; // if someone's already created a LogSource, just use it
                 default:
                     return new LogSource(FromType(o.GetType(), system), SourceType(o));
             }
+        }
+
+        public static LogSource Create(string source, Type t)
+        {
+            return new LogSource(source, t);
         }
 
         public static Type SourceType(object o)
         {
             switch (o)
             {
-                case System.Type t:
+                case Type t:
                     return t;
                 case IActorContext context:
                     return context.Props.Type;
@@ -107,7 +114,8 @@ namespace Akka.Event
         {
             try
             {
-                return a.Path.ToStringWithAddress(system.AsInstanceOf<ExtendedActorSystem>().Provider.DefaultAddress);
+                var defaultAddress = system.AsInstanceOf<ExtendedActorSystem>().Provider.DefaultAddress;
+                return defaultAddress is null ? a.Path.ToString() : a.Path.ToStringWithAddress(defaultAddress);
             }
             catch // can fail if the ActorSystem (remoting) is not completely started yet
             {
@@ -146,11 +154,6 @@ namespace Akka.Event
         private const string Error = "ERROR";
         private const string Off = "OFF";
         private const LogLevel OffLogLevel = (LogLevel) int.MaxValue;
-
-        /// <summary>
-        /// Returns a singleton instance of the standard out logger.
-        /// </summary>
-        public static readonly StandardOutLogger StandardOutLogger = new StandardOutLogger();
 
         /// <summary>
         /// Retrieves the log event class associated with the specified log level.
@@ -201,6 +204,28 @@ namespace Akka.Event
         }
 
         /// <summary>
+        /// INTERNAL API.
+        ///
+        /// Used by actors / infrastructure that are starting up around the same time as the RemoteTransport
+        /// is being booted, and therefore can cause problems similar to https://github.com/akkadotnet/akka.net/issues/4677 at startup.
+        /// </summary>
+        /// <param name="context">The context used to configure the logging adapter.</param>
+        /// <param name="logMessageFormatter">The formatter used to format log messages.</param>
+        /// <returns>The newly created logging adapter.</returns>
+        internal static ILoggingAdapter GetLoggerStartup(this IActorContext context, ILogMessageFormatter logMessageFormatter = null)
+        {
+            try
+            {
+                return context.GetLogger(logMessageFormatter);
+            }
+            catch // had a failure, don't want to propagate it. Just start the logger without remote context
+            {
+                var logSource = LogSource.Create(context);
+                return new BusLogging(context.System.EventStream, logSource.Source, logSource.Type, logMessageFormatter ?? context.System.Settings.LogFormatter);
+            }
+        }
+
+        /// <summary>
         /// Creates a new logging adapter using the specified context's event stream.
         /// </summary>
         /// <param name="context">The context used to configure the logging adapter.</param>
@@ -209,7 +234,7 @@ namespace Akka.Event
         public static ILoggingAdapter GetLogger(this IActorContext context, ILogMessageFormatter logMessageFormatter = null)
         {
             var logSource = LogSource.Create(context, context.System);
-            return new BusLogging(context.System.EventStream, logSource.Source, logSource.Type, logMessageFormatter ?? new DefaultLogMessageFormatter());
+            return new BusLogging(context.System.EventStream, logSource.Source, logSource.Type, logMessageFormatter ?? context.System.Settings.LogFormatter);
         }
 
         /// <summary>
@@ -222,7 +247,7 @@ namespace Akka.Event
         public static ILoggingAdapter GetLogger(ActorSystem system, object logSourceObj, ILogMessageFormatter logMessageFormatter = null)
         {
             var logSource = LogSource.Create(logSourceObj, system);
-            return new BusLogging(system.EventStream, logSource.Source, logSource.Type, logMessageFormatter ?? new DefaultLogMessageFormatter());
+            return new BusLogging(system.EventStream, logSource.Source, logSource.Type, logMessageFormatter ?? system.Settings.LogFormatter);
         }
 
         /// <summary>
@@ -235,7 +260,7 @@ namespace Akka.Event
         public static ILoggingAdapter GetLogger(LoggingBus loggingBus, object logSourceObj, ILogMessageFormatter logMessageFormatter = null)
         {
             var logSource = LogSource.Create(logSourceObj);
-            return new BusLogging(loggingBus, logSource.Source, logSource.Type, logMessageFormatter ?? new DefaultLogMessageFormatter());
+            return new BusLogging(loggingBus, logSource.Source, logSource.Type, logMessageFormatter ?? DefaultLogMessageFormatter.Instance);
         }
 
         /// <summary>
@@ -248,7 +273,7 @@ namespace Akka.Event
         {
             if (!string.IsNullOrEmpty(logLevel))
             {
-                logLevel = logLevel.ToUpper();
+                logLevel = logLevel.ToUpperInvariant();
             }
 
             switch (logLevel)

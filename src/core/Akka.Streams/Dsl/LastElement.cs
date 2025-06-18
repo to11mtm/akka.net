@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="LastElement.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -30,13 +30,13 @@ namespace Akka.Streams.Dsl
                 SetHandler(lastElement.In, onPush: () =>
                 {
                     var element = Grab(lastElement.In);
-                    currentElement = new Option<T>(element);
+                    currentElement = Option<T>.Create(element);
                     Push(lastElement.Out, element);
                 }, onUpstreamFinish: () =>
                 {
                     completion.SetResult(currentElement);
                     CompleteStage();
-                }, onUpstreamFailure: ex =>
+                }, onUpstreamFailure: _ =>
                 {
                     completion.SetResult(currentElement);
                     CompleteStage();

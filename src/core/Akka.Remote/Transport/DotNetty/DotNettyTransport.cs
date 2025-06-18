@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="DotNettyTransport.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -112,7 +112,6 @@ namespace Akka.Remote.Transport.DotNetty
         {
         }
 
-#if SERIALIZATION
         /// <summary>
         /// Initializes a new instance of the <see cref="DotNettyTransportException"/> class.
         /// </summary>
@@ -121,7 +120,6 @@ namespace Akka.Remote.Transport.DotNetty
         protected DotNettyTransportException(SerializationInfo info, StreamingContext context) : base(info, context)
         {
         }
-#endif
     }
 
 
@@ -144,13 +142,17 @@ namespace Akka.Remote.Transport.DotNetty
             System = system;
             Config = config;
 
+            // Helios compatibility
             if (system.Settings.Config.HasPath("akka.remote.helios.tcp"))
             {
-                var heliosFallbackConfig = system.Settings.Config.GetConfig("akka.remote.helios.tcp");
+                var heliosFallbackConfig = system.Settings.Config.GetConfig("akka.remote.helios.tcp")
+                    .WithFallback("transport-class = \"Akka.Remote.Transport.Helios.HeliosTcpTransport, Akka.Remote.Transport.Helios\"");
                 config = heliosFallbackConfig.WithFallback(config);
             }
 
-            Settings = DotNettyTransportSettings.Create(config);
+            var setup = system.Settings.Setup.Get<DotNettySslSetup>();
+            var sslSettings = setup.HasValue ? setup.Value.Settings : null;
+            Settings = DotNettyTransportSettings.Create(config, sslSettings);
             Log = Logging.GetLogger(System, GetType());
             _serverEventLoopGroup = new MultithreadEventLoopGroup(Settings.ServerSocketWorkerPoolSize);
             _clientEventLoopGroup = new MultithreadEventLoopGroup(Settings.ClientSocketWorkerPoolSize);
@@ -172,19 +174,25 @@ namespace Akka.Remote.Transport.DotNetty
             if (InternalTransport != TransportMode.Tcp)
                 throw new NotImplementedException("Haven't implemented UDP transport at this time");
 
-            if (listenAddress is DnsEndPoint dns)
+            try
             {
-                listenAddress = await DnsToIPEndpoint(dns).ConfigureAwait(false);
-            }
+                if (listenAddress is DnsEndPoint dns)
+                {
+                    listenAddress = await DnsToIPEndpoint(dns).ConfigureAwait(false);
+                }
 
-            return await ServerFactory().BindAsync(listenAddress).ConfigureAwait(false);
+                return await ServerFactory().BindAsync(listenAddress).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                throw new RemoteTransportException($"Failed to bind to [{listenAddress}]. See InnerException for details.", ex);
+            }
         }
 
         public override async Task<(Address, TaskCompletionSource<IAssociationEventListener>)> Listen()
         {
             EndPoint listenAddress;
-            IPAddress ip;
-            if (IPAddress.TryParse(Settings.Hostname, out ip))
+            if (IPAddress.TryParse(Settings.Hostname, out var ip))
                 listenAddress = new IPEndPoint(ip, Settings.Port);
             else
                 listenAddress = new DnsEndPoint(Settings.Hostname, Settings.Port);
@@ -212,7 +220,7 @@ namespace Akka.Remote.Transport.DotNetty
                 LocalAddress = addr;
                 // resume accepting incoming connections
 #pragma warning disable 4014 // we WANT this task to run without waiting
-                AssociationListenerPromise.Task.ContinueWith(result => newServerChannel.Configuration.AutoRead = true,
+                AssociationListenerPromise.Task.ContinueWith(_ => newServerChannel.Configuration.AutoRead = true,
                     TaskContinuationOptions.ExecuteSynchronously | TaskContinuationOptions.OnlyOnRanToCompletion);
 #pragma warning restore 4014
 
@@ -234,12 +242,12 @@ namespace Akka.Remote.Transport.DotNetty
             }
         }
 
-        public override async Task<AssociationHandle> Associate(Address remoteAddress)
+        public override Task<AssociationHandle> Associate(Address remoteAddress)
         {
             if (!ServerChannel.Open)
                 throw new ChannelException("Transport is not open");
 
-            return await AssociateInternal(remoteAddress).ConfigureAwait(false);
+            return AssociateInternal(remoteAddress);
         }
 
         protected abstract Task<AssociationHandle> AssociateInternal(Address remoteAddress);
@@ -340,7 +348,7 @@ namespace Akka.Remote.Transport.DotNetty
             }
 
             if(Settings.BatchWriterSettings.EnableBatching)
-                pipeline.AddLast("BatchWriter", new BatchWriter(Settings.BatchWriterSettings));
+                pipeline.AddLast("BatchWriter", new FlushConsolidationHandler(Settings.BatchWriterSettings.MaxExplicitFlushes));
         }
 
         private void SetClientPipeline(IChannel channel, Address remoteAddress)
@@ -351,7 +359,7 @@ namespace Akka.Remote.Transport.DotNetty
                 var host = certificate.GetNameInfo(X509NameType.DnsName, false);
 
                 var tlsHandler = Settings.Ssl.SuppressValidation
-                    ? new TlsHandler(stream => new SslStream(stream, true, (sender, cert, chain, errors) => true), new ClientTlsSettings(host))
+                    ? new TlsHandler(stream => new SslStream(stream, true, (_, _, _, _) => true), new ClientTlsSettings(host))
                     : TlsHandler.Client(host, certificate);
 
                 channel.Pipeline.AddFirst("TlsHandler", tlsHandler);
@@ -444,8 +452,7 @@ namespace Akka.Remote.Transport.DotNetty
 
         internal static string SafeMapHostName(string hostName)
         {
-            IPAddress ip;
-            return !string.IsNullOrEmpty(hostName) && IPAddress.TryParse(hostName, out ip) ? SafeMapIPv6(ip) : hostName;
+            return !string.IsNullOrEmpty(hostName) && IPAddress.TryParse(hostName, out var ip) ? SafeMapIPv6(ip) : hostName;
         }
 
         private static string SafeMapIPv6(IPAddress ip) => ip.AddressFamily == AddressFamily.InterNetworkV6 ? "[" + ip + "]" : ip.ToString();
@@ -454,8 +461,7 @@ namespace Akka.Remote.Transport.DotNetty
         {
             if (!address.Port.HasValue) throw new ArgumentNullException(nameof(address), $"Address port must not be null: {address}");
 
-            IPAddress ip;
-            return IPAddress.TryParse(address.Host, out ip)
+            return IPAddress.TryParse(address.Host, out var ip)
                 ? (EndPoint)new IPEndPoint(ip, address.Port.Value)
                 : new DnsEndPoint(address.Host, address.Port.Value);
         }
@@ -470,8 +476,7 @@ namespace Akka.Remote.Transport.DotNetty
         {
             if (address.Port == null) throw new ArgumentException($"address port must not be null: {address}");
             EndPoint listenAddress;
-            IPAddress ip;
-            if (IPAddress.TryParse(address.Host, out ip))
+            if (IPAddress.TryParse(address.Host, out var ip))
             {
                 listenAddress = new IPEndPoint(ip, (int)address.Port);
             }
@@ -486,9 +491,9 @@ namespace Akka.Remote.Transport.DotNetty
         #endregion
     }
 
-    internal class HeliosBackwardsCompatabilityLengthFramePrepender : LengthFieldPrepender
+    internal sealed class HeliosBackwardsCompatabilityLengthFramePrepender : LengthFieldPrepender
     {
-        private readonly List<object> _temporaryOutput = new List<object>(2);
+        private readonly List<object> _temporaryOutput = new(2);
 
         public HeliosBackwardsCompatabilityLengthFramePrepender(int lengthFieldLength,
             bool lengthFieldIncludesLengthFieldLength) : base(ByteOrder.LittleEndian, lengthFieldLength, 0, lengthFieldIncludesLengthFieldLength)

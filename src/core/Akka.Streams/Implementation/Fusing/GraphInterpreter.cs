@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="GraphInterpreter.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -10,6 +10,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Annotations;
 using Akka.Event;
@@ -110,7 +111,7 @@ namespace Akka.Streams.Implementation.Fusing
             /// <summary>
             /// TBD
             /// </summary>
-            public static readonly Empty Instance = new Empty();
+            public static readonly Empty Instance = new();
 
             private Empty()
             {
@@ -125,7 +126,7 @@ namespace Akka.Streams.Implementation.Fusing
 
 
         /// <summary>
-        /// TBD
+        /// Marker class that indicates that a port was failed with a given cause and a potential outstanding element
         /// </summary>
         public sealed class Failed
         {
@@ -147,6 +148,19 @@ namespace Akka.Streams.Implementation.Fusing
             {
                 Reason = reason;
                 PreviousElement = previousElement;
+            }
+        }
+        
+        /// <summary>
+        /// Marker class that indicates that a port was cancelled with a given cause
+        /// </summary>
+        public sealed class Cancelled
+        {
+            public readonly Exception Cause;
+
+            public Cancelled(Exception cause)
+            {
+                Cause = cause;
             }
         }
 
@@ -253,12 +267,15 @@ namespace Akka.Streams.Implementation.Fusing
             public IOutHandler OutHandler { get; set; }
 
             /// <summary>
-            /// TBD
+            /// See <see cref="GraphInterpreter"/> about possible states
             /// </summary>
             public int PortState { get; set; } = InReady;
 
             /// <summary>
-            /// TBD
+            /// Can either be:
+            /// * An in-flight element
+            /// * A failure (with an optional in-flight element), if elem is an instance of <see cref="Failed"/>
+            /// * A cancellation cause, is elem is an instance of <see cref="Cancelled"/>
             /// </summary>
             public object Slot { get; set; } = Empty.Instance;
 
@@ -344,7 +361,7 @@ namespace Akka.Streams.Implementation.Fusing
         // Using an Object-array avoids holding on to the GraphInterpreter class
         // when this accidentally leaks onto threads that are not stopped when this
         // class should be unloaded.
-        private static readonly ThreadLocal<object[]> CurrentInterpreter = new ThreadLocal<object[]>(() => new object[1]);
+        private static readonly ThreadLocal<object[]> CurrentInterpreter = new(() => new object[1]);
 
         /// <summary>
         /// TBD
@@ -393,7 +410,7 @@ namespace Akka.Streams.Implementation.Fusing
         /// <summary>
         /// TBD
         /// </summary>
-        public readonly Action<GraphStageLogic, object, Action<object>> OnAsyncInput;
+        public readonly Action<GraphStageLogic, object, TaskCompletionSource<Done>, Action<object>> OnAsyncInput;
         /// <summary>
         /// TBD
         /// </summary>
@@ -441,7 +458,7 @@ namespace Akka.Streams.Implementation.Fusing
                     ILoggingAdapter log,
                     GraphStageLogic[] logics,
                     Connection[] connections,
-                    Action<GraphStageLogic, object, Action<object>> onAsyncInput,
+                    Action<GraphStageLogic, object, TaskCompletionSource<Done>, Action<object>> onAsyncInput,
                     bool fuzzingMode,
                     IActorRef context)
         {
@@ -489,7 +506,7 @@ namespace Akka.Streams.Implementation.Fusing
         /// <summary>
         /// TBD
         /// </summary>
-        internal string Name => _name ?? (_name = GetHashCode().ToString("x"));
+        internal string Name => _name ??= GetHashCode().ToString("x");
 
         /// <summary>
         /// Assign the boundary logic to a given connection. This will serve as the interface to the external world
@@ -783,13 +800,7 @@ namespace Akka.Streams.Implementation.Fusing
 
 
 #pragma warning disable CS0162 // Disabled since the flag can be set while debugging
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <param name="logic">TBD</param>
-        /// <param name="evt">TBD</param>
-        /// <param name="handler">TBD</param>
-        public void RunAsyncInput(GraphStageLogic logic, object evt, Action<object> handler)
+        public void RunAsyncInput(GraphStageLogic logic, object evt, TaskCompletionSource<Done> promise, Action<object> handler)
         {
             if (!IsStageCompleted(logic))
             {
@@ -803,9 +814,19 @@ namespace Akka.Streams.Implementation.Fusing
                     try
                     {
                         handler(evt);
+                        if (!ReferenceEquals(promise, GraphStageLogic.NoPromise))
+                        {
+                            promise.TrySetResult(Done.Instance);
+                            logic.OnFeedbackDispatched();
+                        }
                     }
                     catch (Exception e)
                     {
+                        if (!ReferenceEquals(promise, GraphStageLogic.NoPromise))
+                        {
+                            promise.TrySetException(e);
+                            logic.OnFeedbackDispatched();
+                        }
                         logic.FailStage(e);
                     }
                     AfterStageHasRun(logic);
@@ -845,7 +866,9 @@ namespace Akka.Streams.Implementation.Fusing
                 if (IsDebug) Console.WriteLine($"{Name} CANCEL {InOwnerName(connection)} -> {OutOwnerName(connection)} ({connection.OutHandler}) [{OutLogicName(connection)}]");
                 connection.PortState |= OutClosed;
                 CompleteConnection(connection.OutOwnerId);
-                connection.OutHandler.OnDownstreamFinish();
+                var cause = ((Cancelled)connection.Slot).Cause;
+                connection.Slot = Empty.Instance;
+                connection.OutHandler.OnDownstreamFinish(cause);
             }
             else if ((code & (OutClosed | InClosed)) == OutClosed)
             {
@@ -1067,14 +1090,15 @@ namespace Akka.Streams.Implementation.Fusing
         /// TBD
         /// </summary>
         /// <param name="connection">TBD</param>
-        internal void Cancel(Connection connection)
+        /// <param name="cause"></param>
+        internal void Cancel(Connection connection, Exception cause)
         {
             var currentState = connection.PortState;
-            if (IsDebug) Console.WriteLine($"{Name}   Cancel({connection}) [{currentState}]");
+            if (IsDebug) Console.WriteLine($"{Name}   Cancel({connection}) [{currentState}] [{cause.Message}]");
             connection.PortState = currentState | InClosed;
             if ((currentState & OutClosed) == 0)
             {
-                connection.Slot = Empty.Instance;
+                connection.Slot = new Cancelled(cause);
                 if ((currentState & (Pulling | Pushing | InClosed)) == 0)
                     Enqueue(connection);
                 else if (_chasedPull == connection)

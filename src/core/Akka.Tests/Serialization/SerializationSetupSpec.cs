@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="SerializationSetupSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -37,8 +37,8 @@ namespace Akka.Tests.Serialization
 
             public override int Identifier => 666;
 
-            private AtomicCounter Counter { get; } = new AtomicCounter(0);
-            private ConcurrentDictionary<int, object> Registry { get; } = new ConcurrentDictionary<int, object>();
+            private AtomicCounter Counter { get; } = new(0);
+            private ConcurrentDictionary<int, object> Registry { get; } = new();
 
             public override byte[] ToBinary(object obj)
             {
@@ -56,8 +56,15 @@ namespace Akka.Tests.Serialization
             }
         }
 
+        public class OverridenSerializer : Serializer
+        {
+            public OverridenSerializer(ExtendedActorSystem system) : base(system) { }
+            public override bool IncludeManifest => throw new NotImplementedException();
+            public override byte[] ToBinary(object obj) => throw new NotImplementedException();
+            public override object FromBinary(byte[] bytes, Type type) => throw new NotImplementedException();
+        }
 
-        public static SerializationSetup SerializationSettings = new SerializationSetup(_ => 
+        public static SerializationSetup SerializationSettings = new(_ => 
             ImmutableHashSet<SerializerDetails>.Empty.Add(SerializerDetails.Create("test", new TestSerializer(_), 
                 ImmutableHashSet<Type>.Empty.Add(typeof(ProgammaticDummy)))));
 
@@ -100,6 +107,38 @@ namespace Akka.Tests.Serialization
         {
             var serializer = Sys.Serialization.FindSerializerFor(new ConfigurationDummy());
             serializer.Should().BeOfType<TestSerializer>();
+        }
+
+        [Fact]
+        public void SerializationSettingsShouldOverrideHoconSettings()
+        {
+            var serializationSettings = new SerializationSetup(_ => 
+                ImmutableHashSet<SerializerDetails>.Empty
+                    .Add(SerializerDetails.Create(
+                        "test", 
+                        new TestSerializer(_), 
+                        ImmutableHashSet<Type>.Empty.Add(typeof(ProgammaticDummy)))));
+
+            var bootstrap = BootstrapSetup.Create().WithConfig(ConfigurationFactory.ParseString(@"
+                akka{
+                    actor{
+                        serialize-messages = on
+                        serializers {
+                            test = ""Akka.Tests.Serialization.OverridenSerializer, Akka.Test""
+                        }
+                        serialization-bindings {
+                            ""Akka.Tests.Serialization.ProgammaticDummy, Akka.Tests"" = test
+                        }
+                    }
+                }").WithFallback(TestConfigs.DefaultConfig));
+
+            var actorSystemSettings = ActorSystemSetup.Create(serializationSettings, bootstrap);
+
+            var sys2 = ActorSystem.Create("override-test", actorSystemSettings);
+            var serializer = sys2.Serialization.FindSerializerFor(new ProgammaticDummy());
+            serializer.Should().BeOfType<TestSerializer>();
+
+            sys2.Terminate().Wait();
         }
     }
 }

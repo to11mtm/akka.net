@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="StreamRefsSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -16,6 +16,9 @@ using FluentAssertions;
 using System;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
+using Akka.TestKit.Xunit2.Attributes;
+using FluentAssertions.Extensions;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -53,27 +56,31 @@ namespace Akka.Streams.Tests
                          */
                         var source = Source.From(new[] { "hello", "world" });
                         var aref = source.RunWith(StreamRefs.SourceRef<string>(), _materializer);
-                        aref.PipeTo(Sender);
+                        var sender = this.Sender;
+                        aref.PipeTo(sender);
                         return true;
                     }
                 case "give-infinite":
                     {
                         var source = Source.From(Enumerable.Range(1, int.MaxValue).Select(i => "ping-" + i));
                         var t = source.ToMaterialized(StreamRefs.SourceRef<string>(), Keep.Right).Run(_materializer);
-                        t.PipeTo(Sender);
+                        var sender = this.Sender;
+                        t.PipeTo(sender);
                         return true;
                     }
                 case "give-fail":
                     {
                         var r = Source.Failed<string>(new Exception("Boom!"))
                             .RunWith(StreamRefs.SourceRef<string>(), _materializer);
-                        r.PipeTo(Sender);
+                        var sender = this.Sender;
+                        r.PipeTo(sender);
                         return true;
                     }
                 case "give-complete-asap":
                     {
                         var r = Source.Empty<string>().RunWith(StreamRefs.SourceRef<string>(), _materializer);
-                        r.PipeTo(Sender);
+                        var sender = this.Sender;
+                        r.PipeTo(sender);
                         return true;
                     }
                 case "give-subscribe-timeout":
@@ -82,7 +89,8 @@ namespace Akka.Streams.Tests
                             .ToMaterialized(StreamRefs.SourceRef<string>(), Keep.Right)
                             .WithAttributes(StreamRefAttributes.CreateSubscriptionTimeout(TimeSpan.FromMilliseconds(500)))
                             .Run(_materializer);
-                        r.PipeTo(Sender);
+                        var sender = this.Sender;
+                        r.PipeTo(sender);
                         return true;
                     }
                 case "receive":
@@ -91,24 +99,27 @@ namespace Akka.Streams.Tests
                          * We write out code, knowing that the other side will stream the data into it.
                          * For them it's a Sink; for us it's a Source.
                          */
-                        var sink = StreamRefs.SinkRef<string>().To(Sink.ActorRef<string>(_probe, "<COMPLETE>"))
+                        var sink = StreamRefs.SinkRef<string>().To(Sink.ActorRef<string>(_probe, "<COMPLETE>", ex => new Status.Failure(ex)))
                             .Run(_materializer);
-                        sink.PipeTo(Sender);
+                        var sender = this.Sender;
+                        sink.PipeTo(sender);
                         return true;
                     }
                 case "receive-ignore":
                     {
                         var sink = StreamRefs.SinkRef<string>().To(Sink.Ignore<string>()).Run(_materializer);
-                        sink.PipeTo(Sender);
+                        var sender = Sender;
+                        sink.PipeTo(sender);
                         return true;
                     }
                 case "receive-subscribe-timeout":
                     {
                         var sink = StreamRefs.SinkRef<string>()
                             .WithAttributes(StreamRefAttributes.CreateSubscriptionTimeout(TimeSpan.FromMilliseconds(500)))
-                            .To(Sink.ActorRef<string>(_probe, "<COMPLETE>"))
+                            .To(Sink.ActorRef<string>(_probe, "<COMPLETE>", ex => new Status.Failure(ex)))
                             .Run(_materializer);
-                        sink.PipeTo(Sender);
+                        var sender = this.Sender;
+                        sink.PipeTo(sender);
                         return true;
                     }
                 case "receive-32":
@@ -224,8 +235,13 @@ namespace Akka.Streams.Tests
         protected override void BeforeTermination()
         {
             base.BeforeTermination();
-            RemoteSystem.Dispose();
             Materializer.Dispose();
+        }
+
+        protected override void AfterAll()
+        {
+            Shutdown(RemoteSystem);
+            base.AfterAll();
         }
 
         [Fact]
@@ -234,7 +250,7 @@ namespace Akka.Streams.Tests
             _remoteActor.Tell("give");
             var sourceRef = ExpectMsg<ISourceRef<string>>();
 
-            sourceRef.Source.RunWith(Sink.ActorRef<string>(_probe.Ref, "<COMPLETE>"), Materializer);
+            sourceRef.Source.RunWith(Sink.ActorRef<string>(_probe.Ref, "<COMPLETE>", ex => new Status.Failure(ex)), Materializer);
 
             _probe.ExpectMsg("hello");
             _probe.ExpectMsg("world");
@@ -247,7 +263,7 @@ namespace Akka.Streams.Tests
             _remoteActor.Tell("give-fail");
             var sourceRef = ExpectMsg<ISourceRef<string>>();
 
-            sourceRef.Source.RunWith(Sink.ActorRef<string>(_probe.Ref, "<COMPLETE>"), Materializer);
+            sourceRef.Source.RunWith(Sink.ActorRef<string>(_probe.Ref, "<COMPLETE>", ex => new Status.Failure(ex)), Materializer);
 
             var f = _probe.ExpectMsg<Status.Failure>();
             f.Cause.Message.Should().Contain("Remote stream (");
@@ -261,7 +277,7 @@ namespace Akka.Streams.Tests
             _remoteActor.Tell("give-complete-asap");
             var sourceRef = ExpectMsg<ISourceRef<string>>();
 
-            sourceRef.Source.RunWith(Sink.ActorRef<string>(_probe.Ref, "<COMPLETE>"), Materializer);
+            sourceRef.Source.RunWith(Sink.ActorRef<string>(_probe.Ref, "<COMPLETE>", ex => new Status.Failure(ex)), Materializer);
 
             _probe.ExpectMsg("<COMPLETE>");
         }
@@ -311,7 +327,7 @@ namespace Akka.Streams.Tests
             ex.Message.Should().Contain("has terminated unexpectedly");
         }
 
-        [Fact(Skip ="Racy")]
+        [LocalFact(SkipLocal = "Racy on Azure DevOps")]
         public void SourceRef_must_not_receive_subscription_timeout_when_got_subscribed()
         {
             _remoteActor.Tell("give-subscribe-timeout");
@@ -405,7 +421,7 @@ namespace Akka.Streams.Tests
             probe.ExpectCancellation();
         }
 
-        [Fact(Skip ="Racy")]
+        [LocalFact(SkipLocal = "Racy on Azure DevOps")]
         public void SinkRef_must_not_receive_timeout_if_subscribing_is_already_done_to_the_sink_ref()
         {
             _remoteActor.Tell("receive-subscribe-timeout");
@@ -460,13 +476,11 @@ namespace Akka.Streams.Tests
             var sinkRef = ExpectMsg<ISinkRef<string>>();
 
             var p1 = this.SourceProbe<string>().To(sinkRef.Sink).Run(Materializer);
-            var p2 = this.SourceProbe<string>().To(sinkRef.Sink).Run(Materializer);
-
             p1.EnsureSubscription();
             var req = p1.ExpectRequest();
-
-            // will be cancelled immediately, since it's 2nd:
-            p2.EnsureSubscription();
+            
+            var p2 = this.SourceProbe<string>().To(sinkRef.Sink).Run(Materializer);
+            p2.EnsureSubscription(); // will be cancelled immediately, since it's 2nd
             p2.ExpectCancellation();
         }
     }

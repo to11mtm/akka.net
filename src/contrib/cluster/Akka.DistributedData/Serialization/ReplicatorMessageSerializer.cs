@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ReplicatorMessageSerializer.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -35,7 +35,7 @@ namespace Akka.DistributedData.Serialization
         {
             private readonly TimeSpan _ttl;
             private readonly Func<TKey, TVal> _getOrAddFactory;
-            private readonly AtomicCounter _n = new AtomicCounter(0);
+            private readonly AtomicCounter _n = new(0);
             private readonly int _mask;
             private readonly KeyValuePair<TKey, TVal>[] _elements;
 
@@ -385,7 +385,24 @@ namespace Akka.DistributedData.Serialization
                 case ReadFrom r: proto.Consistency = r.N; break;
                 case ReadMajority rm:
                     proto.Consistency = 0;
-                    proto.ConsistencyMinCap = rm.MinCapacity;
+                    if (rm.MinCapacity != 0)
+                    {
+                        proto.ConsistencyMinCap = rm.MinCapacity;
+                        proto.HasConsistencyMinCap = true;
+                    }
+                    break;
+                case ReadMajorityPlus rmp:
+                    proto.Consistency = 0;
+                    if (rmp.MinCapacity != 0)
+                    {
+                        proto.ConsistencyMinCap = rmp.MinCapacity;
+                        proto.HasConsistencyMinCap = true;
+                    }
+                    if(rmp.Additional != 0)
+                    {
+                        proto.ConsistencyAdditional = rmp.Additional;
+                        proto.HasConsistencyAdditional = true;
+                    }
                     break;
                 case ReadAll _: proto.Consistency = -1; break;
             }
@@ -535,7 +552,7 @@ namespace Akka.DistributedData.Serialization
         private Gossip GossipFromBinary(byte[] bytes)
         {
             var proto = Proto.Msg.Gossip.Parser.ParseFrom(bytes);
-            var builder = ImmutableDictionary<string, DataEnvelope>.Empty.ToBuilder();
+            var builder = ImmutableDictionary.CreateBuilder<string, DataEnvelope>();
             foreach (var entry in proto.Entries)
             {
                 builder.Add(entry.Key, DataEnvelopeFromProto(entry.Envelope));
@@ -568,7 +585,7 @@ namespace Akka.DistributedData.Serialization
             }
             else
             {
-                var builder = ImmutableDictionary<UniqueAddress, IPruningState>.Empty.ToBuilder();
+                var builder = ImmutableDictionary.CreateBuilder<UniqueAddress, IPruningState>();
 
                 foreach (var entry in pruning)
                 {
@@ -672,10 +689,17 @@ namespace Akka.DistributedData.Serialization
             var key = (IKey)_ser.OtherMessageFromProto(proto.Key);
             var request = proto.Request != null ? _ser.OtherMessageFromProto(proto.Request) : null;
             var timeout = new TimeSpan(proto.Timeout * TimeSpan.TicksPerMillisecond);
+            var minCap = proto.HasConsistencyMinCap ? proto.ConsistencyMinCap : 0;
             IReadConsistency consistency;
             switch (proto.Consistency)
             {
-                case 0: consistency = new ReadMajority(timeout, proto.ConsistencyMinCap); break;
+                case 0:
+                    if (proto.HasConsistencyAdditional)
+                        consistency = new ReadMajorityPlus(timeout, proto.ConsistencyAdditional, minCap);
+                    else
+                        consistency = new ReadMajority(timeout, minCap);
+                    break;
+
                 case -1: consistency = new ReadAll(timeout); break;
                 case 1: consistency = ReadLocal.Instance; break;
                 default: consistency = new ReadFrom(proto.Consistency, timeout); break;
@@ -686,7 +710,7 @@ namespace Akka.DistributedData.Serialization
         private Status StatusFromBinary(byte[] bytes)
         {
             var proto = Proto.Msg.Status.Parser.ParseFrom(bytes);
-            var builder = ImmutableDictionary<string, ByteString>.Empty.ToBuilder();
+            var builder = ImmutableDictionary.CreateBuilder<string, ByteString>();
 
             foreach (var entry in proto.Entries)
             {
@@ -707,7 +731,7 @@ namespace Akka.DistributedData.Serialization
             var reply = proto.Reply;
             var fromNode = _ser.UniqueAddressFromProto(proto.FromNode);
 
-            var builder = ImmutableDictionary<string, Delta>.Empty.ToBuilder();
+            var builder = ImmutableDictionary.CreateBuilder<string, Delta>();
             foreach (var entry in proto.Entries)
             {
                 var fromSeqNr = entry.FromSeqNr;

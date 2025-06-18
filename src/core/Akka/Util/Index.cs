@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="Index.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -20,12 +20,12 @@ namespace Akka.Util
     /// Add/remove is serialized over the specified key.
     /// Reads are fully concurrent.
     /// </summary>
-    /// <typeparam name="TKey">TBD</typeparam>
-    /// <typeparam name="TValue">TBD</typeparam>
+    /// <typeparam name="TKey">The type of keys in the index.</typeparam>
+    /// <typeparam name="TValue">The type of values associated with each key in the index.</typeparam>
     public class Index<TKey, TValue> where TValue : IComparable<TValue>
     {
         /// <summary>
-        /// TBD
+        /// Initializes a new instance of the <see cref="Index{TKey, TValue}"/> class.
         /// </summary>
         public Index()
         {
@@ -33,7 +33,7 @@ namespace Akka.Util
         }
 
         private readonly ConcurrentDictionary<TKey, ConcurrentSet<TValue>> _container;
-        private readonly ConcurrentSet<TValue> _emptySet = new ConcurrentSet<TValue>();
+        private readonly ConcurrentSet<TValue> _emptySet = new();
 
         /// <summary>
         /// Associates the value of <typeparamref name="TValue"/> with key of type <typeparamref name="TKey"/>.
@@ -98,9 +98,9 @@ namespace Akka.Util
         }
 
         /// <summary>
-        /// TBD
+        /// Gets the collection of values associated with the specified key.
         /// </summary>
-        /// <param name="index">TBD</param>
+        /// <param name="index">The key whose associated values are to be retrieved.</param>
         public IEnumerable<TValue> this[TKey index]
         {
             get
@@ -192,8 +192,7 @@ namespace Akka.Util
         /// <returns>An enumerable collection of <typeparamref name="TValue"/> if the key exists. An empty collection otherwise.</returns>
         public IEnumerable<TValue> Remove(TKey key)
         {
-            ConcurrentSet<TValue> set;
-            if (_container.TryRemove(key, out set))
+            if (_container.TryRemove(key, out var set))
             {
                 // grab a shallow copy of the set
                 var ret = set.ToArray();

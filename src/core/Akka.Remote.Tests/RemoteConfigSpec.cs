@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="RemoteConfigSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -64,8 +64,8 @@ namespace Akka.Remote.Tests
 
             var remoteSettingsAdaptersStandart = new List<KeyValuePair<string, Type>>()
             {
-                new KeyValuePair<string, Type>("gremlin", typeof(FailureInjectorProvider)),
-                new KeyValuePair<string, Type>("trttl", typeof(ThrottlerProvider))
+                new("gremlin", typeof(FailureInjectorProvider)),
+                new("trttl", typeof(ThrottlerProvider))
             };
 
             var remoteSettingsAdapters =
@@ -174,9 +174,15 @@ namespace Akka.Remote.Tests
             var s = DotNettyTransportSettings.Create(c);
 
             s.BatchWriterSettings.EnableBatching.Should().BeTrue();
-            s.BatchWriterSettings.FlushInterval.Should().Be(BatchWriterSettings.DefaultFlushInterval);
-            s.BatchWriterSettings.MaxPendingBytes.Should().Be(BatchWriterSettings.DefaultMaxPendingBytes);
-            s.BatchWriterSettings.MaxPendingWrites.Should().Be(BatchWriterSettings.DefaultMaxPendingWrites);
+            s.BatchWriterSettings.MaxExplicitFlushes.Should().Be(BatchWriterSettings.DefaultMaxPendingWrites);
+        }
+        
+        [Fact]
+        public void Remoting_should_contain_correct_PrimitiveSerializer_settings_in_ReferenceConf()
+        {
+            var c = RARP.For(Sys).Provider.RemoteSettings.Config.GetConfig("akka.actor.serialization-settings.primitive");
+            c.Should().NotBeNull();
+            c.GetBoolean("use-legacy-behavior").Should().BeTrue();
         }
    }
 }

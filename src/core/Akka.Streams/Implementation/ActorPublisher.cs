@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ActorPublisher.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -29,7 +29,7 @@ namespace Akka.Streams.Implementation
         /// <summary>
         /// TBD
         /// </summary>
-        public static readonly SubscribePending Instance = new SubscribePending();
+        public static readonly SubscribePending Instance = new();
         private SubscribePending() { }
     }
 
@@ -114,14 +114,12 @@ namespace Akka.Streams.Implementation
         /// <param name="message">The message that describes the error.</param>
         public NormalShutdownException(string message) : base(message) { }
 
-#if SERIALIZATION
         /// <summary>
         /// Initializes a new instance of the <see cref="NormalShutdownException"/> class.
         /// </summary>
         /// <param name="info">The <see cref="SerializationInfo" /> that holds the serialized object data about the exception being thrown.</param>
         /// <param name="context">The <see cref="StreamingContext" /> that contains contextual information about the source or destination.</param>
         protected NormalShutdownException(SerializationInfo info, StreamingContext context) : base(info, context) { }
-#endif
     }
 
     /// <summary>
@@ -153,7 +151,7 @@ namespace Akka.Streams.Implementation
         /// <summary>
         /// TBD
         /// </summary>
-        public static readonly NormalShutdownException NormalShutdownReason = new NormalShutdownException(NormalShutdownReasonMessage);
+        public static readonly NormalShutdownException NormalShutdownReason = new(NormalShutdownReasonMessage);
     }
 
     /// <summary>
@@ -177,7 +175,7 @@ namespace Akka.Streams.Implementation
         // called by the actor from postStop. Pending (unregistered) subscription attempts are denied by
         // the shutdown method. Subscription attempts after shutdown can be denied immediately.
         private readonly AtomicReference<ImmutableList<ISubscriber<TOut>>> _pendingSubscribers =
-            new AtomicReference<ImmutableList<ISubscriber<TOut>>>(ImmutableList<ISubscriber<TOut>>.Empty);
+            new(ImmutableList<ISubscriber<TOut>>.Empty);
 
         private volatile Exception _shutdownReason;
 
@@ -269,9 +267,8 @@ namespace Akka.Streams.Implementation
                 }
             }
             catch (Exception exception)
+                when (exception is ISpecViolation)
             {
-                if (!(exception is ISpecViolation))
-                    throw;
             }
         }
     }

@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="SourceSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -12,12 +12,13 @@ using System.Linq;
 using System.Threading.Tasks;
 using Akka.Streams.Dsl;
 using Akka.Streams.TestKit;
-using Akka.Streams.TestKit.Tests;
 using Akka.Streams.Util;
+using Akka.TestKit.Extensions;
 using Akka.TestKit;
 using Akka.Util;
 using Akka.Util.Extensions;
 using FluentAssertions;
+using FluentAssertions.Extensions;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -91,9 +92,9 @@ namespace Akka.Streams.Tests.Dsl
         }
 
         [Fact]
-        public void Maybe_Source_must_complete_materialized_future_with_None_when_stream_cancels()
+        public async Task Maybe_Source_must_complete_materialized_future_with_None_when_stream_cancels()
         {
-            this.AssertAllStagesStopped(() =>
+            await this.AssertAllStagesStoppedAsync(async() =>
             {
                 var neverSource = Source.Maybe<object>();
                 var pubSink = Sink.AsPublisher<object>(false);
@@ -110,14 +111,15 @@ namespace Akka.Streams.Tests.Dsl
                 c.ExpectNoMsg(TimeSpan.FromMilliseconds(300));
 
                 subs.Cancel();
-                f.Task.AwaitResult().Should().Be(null);
+                var complete = await f.Task.ShouldCompleteWithin(3.Seconds());
+                complete.Should().Be(null);
             }, Materializer);
         }
 
         [Fact]
-        public void Maybe_Source_must_allow_external_triggering_of_empty_completion()
+        public async Task Maybe_Source_must_allow_external_triggering_of_empty_completion()
         {
-            this.AssertAllStagesStopped(() =>
+            await this.AssertAllStagesStoppedAsync(async() =>
             {
                 var neverSource = Source.Maybe<int>().Where(_ => false);
                 var counterSink = Sink.Aggregate<int, int>(0, (acc, _) => acc + 1);
@@ -129,14 +131,15 @@ namespace Akka.Streams.Tests.Dsl
                 //external cancellation
                 neverPromise.TrySetResult(0).Should().BeTrue();
                 
-                counterFuture.AwaitResult().Should().Be(0);
+                var counter = await counterFuture.ShouldCompleteWithin(3.Seconds());
+                counter.Should().Be(0);
             }, Materializer);
         }
 
         [Fact]
-        public void Maybe_Source_must_allow_external_triggering_of_non_empty_completion()
+        public async Task Maybe_Source_must_allow_external_triggering_of_non_empty_completion()
         {
-            this.AssertAllStagesStopped(() =>
+            await this.AssertAllStagesStoppedAsync(async() =>
             {
                 var neverSource = Source.Maybe<int>();
                 var counterSink = Sink.First<int>();
@@ -147,16 +150,15 @@ namespace Akka.Streams.Tests.Dsl
 
                 //external cancellation
                 neverPromise.TrySetResult(6).Should().BeTrue();
-                
-                counterFuture.AwaitResult().Should().Be(6);
+                var complete = await counterFuture.ShouldCompleteWithin(3.Seconds());
+                complete.Should().Be(6);
             }, Materializer);
         }
 
         [Fact]
-        public void Maybe_Source_must_allow_external_triggering_of_OnError()
+        public async Task Maybe_Source_must_allow_external_triggering_of_OnError()
         {
-            this.AssertAllStagesStopped(() =>
-            {
+            await this.AssertAllStagesStoppedAsync(() => {
                 var neverSource = Source.Maybe<int>();
                 var counterSink = Sink.First<int>();
 
@@ -167,8 +169,9 @@ namespace Akka.Streams.Tests.Dsl
                 //external cancellation
                 neverPromise.SetException(new Exception("Boom"));
 
-                counterFuture.Invoking(f => f.Wait(TimeSpan.FromSeconds(3))).ShouldThrow<Exception>()
+                counterFuture.Invoking(f => f.Wait(TimeSpan.FromSeconds(3))).Should().Throw<Exception>()
                     .WithMessage("Boom");
+                return Task.CompletedTask;
             }, Materializer);
         }
 
@@ -209,7 +212,7 @@ namespace Akka.Streams.Tests.Dsl
             var gotten = new List<int>();
             for (var i = 0; i < 5; i++)
                 gotten.Add(outProbe.ExpectNext());
-            gotten.ShouldAllBeEquivalentTo(new[] {0, 1, 2, 3, 4});
+            gotten.Should().BeEquivalentTo(new[] {0, 1, 2, 3, 4});
             outProbe.ExpectComplete();
         }
 
@@ -238,7 +241,7 @@ namespace Akka.Streams.Tests.Dsl
             var gotten = new List<int>();
             for (var i = 0; i < 3; i++)
                 gotten.Add(outProbe.ExpectNext());
-            gotten.ShouldAllBeEquivalentTo(new[] {0, 1, 2});
+            gotten.Should().BeEquivalentTo(new[] {0, 1, 2});
             outProbe.ExpectComplete();
         }
 
@@ -267,7 +270,7 @@ namespace Akka.Streams.Tests.Dsl
             var gotten = new List<int>();
             for (var i = 0; i < 2; i++)
                 gotten.Add(outProbe.ExpectNext());
-            gotten.ShouldAllBeEquivalentTo(new[] {0, 1});
+            gotten.Should().BeEquivalentTo(new[] {0, 1});
             outProbe.ExpectComplete();
         }
 
@@ -355,7 +358,7 @@ namespace Akka.Streams.Tests.Dsl
                     return ints;
                 }, Materializer);
                 task.Invoking(t => t.Wait(TimeSpan.FromSeconds(3)))
-                    .ShouldThrow<Exception>()
+                    .Should().Throw<Exception>()
                     .WithMessage("expected");
             });
         }
@@ -407,14 +410,15 @@ namespace Akka.Streams.Tests.Dsl
         }
 
         [Fact]
-        public void Cycle_Source_must_continuously_generate_the_same_sequence()
+        public async Task Cycle_Source_must_continuously_generate_the_same_sequence()
         {
             var expected = new[] {1, 2, 3, 1, 2, 3, 1, 2, 3};
-            Source.Cycle(() => new[] {1, 2, 3}.AsEnumerable().GetEnumerator())
+            var complete = await Source.Cycle(() => new[] {1, 2, 3}.AsEnumerable().GetEnumerator())
                 .Grouped(9)
                 .RunWith(Sink.First<IEnumerable<int>>(), Materializer)
-                .AwaitResult()
-                .ShouldAllBeEquivalentTo(expected);
+                .ShouldCompleteWithin(3.Seconds());
+            
+            complete.Should().BeEquivalentTo(expected);
         }
 
         [Fact]
@@ -422,7 +426,7 @@ namespace Akka.Streams.Tests.Dsl
         {
             var empty = Enumerable.Empty<int>().GetEnumerator();
             var task = Source.Cycle(()=>empty).RunWith(Sink.First<int>(), Materializer);
-            task.Invoking(t => t.Wait(TimeSpan.FromSeconds(3))).ShouldThrow<ArgumentException>();
+            task.Invoking(t => t.Wait(TimeSpan.FromSeconds(3))).Should().Throw<ArgumentException>();
         }
 
         [Fact]
@@ -438,7 +442,7 @@ namespace Akka.Streams.Tests.Dsl
                 b = true;
                 return single;
             }).RunWith(Sink.Last<int>(), Materializer);
-            task.Invoking(t => t.Wait(TimeSpan.FromSeconds(3))).ShouldThrow<ArgumentException>();
+            task.Invoking(t => t.Wait(TimeSpan.FromSeconds(3))).Should().Throw<ArgumentException>();
         }
 
         [Fact]
@@ -448,7 +452,7 @@ namespace Akka.Streams.Tests.Dsl
         }
 
         [Fact]
-        public void A_ZipN_Source_must_properly_ZipN()
+        public async Task A_ZipN_Source_must_properly_ZipN()
         {
             var sources = new[]
             {
@@ -457,10 +461,11 @@ namespace Akka.Streams.Tests.Dsl
                 Source.From(new[] {100, 200, 300}),
             };
 
-            Source.ZipN(sources)
-                .RunWith(Sink.Seq<IImmutableList<int>>(), Materializer)
-                .AwaitResult()
-                .ShouldAllBeEquivalentTo(new[]
+            var complete = await Source.ZipN(sources)
+                 .RunWith(Sink.Seq<IImmutableList<int>>(), Materializer)
+                 .ShouldCompleteWithin(3.Seconds());
+
+               complete.Should().BeEquivalentTo(new[]
                 {
                     new[] {1, 10, 100},
                     new[] {2, 20, 200},
@@ -469,7 +474,7 @@ namespace Akka.Streams.Tests.Dsl
         }
 
         [Fact]
-        public void A_ZipWithN_Source_must_properly_ZipWithN()
+        public async Task A_ZipWithN_Source_must_properly_ZipWithN()
         {
             var sources = new[]
             {
@@ -478,10 +483,10 @@ namespace Akka.Streams.Tests.Dsl
                 Source.From(new[] {100, 200, 300}),
             };
 
-            Source.ZipWithN(list => list.Sum(), sources)
-                .RunWith(Sink.Seq<int>(), Materializer)
-                .AwaitResult()
-                .ShouldAllBeEquivalentTo(new[] {111, 222, 333});
+            var complete = await Source.ZipWithN(list => list.Sum(), sources)
+                 .RunWith(Sink.Seq<int>(), Materializer)
+                 .ShouldCompleteWithin(3.Seconds());
+            complete.Should().BeEquivalentTo(new[] {111, 222, 333});
         }
 
         [Fact]
@@ -560,7 +565,7 @@ namespace Akka.Streams.Tests.Dsl
                 Source.Empty<int>().MapMaterializedValue<int>(_ => throw new InvalidOperationException("boom"));
 
             Action thrower = () => matValPoweredSource.PreMaterialize(Sys.Materializer());
-            thrower.ShouldThrow<InvalidOperationException>();
+            thrower.Should().Throw<InvalidOperationException>();
         }
     }
 }

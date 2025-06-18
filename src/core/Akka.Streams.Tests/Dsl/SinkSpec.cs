@@ -1,12 +1,13 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="SinkSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using System.Linq;
+using System.Threading;
 using Akka.Streams.Dsl;
 using Akka.Streams.TestKit;
 using Akka.TestKit;
@@ -89,7 +90,7 @@ namespace Akka.Streams.Tests.Dsl
             var probes = CreateProbes();
             var sink =
                 Sink.FromGraph(GraphDsl.Create(Sink.FromSubscriber(probes[0]),
-                    Sink.FromSubscriber(probes[1]), (_, __) => NotUsed.Instance, (b, shape0, shape1) =>
+                    Sink.FromSubscriber(probes[1]), (_, _) => NotUsed.Instance, (b, shape0, shape1) =>
                     {
                         var broadcast = b.Add(new Broadcast<int>(3));
                         b.From(broadcast.Out(0)).Via(Flow.Create<int>().Where(x => x == 0)).To(shape0.Inlet);
@@ -115,7 +116,7 @@ namespace Akka.Streams.Tests.Dsl
             var sink =
                 Sink.FromGraph(GraphDsl.Create(Sink.FromSubscriber(probes[0]),
                     Sink.FromSubscriber(probes[1]), Sink.FromSubscriber(probes[2]),
-                    (_, __, ___) => NotUsed.Instance, (b, shape0, shape1, shape2) =>
+                    (_, _, _) => NotUsed.Instance, (b, shape0, shape1, shape2) =>
                     {
                         var broadcast = b.Add(new Broadcast<int>(3));
                         b.From(broadcast.Out(0)).Via(Flow.Create<int>().Where(x => x == 0)).To(shape0.Inlet);
@@ -147,7 +148,7 @@ namespace Akka.Streams.Tests.Dsl
             subscriptions.ForEach(s=>s.Request(2));
             probes.ForEach(p =>
             {
-                p.ExpectNext(1, 2);
+                p.ExpectNext( 1, 2);
                 p.ExpectComplete();
             });
         }
@@ -167,7 +168,7 @@ namespace Akka.Streams.Tests.Dsl
             subscriptions.ForEach(s => s.Request(2));
             probes.ForEach(p =>
             {
-                p.ExpectNext(1, 2);
+                p.ExpectNext( 1, 2);
                 p.ExpectComplete();
             });
         }
@@ -178,7 +179,7 @@ namespace Akka.Streams.Tests.Dsl
             var s = Sink.First<int>().Async().AddAttributes(Attributes.None).Named("name");
 
             s.Module.Attributes.GetAttribute<Attributes.Name>().Value.Should().Be("name");
-            s.Module.Attributes.GetFirstAttribute<Attributes.AsyncBoundary>()
+            s.Module.Attributes.GetAttribute<Attributes.AsyncBoundary>()
                 .Should()
                 .Be(Attributes.AsyncBoundary.Instance);
         }
@@ -189,7 +190,7 @@ namespace Akka.Streams.Tests.Dsl
             Source.From(Enumerable.Range(0, 9))
                 .ToMaterialized(Sink.Seq<int>().ContraMap<int>(i => i + 1), Keep.Right)
                 .Run(Materializer)
-                .Result.ShouldAllBeEquivalentTo(Enumerable.Range(1, 9));
+                .Result.Should().BeEquivalentTo(Enumerable.Range(1, 9));
         }
 
         [Fact]

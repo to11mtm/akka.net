@@ -1,12 +1,14 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="Config.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2018 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2018 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
+using System.Linq;
 using Akka.Configuration.Hocon;
 using Akka.Util.Internal;
 
@@ -34,10 +36,7 @@ namespace Akka.Configuration
         /// <exception cref="ArgumentNullException">This exception is thrown if the given <paramref name="root"/> value is undefined.</exception>
         public Config(HoconRoot root)
         {
-            if (root.Value == null)
-                throw new ArgumentNullException(nameof(root), "The root value cannot be null.");
-
-            Value = root.Value;
+            Value = root.Value ?? throw new ArgumentNullException(nameof(root), "The root value cannot be null.");
             Root = root.Value;
             Substitutions = root.Substitutions;
         }
@@ -151,6 +150,7 @@ namespace Akka.Configuration
         /// <param name="def">Default return value if none provided.</param>
         /// <exception cref="InvalidOperationException">This exception is thrown if the current node is undefined.</exception>
         /// <returns>The long value defined in the specified path.</returns>
+        [return: NotNullIfNotNull(nameof(def))]
         public virtual long? GetByteSize(string path, long? def = null)
         {
             HoconValue value = GetNode(path);
@@ -342,7 +342,6 @@ namespace Akka.Configuration
         /// Retrieves a list of string values from the specified path in the configuration.
         /// </summary>
         /// <param name="path">The path that contains the values to retrieve.</param>
-        /// <param name="strings"></param>
         /// <exception cref="InvalidOperationException">This exception is thrown if the current node is undefined.</exception>
         /// <returns>The list of string values defined in the specified path.</returns>
         public virtual IList<string> GetStringList(string path)
@@ -461,6 +460,9 @@ namespace Akka.Configuration
             if (IsEmpty)
                 return fallback;
 
+            if (Contains(fallback))
+                return this;
+
             var mergedRoot = fallback.Root.GetObject().MergeImmutable(Root.GetObject());
             var newRoot = new HoconValue();
             newRoot.AppendValue(mergedRoot);
@@ -542,6 +544,42 @@ namespace Akka.Configuration
         /// A static "Empty" configuration we can use instead of <c>null</c> in some key areas.
         /// </summary>
         public static readonly Config Empty = ConfigurationFactory.Empty;
+
+        internal bool Contains(Config other)
+            => Contains(other.Root.GetObject().Items, "");
+
+        private bool Contains(Dictionary<string, HoconValue> other, string path)
+        {
+            foreach (var kvp in other)
+            {
+                var currentPath = path == "" ? kvp.Key : $"{path}.\"{kvp.Key}\"";
+                if (!HasPath(currentPath))
+                    return false;
+
+                var value = kvp.Value;
+                if (value.IsObject())
+                {
+                    if (!Contains(value.GetObject().Items, currentPath))
+                        return false;
+                }
+                else if (value.IsArray())
+                {
+                    var list = GetStringList(currentPath);
+                    foreach (var str in value.GetArray().Select(v => v.GetString()))
+                    {
+                        if (!list.Contains(str))
+                            return false;
+                    }
+                }
+                else
+                {
+                    if (value.GetString() != GetString(currentPath))
+                        return false;
+                }
+            }
+
+            return true;
+        }
     }
 
     /// <summary>

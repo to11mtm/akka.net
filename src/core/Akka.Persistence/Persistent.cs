@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="Persistent.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -122,8 +122,11 @@ namespace Akka.Persistence
                 throw new ArgumentException("Payload of AtomicWrite must not be empty.", nameof(payload));
 
             var firstMessage = payload[0];
-            if (payload.Count > 1 && !payload.Skip(1).All(m => m.PersistenceId.Equals(firstMessage.PersistenceId)))
-                throw new ArgumentException($"AtomicWrite must contain messages for the same persistenceId, yet difference persistenceIds found: {payload.Select(m => m.PersistenceId).Distinct()}.", nameof(payload));
+            for (var i = 1; i < payload.Count; i++)
+            {
+                if (!payload[i].PersistenceId.Equals(firstMessage.PersistenceId))
+                    throw new ArgumentException($"AtomicWrite must contain messages for the same persistenceId, yet difference persistenceIds found: {payload.Select(m => m.PersistenceId).Distinct()}.", nameof(payload));
+            }
 
             Payload = payload;
             Sender = ActorRefs.NoSender;
@@ -164,7 +167,7 @@ namespace Akka.Persistence
         /// </summary>
         public long HighestSequenceNr { get; }
 
-        /// <inheritdoc/>
+       
         public bool Equals(AtomicWrite other)
         {
             return Equals(Payload, other.Payload)
@@ -175,15 +178,15 @@ namespace Akka.Persistence
                    && HighestSequenceNr == other.HighestSequenceNr;
         }
 
-        /// <inheritdoc/>
+        
         public override bool Equals(object obj)
         {
             if (ReferenceEquals(null, obj)) return false;
             if (ReferenceEquals(this, obj)) return true;
-            return obj is AtomicWrite && Equals((AtomicWrite)obj);
+            return obj is AtomicWrite write && Equals(write);
         }
 
-        /// <inheritdoc/>
+        
         public override int GetHashCode()
         {
             unchecked
@@ -198,8 +201,8 @@ namespace Akka.Persistence
             }
         }
 
-        /// <inheritdoc/>
-        public override string ToString() 
+        
+        public override string ToString()
             => $"AtomicWrite<pid: {PersistenceId}, lowSeqNr: {LowestSequenceNr}, highSeqNr: {HighestSequenceNr}, size: {Size}, sender: {Sender}>";
     }
 
@@ -229,11 +232,27 @@ namespace Akka.Persistence
         long SequenceNr { get; }
 
         /// <summary>
+        /// The `timestamp` is the time the event was stored, in ticks. The value of this property
+        /// represents the number of 100-nanosecond intervals that have elapsed since 12:00:00 midnight, January 1, 0001
+        /// in the Gregorian calendar (same as `DateTime.Now.Ticks`).
+        ///
+        /// Value `0` is used if undefined.
+        /// </summary>
+        long Timestamp { get; }
+
+        /// <summary>
         /// Unique identifier of the writing persistent actor.
         /// Used to detect anomalies with overlapping writes from multiple
         /// persistent actors, which can result in inconsistent replays.
         /// </summary>
         string WriterGuid { get; }
+
+        /// <summary>
+        /// Creates a new persistent message with the specified <paramref name="timestamp"/>.
+        /// </summary>
+        /// <param name="timestamp">The time the event was stored, in ticks.</param>
+        /// <returns>TBD</returns>
+        IPersistentRepresentation WithTimestamp(long timestamp);
 
         /// <summary>
         /// Creates a new persistent message with the specified <paramref name="payload"/>.
@@ -295,7 +314,8 @@ namespace Akka.Persistence
         /// <param name="isDeleted">TBD</param>
         /// <param name="sender">TBD</param>
         /// <param name="writerGuid">TBD</param>
-        public Persistent(object payload, long sequenceNr = 0L, string persistenceId = null, string manifest = null, bool isDeleted = false, IActorRef sender = null, string writerGuid = null)
+        /// <param name="timestamp">TBD</param>
+        public Persistent(object payload, long sequenceNr = 0L, string persistenceId = null, string manifest = null, bool isDeleted = false, IActorRef sender = null, string writerGuid = null, long timestamp = 0L)
         {
             Payload = payload;
             SequenceNr = sequenceNr;
@@ -304,6 +324,7 @@ namespace Akka.Persistence
             PersistenceId = persistenceId ?? Undefined;
             Sender = sender;
             WriterGuid = writerGuid ?? Undefined;
+            Timestamp = timestamp;
         }
 
         /// <inheritdoc />
@@ -319,6 +340,9 @@ namespace Akka.Persistence
         public long SequenceNr { get; }
 
         /// <inheritdoc />
+        public long Timestamp { get; }
+
+        /// <inheritdoc />
         public bool IsDeleted { get; }
 
         /// <inheritdoc />
@@ -328,17 +352,21 @@ namespace Akka.Persistence
         public string WriterGuid { get; }
 
         /// <inheritdoc />
+        public IPersistentRepresentation WithTimestamp(long newTimestamp)
+        {
+            return Timestamp == newTimestamp ? this : new Persistent(Payload, sequenceNr: SequenceNr, persistenceId: PersistenceId, manifest: Manifest, isDeleted: IsDeleted, sender: Sender, writerGuid: WriterGuid, newTimestamp);
+        }
+
+        /// <inheritdoc />
         public IPersistentRepresentation WithPayload(object payload)
         {
-            return new Persistent(payload, sequenceNr: SequenceNr, persistenceId: PersistenceId, manifest: Manifest, isDeleted: IsDeleted, sender: Sender, writerGuid: WriterGuid);
+            return new Persistent(payload, sequenceNr: SequenceNr, persistenceId: PersistenceId, manifest: Manifest, isDeleted: IsDeleted, sender: Sender, writerGuid: WriterGuid, Timestamp);
         }
 
         /// <inheritdoc />
         public IPersistentRepresentation WithManifest(string manifest)
         {
-            return Manifest == manifest ?
-                this :
-                new Persistent(payload: Payload, sequenceNr: SequenceNr, persistenceId: PersistenceId, manifest: manifest, isDeleted: IsDeleted, sender: Sender, writerGuid: WriterGuid);
+            return Manifest == manifest ? this : new Persistent(payload: Payload, sequenceNr: SequenceNr, persistenceId: PersistenceId, manifest: manifest, isDeleted: IsDeleted, sender: Sender, writerGuid: WriterGuid, Timestamp);
         }
 
         /// <inheritdoc />
@@ -347,12 +375,13 @@ namespace Akka.Persistence
             return new Persistent(payload: Payload, sequenceNr: sequenceNr, persistenceId: persistenceId, manifest: Manifest, isDeleted: isDeleted, sender: sender, writerGuid: writerGuid);
         }
 
-        /// <inheritdoc/>
+        
         public bool Equals(IPersistentRepresentation other)
         {
             if (other == null) return false;
             if (ReferenceEquals(this, other)) return true;
 
+            // timestamp not included in equals for backwards compatibility
             return Equals(Payload, other.Payload)
                    && string.Equals(Manifest, other.Manifest)
                    && string.Equals(PersistenceId, other.PersistenceId)
@@ -362,13 +391,13 @@ namespace Akka.Persistence
                    && string.Equals(WriterGuid, other.WriterGuid);
         }
 
-        /// <inheritdoc/>
+       
         public override bool Equals(object obj)
         {
             return Equals(obj as IPersistentRepresentation);
         }
 
-        /// <inheritdoc/>
+       
         public bool Equals(Persistent other)
         {
             return Equals(Payload, other.Payload)
@@ -380,7 +409,7 @@ namespace Akka.Persistence
                    && string.Equals(WriterGuid, other.WriterGuid);
         }
 
-        /// <inheritdoc/>
+        
         public override int GetHashCode()
         {
             unchecked
@@ -392,12 +421,13 @@ namespace Akka.Persistence
                 hashCode = (hashCode * 397) ^ IsDeleted.GetHashCode();
                 hashCode = (hashCode * 397) ^ (Sender != null ? Sender.GetHashCode() : 0);
                 hashCode = (hashCode * 397) ^ (WriterGuid != null ? WriterGuid.GetHashCode() : 0);
+                // timestamp not included in equals for backwards compatibility
                 return hashCode;
             }
         }
 
-        /// <inheritdoc/>
-        public override string ToString() 
+        
+        public override string ToString()
             => $"Persistent<pid: {PersistenceId}, seqNr: {SequenceNr}, deleted: {IsDeleted}, manifest: {Manifest}, sender: {Sender}, payload: {Payload}, writerGuid: {WriterGuid}>";
     }
 }

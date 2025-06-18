@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="AsyncWriteProxy.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -9,9 +9,11 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using Akka.Actor;
 using System.Runtime.Serialization;
+using System.Threading;
 
 namespace Akka.Persistence.Journal
 {
@@ -37,7 +39,6 @@ namespace Akka.Persistence.Journal
         {
         }
 
-#if SERIALIZATION
         /// <summary>
         /// Initializes a new instance of the <see cref="AsyncReplayTimeoutException"/> class.
         /// </summary>
@@ -47,7 +48,6 @@ namespace Akka.Persistence.Journal
             : base(info, context)
         {
         }
-#endif
     }
 
     /// <summary>
@@ -65,10 +65,7 @@ namespace Akka.Persistence.Journal
         /// </exception>
         public SetStore(IActorRef store)
         {
-            if (store == null)
-                throw new ArgumentNullException(nameof(store), "SetStore requires non-null reference to store actor");
-
-            Store = store;
+            Store = store ?? throw new ArgumentNullException(nameof(store), "SetStore requires non-null reference to store actor");
         }
 
         /// <summary>
@@ -97,13 +94,8 @@ namespace Akka.Persistence.Journal
             /// <exception cref="System.ArgumentNullException">
             /// This exception is thrown when the specified <paramref name="cause"/> is undefined.
             /// </exception>
-            public ReplayFailure(Exception cause)
-            {
-                if (cause == null)
-                    throw new ArgumentNullException(nameof(cause), "AsyncWriteTarget.ReplayFailure cause exception cannot be null");
-
-                Cause = cause;
-            }
+            public ReplayFailure(Exception cause) =>
+                Cause = cause ?? throw new ArgumentNullException(nameof(cause), "AsyncWriteTarget.ReplayFailure cause exception cannot be null");
 
             /// <summary>
             /// The cause of the failure
@@ -131,7 +123,7 @@ namespace Akka.Persistence.Journal
             /// </summary>
             public long HighestSequenceNr { get; }
 
-            /// <inheritdoc/>
+            
             public bool Equals(ReplaySuccess other)
             {
                 if (ReferenceEquals(other, null)) return false;
@@ -203,7 +195,7 @@ namespace Akka.Persistence.Journal
             /// </summary>
             public long Max { get; }
 
-            /// <inheritdoc/>
+            
             public bool Equals(ReplayMessages other)
             {
                 if (ReferenceEquals(other, null)) return false;
@@ -243,7 +235,7 @@ namespace Akka.Persistence.Journal
             /// </summary>
             public long ToSequenceNr { get; }
 
-            /// <inheritdoc/>
+            
             public bool Equals(DeleteMessagesTo other)
             {
                 if (ReferenceEquals(other, null)) return false;
@@ -260,15 +252,14 @@ namespace Akka.Persistence.Journal
     /// <summary>
     /// A journal that delegates actual storage to a target actor. For testing only.
     /// </summary>
-    public abstract class AsyncWriteProxy : AsyncWriteJournal, IWithUnboundedStash
+    public abstract class AsyncWriteProxy : AsyncWriteJournal, IWithUnboundedStash, IWithTimers
     {
+        private const string InitTimeoutTimerKey = nameof(InitTimeoutTimerKey);
+        
         private bool _isInitialized;
         private bool _isInitTimedOut;
         private IActorRef _store;
-
-        /// <summary>
-        /// TBD
-        /// </summary>
+        
         protected AsyncWriteProxy()
         {
             _isInitialized = false;
@@ -286,7 +277,7 @@ namespace Akka.Persistence.Journal
         /// </summary>
         public override void AroundPreStart()
         {
-            Context.System.Scheduler.ScheduleTellOnce(Timeout, Self, InitTimeout.Instance, Self);
+            Timers.StartSingleTimer(InitTimeoutTimerKey, InitTimeout.Instance, Timeout, Self);
             base.AroundPreStart();
         }
 
@@ -300,25 +291,31 @@ namespace Akka.Persistence.Journal
         {
             if (_isInitialized)
             {
-                if (!(message is InitTimeout))
+                if (message is not InitTimeout)
                     return base.AroundReceive(receive, message);
             }
-            else if (message is SetStore)
+            else switch (message)
             {
-                _store = ((SetStore) message).Store;
-                Stash.UnstashAll();
-                _isInitialized = true;
+                case SetStore store:
+                    _store = store.Store;
+                    Stash.UnstashAll();
+                    _isInitialized = true;
+                    break;
+                case InitTimeout _:
+                    _isInitTimedOut = true;
+                    Stash.UnstashAll(); // will trigger appropriate failures
+                    break;
+                default:
+                {
+                    if (_isInitTimedOut)
+                    {
+                        return base.AroundReceive(receive, message);
+                    }
+                    else Stash.Stash();
+
+                    break;
+                }
             }
-            else if (message is InitTimeout)
-            {
-                _isInitTimedOut = true;
-                Stash.UnstashAll(); // will trigger appropriate failures
-            }
-            else if (_isInitTimedOut)
-            {
-                return base.AroundReceive(receive, message);
-            }
-            else Stash.Stash();
             return true;
         }
 
@@ -326,16 +323,19 @@ namespace Akka.Persistence.Journal
         /// TBD
         /// </summary>
         /// <param name="messages">TBD</param>
+        /// <param name="cancellationToken"><see cref="CancellationToken"/> used to signal cancelled snapshot operation</param>
         /// <exception cref="TimeoutException">
         /// This exception is thrown when the store has not been initialized.
         /// </exception>
         /// <returns>TBD</returns>
-        protected override Task<IImmutableList<Exception>> WriteMessagesAsync(IEnumerable<AtomicWrite> messages)
+        protected override Task<IImmutableList<Exception>> WriteMessagesAsync(
+            IEnumerable<AtomicWrite> messages,
+            CancellationToken cancellationToken)
         {
             if (_store == null)
-                return StoreNotInitialized<IImmutableList<Exception>>();
+                return StoreNotInitialized<IImmutableList<Exception>>(); 
 
-            return _store.Ask<IImmutableList<Exception>>(new AsyncWriteTarget.WriteMessages(messages), Timeout);
+            return _store.Ask<IImmutableList<Exception>>(new AsyncWriteTarget.WriteMessages(messages), Timeout, cancellationToken);
         }
 
         /// <summary>
@@ -343,16 +343,20 @@ namespace Akka.Persistence.Journal
         /// </summary>
         /// <param name="persistenceId">TBD</param>
         /// <param name="toSequenceNr">TBD</param>
+        /// <param name="cancellationToken"><see cref="CancellationToken"/> used to signal cancelled snapshot operation</param>
         /// <exception cref="TimeoutException">
         /// This exception is thrown when the store has not been initialized.
         /// </exception>
         /// <returns>TBD</returns>
-        protected override Task DeleteMessagesToAsync(string persistenceId, long toSequenceNr)
+        protected override Task DeleteMessagesToAsync(
+            string persistenceId,
+            long toSequenceNr,
+            CancellationToken cancellationToken)
         {
             if (_store == null)
                 return StoreNotInitialized<object>();
 
-            return _store.Ask(new AsyncWriteTarget.DeleteMessagesTo(persistenceId, toSequenceNr), Timeout);
+            return _store.Ask(new AsyncWriteTarget.DeleteMessagesTo(persistenceId, toSequenceNr), Timeout, cancellationToken);
         }
 
         /// <summary>
@@ -386,20 +390,24 @@ namespace Akka.Persistence.Journal
         /// </summary>
         /// <param name="persistenceId">TBD</param>
         /// <param name="fromSequenceNr">TBD</param>
+        /// <param name="cancellationToken"><see cref="CancellationToken"/> used to signal cancelled snapshot operation</param>
         /// <exception cref="TimeoutException">
         /// This exception is thrown when the store has not been initialized.
         /// </exception>
         /// <returns>TBD</returns>
-        public override Task<long> ReadHighestSequenceNrAsync(string persistenceId, long fromSequenceNr)
+        public override Task<long> ReadHighestSequenceNrAsync(
+            string persistenceId,
+            long fromSequenceNr,
+            CancellationToken cancellationToken)
         {
             if (_store == null)
-                return StoreNotInitialized<long>();
+                return StoreNotInitialized<long>(); 
 
-            return _store.Ask<AsyncWriteTarget.ReplaySuccess>(new AsyncWriteTarget.ReplayMessages(persistenceId, 0, 0, 0), Timeout)
+            return _store.Ask<AsyncWriteTarget.ReplaySuccess>(new AsyncWriteTarget.ReplayMessages(persistenceId, 0, 0, 0), Timeout, cancellationToken)
                 .ContinueWith(t => t.Result.HighestSequenceNr, TaskContinuationOptions.OnlyOnRanToCompletion);
         }
 
-        private Task<T> StoreNotInitialized<T>()
+        private static Task<T> StoreNotInitialized<T>()
         {
             var promise = new TaskCompletionSource<T>();
             promise.SetException(new TimeoutException("Store not initialized."));
@@ -409,7 +417,9 @@ namespace Akka.Persistence.Journal
         /// <summary>
         /// TBD
         /// </summary>
-        public IStash Stash { get; set; }
+        public IStash Stash { get; set; } = null!;
+
+        public ITimerScheduler Timers { get; set; } = null!;
 
         // sent to self only
         /// <summary>
@@ -418,18 +428,11 @@ namespace Akka.Persistence.Journal
         public class InitTimeout
         {
             private InitTimeout() { }
-            private static readonly InitTimeout _instance = new InitTimeout();
 
             /// <summary>
             /// TBD
             /// </summary>
-            public static InitTimeout Instance
-            {
-                get
-                {
-                    return _instance;
-                }
-            }
+            public static InitTimeout Instance { get; } = new();
         }
     }
 
@@ -467,15 +470,14 @@ namespace Akka.Persistence.Journal
         /// <returns>TBD</returns>
         protected override bool Receive(object message)
         {
-            if (message is IPersistentRepresentation) _replayCallback(message as IPersistentRepresentation);
+            if (message is IPersistentRepresentation representation) _replayCallback(representation);
             else if (message is AsyncWriteTarget.ReplaySuccess)
             {
                 _replayCompletionPromise.SetResult(new object());
                 Context.Stop(Self);
             }
-            else if (message is AsyncWriteTarget.ReplayFailure)
+            else if (message is AsyncWriteTarget.ReplayFailure failure)
             {
-                var failure = message as AsyncWriteTarget.ReplayFailure;
                 _replayCompletionPromise.SetException(failure.Cause);
                 Context.Stop(Self);
             }

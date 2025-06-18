@@ -1,11 +1,13 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="One2OneBidiFlow.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
+using System.Runtime.Serialization;
+using Akka.Pattern;
 using Akka.Streams.Stage;
 
 namespace Akka.Streams.Dsl
@@ -41,6 +43,13 @@ namespace Akka.Streams.Dsl
         {
 
         }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="UnexpectedOutputException"/> class.
+        /// </summary>
+        /// <param name="info">The <see cref="SerializationInfo" /> that holds the serialized object data about the exception being thrown.</param>
+        /// <param name="context">The <see cref="StreamingContext" /> that contains contextual information about the source or destination.</param>
+        protected UnexpectedOutputException(SerializationInfo info, StreamingContext context) : base(info, context) { }
     }
 
     /// <summary>
@@ -48,7 +57,14 @@ namespace Akka.Streams.Dsl
     /// </summary>
     public class OutputTruncationException : Exception
     {
+        public OutputTruncationException() { }
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="UserCalledFailException"/> class.
+        /// </summary>
+        /// <param name="info">The <see cref="SerializationInfo" /> that holds the serialized object data about the exception being thrown.</param>
+        /// <param name="context">The <see cref="StreamingContext" /> that contains contextual information about the source or destination.</param>
+        protected OutputTruncationException(SerializationInfo info, StreamingContext context) : base(info, context) { }
     }
 
     /// <summary>
@@ -103,7 +119,7 @@ namespace Akka.Streams.Dsl
                     else
                         _pullSuppressed = true;
                 },
-                    onDownstreamFinish: () => Cancel(_inInlet));
+                    onDownstreamFinish: cause => Cancel(_inInlet, cause));
             }
 
             private void SetOutInletHandler()
@@ -136,17 +152,17 @@ namespace Akka.Streams.Dsl
 
             private void SetOutOutletHandler()
             {
-                SetHandler(_outOutlet, onPull: () => Pull(_outInlet), onDownstreamFinish: () => Cancel(_outInlet));
+                SetHandler(_outOutlet, onPull: () => Pull(_outInlet), onDownstreamFinish: cause => Cancel(_outInlet, cause));
             }
         }
 
         #endregion
 
         private readonly int _maxPending;
-        private readonly Inlet<TIn> _inInlet = new Inlet<TIn>("inIn");
-        private readonly Outlet<TIn> _inOutlet = new Outlet<TIn>("inOut");
-        private readonly Inlet<TOut> _outInlet = new Inlet<TOut>("outIn");
-        private readonly Outlet<TOut> _outOutlet = new Outlet<TOut>("outOut");
+        private readonly Inlet<TIn> _inInlet = new("inIn");
+        private readonly Outlet<TIn> _inOutlet = new("inOut");
+        private readonly Inlet<TOut> _outInlet = new("outIn");
+        private readonly Outlet<TOut> _outOutlet = new("outOut");
 
         /// <summary>
         /// TBD

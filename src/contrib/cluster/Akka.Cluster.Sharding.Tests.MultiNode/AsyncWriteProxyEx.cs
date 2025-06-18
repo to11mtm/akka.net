@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="AsyncWriteProxyEx.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -9,15 +9,13 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Runtime.Serialization;
+using System.Threading;
 using System.Threading.Tasks;
 using Akka.Actor;
-using System.Runtime.Serialization;
-using Akka.Event;
-using Akka.Persistence.Journal;
-using Akka.Persistence;
-using System.Threading;
-using Akka.Util.Internal;
 using Akka.Actor.Internal;
+using Akka.Persistence;
+using Akka.Persistence.Journal;
 
 namespace Akka.Cluster.Sharding.Tests
 {
@@ -43,7 +41,6 @@ namespace Akka.Cluster.Sharding.Tests
         {
         }
 
-#if SERIALIZATION
         /// <summary>
         /// Initializes a new instance of the <see cref="AsyncReplayTimeoutException"/> class.
         /// </summary>
@@ -53,7 +50,6 @@ namespace Akka.Cluster.Sharding.Tests
             : base(info, context)
         {
         }
-#endif
     }
 
     /// <summary>
@@ -69,13 +65,8 @@ namespace Akka.Cluster.Sharding.Tests
         /// <exception cref="ArgumentNullException">
         /// This exception is thrown when the specified <paramref name="store"/> is undefined.
         /// </exception>
-        public SetStore(IActorRef store)
-        {
-            if (store == null)
-                throw new ArgumentNullException(nameof(store), "SetStore requires non-null reference to store actor");
-
-            Store = store;
-        }
+        public SetStore(IActorRef store) =>
+            Store = store ?? throw new ArgumentNullException(nameof(store), "SetStore requires non-null reference to store actor");
 
         /// <summary>
         /// TBD
@@ -86,8 +77,16 @@ namespace Akka.Cluster.Sharding.Tests
     /// <summary>
     /// A journal that delegates actual storage to a target actor. For testing only.
     /// </summary>
-    public abstract class AsyncWriteProxyEx : AsyncWriteJournal, IWithUnboundedStash
+    public abstract class AsyncWriteProxyEx : AsyncWriteJournal, IWithUnboundedStash, IWithTimers
     {
+        private const string InitTimeoutTimerKey = nameof(InitTimeoutTimerKey);
+        
+        private class InitTimeout
+        {
+            public static readonly InitTimeout Instance = new();
+            private InitTimeout() { }
+        }
+
         private bool _isInitialized;
         private bool _isInitTimedOut;
         private IActorRef _store;
@@ -112,7 +111,7 @@ namespace Akka.Cluster.Sharding.Tests
         /// </summary>
         public override void AroundPreStart()
         {
-            Context.System.Scheduler.ScheduleTellOnce(Timeout, Self, InitTimeout.Instance, Self);
+            Timers.StartSingleTimer(InitTimeoutTimerKey, InitTimeout.Instance, Timeout, Self);
             base.AroundPreStart();
         }
 
@@ -122,84 +121,70 @@ namespace Akka.Cluster.Sharding.Tests
         /// <param name="receive">TBD</param>
         /// <param name="message">TBD</param>
         /// <returns>TBD</returns>
-        protected override bool AroundReceive(Receive receive, object message)
+        protected internal override bool AroundReceive(Receive receive, object message)
         {
             if (_isInitialized)
             {
-                if (!(message is InitTimeout))
+                if (message is not InitTimeout)
                     return base.AroundReceive(receive, message);
             }
-            else if (message is SetStore msg)
+            else switch (message)
             {
-                _store = msg.Store;
-                Stash.UnstashAll();
-                _isInitialized = true;
+                case SetStore msg:
+                    _store = msg.Store;
+                    Stash.UnstashAll();
+                    _isInitialized = true;
+                    break;
+                case InitTimeout:
+                    _isInitTimedOut = true;
+                    Stash.UnstashAll(); // will trigger appropriate failures
+                    break;
+                default:
+                {
+                    if (_isInitTimedOut)
+                    {
+                        return base.AroundReceive(receive, message);
+                    }
+                    else Stash.Stash();
+
+                    break;
+                }
             }
-            else if (message is InitTimeout)
-            {
-                _isInitTimedOut = true;
-                Stash.UnstashAll(); // will trigger appropriate failures
-            }
-            else if (_isInitTimedOut)
-            {
-                return base.AroundReceive(receive, message);
-            }
-            else Stash.Stash();
             return true;
         }
 
-
-
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <param name="messages">TBD</param>
-        /// <exception cref="TimeoutException">
-        /// This exception is thrown when the store has not been initialized.
-        /// </exception>
-        /// <returns>TBD</returns>
-        protected override Task<IImmutableList<Exception>> WriteMessagesAsync(IEnumerable<AtomicWrite> messages)
+        protected override Task<IImmutableList<Exception>> WriteMessagesAsync(IEnumerable<AtomicWrite> messages, CancellationToken cancellationToken)
         {
+            var trueMsgs = messages.ToArray();
+            
             if (_store == null)
                 return StoreNotInitialized<IImmutableList<Exception>>();
 
-            return _store.AskEx<object>(sender => new WriteMessages(messages, sender, 1), Timeout)
+            return _store.Ask<object>(sender => new WriteMessages(trueMsgs, sender, 1), Timeout, cancellationToken)
                 .ContinueWith(r =>
                 {
                     if (r.IsCanceled)
-                        return (IImmutableList<Exception>)messages.Select(i => (Exception)new TimeoutException()).ToImmutableList();
+                        return (IImmutableList<Exception>)trueMsgs.Select(_ => (Exception)new TimeoutException()).ToImmutableList();
                     if (r.IsFaulted)
-                        return messages.Select(i => (Exception)r.Exception).ToImmutableList();
+                        return trueMsgs.Select(_ => (Exception)r.Exception).ToImmutableList();
 
-                    if (r.Result is WriteMessageSuccess wms)
+                    return r.Result switch
                     {
-                        return messages.Select(i => (Exception)null).ToImmutableList();
-                    }
-                    if (r.Result is WriteMessageFailure wmf)
-                    {
-                        return messages.Select(i => wmf.Cause).ToImmutableList();
-                    }
-                    return null;
+                        WriteMessageSuccess wms => trueMsgs.Select(_ => (Exception)null).ToImmutableList(),
+                        WriteMessageFailure wmf => trueMsgs.Select(_ => wmf.Cause).ToImmutableList(),
+                        _ => null
+                    };
                 }, TaskContinuationOptions.ExecuteSynchronously);
         }
 
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <param name="persistenceId">TBD</param>
-        /// <param name="toSequenceNr">TBD</param>
-        /// <exception cref="TimeoutException">
-        /// This exception is thrown when the store has not been initialized.
-        /// </exception>
-        /// <returns>TBD</returns>
-        protected override Task DeleteMessagesToAsync(string persistenceId, long toSequenceNr)
+        protected override Task DeleteMessagesToAsync(string persistenceId, long toSequenceNr, CancellationToken cancellationToken)
         {
             if (_store == null)
                 return StoreNotInitialized<object>();
 
             var result = new TaskCompletionSource<object>();
 
-            _store.AskEx(sender => new DeleteMessagesTo(persistenceId, toSequenceNr, sender), Timeout).ContinueWith(r =>
+            _store.Ask<object>(sender => new DeleteMessagesTo(persistenceId, toSequenceNr, sender), Timeout, cancellationToken).ContinueWith(r =>
             {
                 if (r.IsFaulted)
                     result.TrySetException(r.Exception);
@@ -238,23 +223,14 @@ namespace Akka.Cluster.Sharding.Tests
             return replayCompletionPromise.Task;
         }
 
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <param name="persistenceId">TBD</param>
-        /// <param name="fromSequenceNr">TBD</param>
-        /// <exception cref="TimeoutException">
-        /// This exception is thrown when the store has not been initialized.
-        /// </exception>
-        /// <returns>TBD</returns>
-        public override Task<long> ReadHighestSequenceNrAsync(string persistenceId, long fromSequenceNr)
+        public override Task<long> ReadHighestSequenceNrAsync(string persistenceId, long fromSequenceNr, CancellationToken cancellationToken)
         {
             if (_store == null)
                 return StoreNotInitialized<long>();
 
             var result = new TaskCompletionSource<long>();
 
-            _store.AskEx<object>(sender => new ReplayMessages(0, 0, 0, persistenceId, sender), Timeout)
+            _store.Ask<object>(sender => new ReplayMessages(0, 0, 0, persistenceId, sender), Timeout, cancellationToken)
                 .ContinueWith(t =>
                 {
                     if (t.IsFaulted)
@@ -281,26 +257,7 @@ namespace Akka.Cluster.Sharding.Tests
         /// </summary>
         public IStash Stash { get; set; }
 
-        // sent to self only
-        /// <summary>
-        /// TBD
-        /// </summary>
-        public class InitTimeout
-        {
-            private InitTimeout() { }
-            private static readonly InitTimeout _instance = new InitTimeout();
-
-            /// <summary>
-            /// TBD
-            /// </summary>
-            public static InitTimeout Instance
-            {
-                get
-                {
-                    return _instance;
-                }
-            }
-        }
+        public ITimerScheduler Timers { get; set; }
     }
 
     /// <summary>
@@ -340,7 +297,6 @@ namespace Akka.Cluster.Sharding.Tests
             switch (message)
             {
                 case ReplayedMessage rm:
-                    //rm.Persistent
                     _replayCallback(rm.Persistent);
                     return true;
                 case RecoverySuccess _:
@@ -358,112 +314,6 @@ namespace Akka.Cluster.Sharding.Tests
                     return true;
             }
             return false;
-        }
-    }
-
-    internal static class FuturesEx
-    {
-        public static Task<object> AskEx(this ICanTell self, Func<IActorRef, object> messageFactory, TimeSpan? timeout = null)
-        {
-            return self.AskEx<object>(messageFactory, timeout, CancellationToken.None);
-        }
-
-        public static Task<object> AskEx(this ICanTell self, Func<IActorRef, object> messageFactory, CancellationToken cancellationToken)
-        {
-            return self.AskEx<object>(messageFactory, null, cancellationToken);
-        }
-
-        public static Task<object> AskEx(this ICanTell self, Func<IActorRef, object> messageFactory, TimeSpan? timeout, CancellationToken cancellationToken)
-        {
-            return self.AskEx<object>(messageFactory, timeout, cancellationToken);
-        }
-
-        public static Task<T> AskEx<T>(this ICanTell self, Func<IActorRef, object> messageFactory, TimeSpan? timeout = null)
-        {
-            return self.AskEx<T>(messageFactory, timeout, CancellationToken.None);
-        }
-
-        public static Task<T> AskEx<T>(this ICanTell self, Func<IActorRef, object> messageFactory, CancellationToken cancellationToken)
-        {
-            return self.AskEx<T>(messageFactory, null, cancellationToken);
-        }
-
-        public static async Task<T> AskEx<T>(this ICanTell self, Func<IActorRef, object> messageFactory, TimeSpan? timeout, CancellationToken cancellationToken)
-        {
-            IActorRefProvider provider = ResolveProvider(self);
-            if (provider == null)
-                throw new ArgumentException("Unable to resolve the target Provider", nameof(self));
-
-            return (T)await AskEx(self, messageFactory, provider, timeout, cancellationToken);
-        }
-        internal static IActorRefProvider ResolveProvider(ICanTell self)
-        {
-            if (InternalCurrentActorCellKeeper.Current != null)
-                return InternalCurrentActorCellKeeper.Current.SystemImpl.Provider;
-
-            if (self is IInternalActorRef iar)
-                return iar.Provider;
-
-            if (self is ActorSelection asel)
-                return ResolveProvider(asel.Anchor);
-
-            return null;
-        }
-
-        private static async Task<object> AskEx(ICanTell self, Func<IActorRef, object> messageFactory, IActorRefProvider provider, TimeSpan? timeout, CancellationToken cancellationToken)
-        {
-            var result = new TaskCompletionSource<object>();
-
-            CancellationTokenSource timeoutCancellation = null;
-            timeout = timeout ?? provider.Settings.AskTimeout;
-            var ctrList = new List<CancellationTokenRegistration>(2);
-
-            if (timeout != Timeout.InfiniteTimeSpan && timeout.Value > default(TimeSpan))
-            {
-                timeoutCancellation = new CancellationTokenSource();
-
-                ctrList.Add(timeoutCancellation.Token.Register(() =>
-                {
-                    result.TrySetException(new AskTimeoutException($"Timeout after {timeout} seconds"));
-                }));
-
-                timeoutCancellation.CancelAfter(timeout.Value);
-            }
-
-            if (cancellationToken.CanBeCanceled)
-            {
-                ctrList.Add(cancellationToken.Register(() => result.TrySetCanceled()));
-            }
-
-            //create a new tempcontainer path
-            ActorPath path = provider.TempPath();
-
-            var future = new FutureActorRef(result, () => { }, path);
-            //The future actor needs to be registered in the temp container
-            provider.RegisterTempActor(future, path);
-
-            self.Tell(messageFactory(future), future);
-
-            try
-            {
-                return await result.Task;
-            }
-            finally
-            {
-                //callback to unregister from tempcontainer
-
-                provider.UnregisterTempActor(path);
-
-                for (var i = 0; i < ctrList.Count; i++)
-                {
-                    ctrList[i].Dispose();
-                }
-
-                if (timeoutCancellation != null)
-                {
-                    timeoutCancellation.Dispose();
-                }
-            }
         }
     }
 }

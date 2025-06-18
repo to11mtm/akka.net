@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="OutputStreamSubscriber.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -13,14 +13,13 @@ using Akka.Event;
 using Akka.IO;
 using Akka.Streams.Actors;
 using Akka.Streams.IO;
-using Akka.Util;
 
 namespace Akka.Streams.Implementation.IO
 {
     /// <summary>
     /// INTERNAL API
     /// </summary>
-    internal class OutputStreamSubscriber : ActorSubscriber
+    internal sealed class OutputStreamSubscriber : ActorSubscriber
     {
         /// <summary>
         /// TBD
@@ -37,7 +36,7 @@ namespace Akka.Streams.Implementation.IO
                 throw new ArgumentException("Buffer size must be > 0");
 
             return
-                Actor.Props.Create(() => new OutputStreamSubscriber(os, completionPromise, bufferSize, autoFlush))
+                Actor.Props.Create<OutputStreamSubscriber>(os, completionPromise, bufferSize, autoFlush)
                     .WithDeploy(Deploy.Local);
         }
 
@@ -54,6 +53,7 @@ namespace Akka.Streams.Implementation.IO
         /// <param name="completionPromise">TBD</param>
         /// <param name="bufferSize">TBD</param>
         /// <param name="autoFlush">TBD</param>
+        /// If this gets changed you must change <see cref="OutputStreamSubscriber.Props"/> as well!
         public OutputStreamSubscriber(Stream outputStream, TaskCompletionSource<IOResult> completionPromise, int bufferSize, bool autoFlush)
         {
             _outputStream = outputStream;
@@ -75,12 +75,12 @@ namespace Akka.Streams.Implementation.IO
         /// <returns>TBD</returns>
         protected override bool Receive(object message)
         {
-            return message.Match()
-                .With<OnNext>(next =>
-                {
+            switch (message)
+            {
+                case OnNext next:
                     try
                     {
-                        var bytes = next.Element as ByteString;
+                        var bytes = (ByteString)next.Element;
                         //blocking write
                         _outputStream.Write(bytes.ToArray(), 0, bytes.Count);
                         _bytesWritten += bytes.Count;
@@ -92,20 +92,19 @@ namespace Akka.Streams.Implementation.IO
                         _completionPromise.TrySetResult(IOResult.Failed(_bytesWritten, ex));
                         Cancel();
                     }
-                })
-                .With<OnError>(error =>
-                {
-                    _log.Error(error.Cause,
-                        $"Tearing down OutputStreamSink due to upstream error, wrote bytes: {_bytesWritten}");
-                    _completionPromise.TrySetResult(IOResult.Failed(_bytesWritten, error.Cause));
+                    return true;
+                case OnError error:
+                    _log.Error(error.Cause, "Tearing down OutputStreamSink due to upstream error, wrote bytes: {0}", _bytesWritten);
+                    _completionPromise.TrySetException(new AbruptIOTerminationException(IOResult.Success(_bytesWritten), error.Cause));
                     Context.Stop(Self);
-                })
-                .With<OnComplete>(() =>
-                {
+                    return true;
+                case OnComplete _:
                     Context.Stop(Self);
                     _outputStream.Flush();
-                })
-                .WasHandled;
+                    return true;
+            }
+
+            return false;
         }
 
         /// <summary>

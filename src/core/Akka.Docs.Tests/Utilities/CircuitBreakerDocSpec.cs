@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="CircuitBreakerDocSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -49,12 +49,13 @@ namespace DocsExamples.Utilities.CircuitBreakers
 
             var dangerousCall = "This really isn't that dangerous of a call after all";
 
-            Receive<string>(str => str.Equals("is my middle name"), msg =>
+            Receive<string>(str => str.Equals("is my middle name"), _ =>
             {
-                breaker.WithCircuitBreaker(() => Task.FromResult(dangerousCall)).PipeTo(Sender);
+                var sender = this.Sender;
+                breaker.WithCircuitBreaker(_ => Task.FromResult(dangerousCall)).PipeTo(sender);
             });
 
-            Receive<string>(str => str.Equals("block for me"), msg =>
+            Receive<string>(str => str.Equals("block for me"), _ =>
             {
                 Sender.Tell(breaker.WithSyncCircuitBreaker(() => dangerousCall));
             });

@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="AbstractLeastShardAllocationStrategy.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -39,13 +39,12 @@ namespace Akka.Cluster.Sharding.Internal
             public IImmutableList<string> ShardIds { get; }
         }
 
-        internal class ShardSuitabilityOrdering : IComparer<RegionEntry>
+        internal sealed class ShardSuitabilityOrdering : IComparer<RegionEntry>
         {
-            public static readonly ShardSuitabilityOrdering Instance = new ShardSuitabilityOrdering();
+            public static readonly ShardSuitabilityOrdering Instance = new();
 
             private ShardSuitabilityOrdering()
             {
-
             }
 
             public int Compare(RegionEntry x, RegionEntry y)
@@ -70,17 +69,17 @@ namespace Akka.Cluster.Sharding.Internal
             }
         }
 
-        private ActorSystem system;
-        private Cluster cluster;
+        private ActorSystem _system;
+        private Cluster _cluster;
 
         // protected for testability
-        protected virtual CurrentClusterState ClusterState => cluster.State;
-        protected virtual Member SelfMember => cluster.SelfMember;
+        protected virtual CurrentClusterState ClusterState => _cluster.State;
+        protected virtual Member SelfMember => _cluster.SelfMember;
 
         public void Start(ActorSystem system)
         {
-            this.system = system;
-            cluster = Cluster.Get(system);
+            _system = system;
+            _cluster = Cluster.Get(system);
         }
 
         public async Task<IActorRef> AllocateShard(IActorRef requester, string shardId, IImmutableDictionary<IActorRef, IImmutableList<string>> currentShardAllocations)
@@ -95,8 +94,8 @@ namespace Akka.Cluster.Sharding.Internal
             }
             else
             {
-                var suitable = MostSuitableRegion(regionEntries);
-                return suitable.Region;
+                var (Region, _) = MostSuitableRegion(regionEntries);
+                return Region;
             }
         }
 
@@ -127,7 +126,13 @@ namespace Akka.Cluster.Sharding.Internal
 
         protected ImmutableList<RegionEntry> RegionEntriesFor(IImmutableDictionary<IActorRef, IImmutableList<string>> currentShardAllocations)
         {
-            var addressToMember = ClusterState.Members.ToImmutableDictionary(m => m.Address, m => m);
+            // switched to using `GroupBy` instead just ToImmutableDictionary due to https://github.com/akkadotnet/akka.net/issues/7365
+            // it's very rare, but possible, that there can be two members with the same address in the ClusterState. This can happen
+            // when a node quickly reboots and re-uses its old address, but the old incarnation hasn't been downed yet.
+            var addressToMember = ClusterState.Members
+                .GroupBy(m => m.Address)
+                // using Last or First here is non-deterministic since the UID that appears in the UniqueAddress sort order is random
+                .ToImmutableDictionary(g => g.Key, g => g.First());
 
             return currentShardAllocations.Select(i =>
             {

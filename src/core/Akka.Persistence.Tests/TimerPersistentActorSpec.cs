@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
-// <copyright file="ManyRecoveriesSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2018 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2018 .NET Foundation <https://github.com/akkadotnet/akka.net>
+// <copyright file="TimerPersistentActorSpec.cs" company="Akka.NET Project">
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -33,7 +33,7 @@ namespace Akka.Persistence.Tests
         {
             var pa = ActorOf(TestPersistentActor.TestProps("p1"));
             pa.Tell("msg1");
-            ExpectMsg<string>("msg1");
+            ExpectMsg("msg1");
         }
 
         [Fact]

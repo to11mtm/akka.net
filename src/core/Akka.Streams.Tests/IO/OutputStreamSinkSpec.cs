@@ -1,20 +1,26 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="OutputStreamSinkSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.IO;
 using Akka.Streams.Dsl;
-using Akka.Streams.TestKit.Tests;
+using Akka.Streams.IO;
+using Akka.Streams.TestKit;
 using Akka.TestKit;
+using Akka.TestKit.Extensions;
+using FluentAssertions;
+using FluentAssertions.Extensions;
 using Xunit;
 using Xunit.Abstractions;
+using static FluentAssertions.FluentActions;
 
 namespace Akka.Streams.Tests.IO
 {
@@ -152,6 +158,40 @@ namespace Akka.Streams.Tests.IO
             public override long Length { get; }
             public override long Position { get; set; }
         }
+
+        private sealed class OutputStream : Stream
+        {
+            public override void Flush()
+            {
+                throw new NotImplementedException();
+            }
+
+            public override long Seek(long offset, SeekOrigin origin)
+            {
+                throw new NotImplementedException();
+            }
+
+            public override void SetLength(long value)
+            {
+                throw new NotImplementedException();
+            }
+
+            public override int Read(byte[] buffer, int offset, int count)
+            {
+                throw new NotImplementedException();
+            }
+
+            public override void Write(byte[] buffer, int offset, int count)
+            {
+            }
+
+            public override bool CanRead { get; }
+            public override bool CanSeek { get; }
+            public override bool CanWrite => true;
+            public override long Length { get; }
+            public override long Position { get; set; }
+        }
+
         #endregion
 
         private readonly ActorMaterializer _materializer;
@@ -164,9 +204,9 @@ namespace Akka.Streams.Tests.IO
         }
 
         [Fact]
-        public void OutputStreamSink_must_write_bytes_to_void_OutputStream()
+        public async Task OutputStreamSink_must_write_bytes_to_void_OutputStream()
         {
-            this.AssertAllStagesStopped(() =>
+            await this.AssertAllStagesStoppedAsync(async () =>
             {
                 var p = CreateTestProbe();
                 var datas = new List<ByteString>
@@ -179,36 +219,52 @@ namespace Akka.Streams.Tests.IO
                 var completion = Source.From(datas)
                     .RunWith(StreamConverters.FromOutputStream(() => new VoidOutputStream(p)), _materializer);
 
-                p.ExpectMsg(datas[0].ToString());
-                p.ExpectMsg(datas[1].ToString());
-                p.ExpectMsg(datas[2].ToString());
-                completion.Wait(TimeSpan.FromSeconds(3));
+                await p.ExpectMsgAsync(datas[0].ToString());
+                await p.ExpectMsgAsync(datas[1].ToString());
+                await p.ExpectMsgAsync(datas[2].ToString());
+                await completion.ShouldCompleteWithin(3.Seconds());
             }, _materializer);
         }
 
         [Fact]
-        public void OutputStreamSink_must_close_underlying_stream_when_error_received()
+        public async Task OutputStreamSink_must_close_underlying_stream_when_error_received()
         {
-            this.AssertAllStagesStopped(() =>
+            await this.AssertAllStagesStoppedAsync(async () =>
             {
                 var p = CreateTestProbe();
-                Source.Failed<ByteString>(new Exception("Boom!"))
+                var completion = Source.Failed<ByteString>(new Exception("Boom!"))
                     .RunWith(StreamConverters.FromOutputStream(() => new CloseOutputStream(p)), _materializer);
 
-                p.ExpectMsg("closed");
+                await p.ExpectMsgAsync("closed");
+                await completion.ShouldThrowWithin<AbruptIOTerminationException>(3.Seconds());
             }, _materializer);
         }
 
         [Fact]
-        public void OutputStreamSink_must_close_underlying_stream_when_completion_received()
+        public async Task OutputStreamSink_must_complete_materialized_value_with_the_error()
         {
-            this.AssertAllStagesStopped(() =>
+            await this.AssertAllStagesStoppedAsync(async () =>
+            {
+                await Awaiting(async () =>
+                {
+                    await Source.Failed<ByteString>(new Exception("Boom!"))
+                        .RunWith(StreamConverters.FromOutputStream(() => new OutputStream()), _materializer)
+                        .ShouldCompleteWithin(3.Seconds());
+                }).Should().ThrowAsync<AbruptIOTerminationException>();
+            }, _materializer);
+        }
+
+        [Fact]
+        public async Task OutputStreamSink_must_close_underlying_stream_when_completion_received()
+        {
+            await this.AssertAllStagesStoppedAsync(async () =>
             {
                 var p = CreateTestProbe();
-                Source.Empty<ByteString>()
+                var completion = Source.Empty<ByteString>()
                     .RunWith(StreamConverters.FromOutputStream(() => new CompletionOutputStream(p)), _materializer);
 
-                p.ExpectMsg("closed");
+                await p.ExpectMsgAsync("closed");
+                await completion.ShouldCompleteWithin(3.Seconds());
             }, _materializer);
         }
     }

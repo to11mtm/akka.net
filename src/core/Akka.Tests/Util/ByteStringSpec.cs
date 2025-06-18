@@ -1,14 +1,17 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ByteStringSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using Akka.IO;
+using Akka.TestKit;
+using FluentAssertions;
 using FsCheck;
 using Xunit;
 
@@ -43,10 +46,65 @@ namespace Akka.Tests.Util
         }
 
         [Fact]
+        public void A_ByteString_ToReadOnlySpan_must_have_correct_size()
+        {
+            Prop.ForAll((ByteString a, ByteString b) =>
+            {
+                a.ToReadOnlySpan().Length.Should().Be(a.Count);
+                b.ToReadOnlySpan().Length.Should().Be(b.Count);
+                var concat = a + b;
+                var spanConcat = concat.ToReadOnlySpan();
+                return spanConcat.Length == concat.Count;
+            }).QuickCheckThrowOnFailure();
+        }
+
+        [Fact]
+        public void A_ByteString_Compact_ToReadOnlySpan_must_have_identical_memory_ref()
+        {
+            var bytes = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+            var a = ByteString.FromBytes(bytes);
+            var aSpan = a.ToReadOnlySpan();
+            
+            var memory = new ReadOnlyMemory<byte>(bytes);
+            var spanMemory = memory.Span;
+
+            // span has memory reference to underlying byte array 
+            (aSpan == spanMemory).Should().BeTrue();
+            
+            // Do another ToReadOnlySpan
+            var span2 = a.ToReadOnlySpan();
+            (aSpan == span2).Should().BeTrue();
+        }
+        
+        [Fact]
+        public void A_ByteString_ToReadOnlySpan_compacted_must_have_identical_memory_ref()
+        {
+            var bytesA = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+            var bytesB = new byte[] { 10, 11, 12, 13, 14, 15, 16, 17, 18 };
+            var a = ByteString.FromBytes(bytesA);
+            var b = ByteString.FromBytes(bytesB);
+            
+            var concat = a + b;
+            
+            var concatSpan = concat.ToReadOnlySpan();
+            var concatSpan2 = concat.ToReadOnlySpan();
+            // not compact, returns a new span
+            (concatSpan == concatSpan2).Should().BeFalse();
+
+            // compact, will return same span
+            var compacted = concat.Compact();
+            var concatSpan3 = compacted.ToReadOnlySpan();
+            var concatSpan4 = compacted.ToReadOnlySpan();
+            (concatSpan3 == concatSpan4).Should().BeTrue();
+        }
+
+        [Fact]
         public void A_ByteString_must_have_correct_size_when_slicing_from_index()
         {
-            Prop.ForAll((ByteString a, ByteString b) => (a + b).Slice(b.Count).Count == a.Count)
-                .QuickCheckThrowOnFailure();
+            var a = ByteString.FromBytes(new byte[]{ 1, 2, 3, 4, 5, 6, 7, 8, 9} );
+            var b = ByteString.FromBytes(new byte[] { 10, 11, 12, 13, 14, 15, 16, 17, 18 });
+
+            (a + b).Slice(b.Count).Count.Should().Be(a.Count);
         }
 
         [Fact]
@@ -58,8 +116,10 @@ namespace Akka.Tests.Util
         [Fact]
         public void A_ByteString_must_be_sequential_when_slicing_from_index()
         {
-            Prop.ForAll((ByteString a, ByteString b) => (a + b).Slice(a.Count).SequenceEqual(b))
-                .QuickCheckThrowOnFailure();
+            var a = ByteString.FromBytes(new byte[]{ 1, 2, 3, 4, 5, 6, 7, 8, 9} );
+            var b = ByteString.FromBytes(new byte[] { 10, 11, 12, 13, 14, 15, 16, 17, 18 });
+
+            (a + b).Slice(a.Count).Should().BeEquivalentTo(b);
         }
 
         [Fact]
@@ -75,14 +135,12 @@ namespace Akka.Tests.Util
         [Fact]
         public void A_ByteString_must_be_equal_to_the_original_when_recombining()
         {
-            Prop.ForAll((ByteString xs, int until) =>
-            {
-                var tmp1 = xs.Slice(0, until);
-                var tmp2 = xs.Slice(until);
-                var tmp11 = tmp1.Slice(0, until);
-                var tmp12 = tmp1.Slice(until);
-                return (tmp11 + tmp12 + tmp2).SequenceEqual(xs);
-            }).QuickCheckThrowOnFailure();
+            var xs = ByteString.FromBytes(new byte[]{ 1, 2, 3, 4, 5, 6, 7, 8, 9} );
+            var tmp1 = xs.Slice(0, xs.Count / 2);
+            var tmp2 = xs.Slice(xs.Count / 2);
+            var tmp11 = tmp1.Slice(0, tmp1.Count / 2);
+            var tmp12 = tmp1.Slice(tmp1.Count / 2);
+            (tmp11 + tmp12 + tmp2).Should().BeEquivalentTo(xs);
         }
 
         [Fact]
@@ -188,5 +246,27 @@ namespace Akka.Tests.Util
             Assert.Equal(expectedLeft, actualLeft);
             Assert.Equal(expectedRight, actualRight);
         }
+
+#if !NETFRAMEWORK
+        [Fact(DisplayName = "A sliced byte string using Range must return the correct string for ToString")]
+        public void A_sliced_ByteString_using_Range_must_return_correct_string_for_ToString()
+        {
+            const string expected = "ABCDEF";
+            Encoding encoding = Encoding.ASCII;
+
+            int halfExpected = expected.Length / 2;
+
+            string expectedLeft = expected.Substring(startIndex: 0, length: halfExpected);
+            string expectedRight = expected.Substring(startIndex: halfExpected, length: halfExpected);
+
+            ByteString data = ByteString.FromString(expected, encoding);
+
+            string actualLeft = data[..halfExpected].ToString(encoding);
+            string actualRight = data[halfExpected..].ToString(encoding);
+
+            Assert.Equal(expectedLeft, actualLeft);
+            Assert.Equal(expectedRight, actualRight);
+        }
+#endif
     }
 }

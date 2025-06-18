@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="DeadLetter.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -20,10 +20,13 @@ namespace Akka.Event
     }
 
     /// <summary>
-    /// Represents a message that could not be delivered to it's recipient. 
+    /// Represents a message that could not be delivered to it's recipient.
     /// This message wraps the original message, the sender and the intended recipient of the message.
+    ///
+    /// Subscribe to this class to be notified about all <see cref="DeadLetter"/> (also the suppressed ones)
+    /// and <see cref="Dropped"/>.
     /// </summary>
-    public abstract class AllDeadLetters
+    public abstract class AllDeadLetters : IWrappedMessage
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="DeadLetter"/> class.
@@ -80,6 +83,7 @@ namespace Akka.Event
         /// </exception>
         public DeadLetter(object message, IActorRef sender, IActorRef recipient) : base(message, sender, recipient)
         {
+            System.Diagnostics.Debug.Assert(message is not DeadLetter, "DeadLetter inside DeadLetter");
             if (sender == null) throw new ArgumentNullException(nameof(sender), "DeadLetter sender may not be null");
             if (recipient == null) throw new ArgumentNullException(nameof(recipient), "DeadLetter recipient may not be null");
         }
@@ -100,10 +104,32 @@ namespace Akka.Event
         /// <exception cref="ArgumentNullException">
         /// This exception is thrown when either the sender or the recipient is undefined.
         /// </exception>
-        public SuppressedDeadLetter(IDeadLetterSuppression message, IActorRef sender, IActorRef recipient) : base(message, sender, recipient)
+        public SuppressedDeadLetter(object message, IActorRef sender, IActorRef recipient) : base(message, sender, recipient)
         {
             if (sender == null) throw new ArgumentNullException(nameof(sender), "SuppressedDeadLetter sender may not be null");
             if (recipient == null) throw new ArgumentNullException(nameof(recipient), "SuppressedDeadLetter recipient may not be null");
         }
+    }
+
+    /// <summary>
+    /// Envelope that is published on the eventStream wrapped in <see cref="DeadLetter"/> for every message that is
+    /// dropped due to overfull queues or routers with no routees.
+    ///
+    /// When this message was sent without a sender <see cref="IActorRef"/>, `sender` will be <see cref="ActorRefs.NoSender"/> , i.e. `null`.
+    /// </summary>
+    public sealed class Dropped : AllDeadLetters
+    {
+        public Dropped(object message, string reason, IActorRef sender, IActorRef recipient)
+            : base(message, sender, recipient)
+        {
+            Reason = reason;
+        }
+
+        public Dropped(object message, string reason, IActorRef recipient)
+            : this(message, reason, ActorRefs.NoSender, recipient)
+        {
+        }
+
+        public string Reason { get; }
     }
 }

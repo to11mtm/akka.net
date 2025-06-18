@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="RemoteSystemDaemon.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -12,6 +12,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using Akka.Actor;
 using Akka.Actor.Internal;
+using Akka.Annotations;
 using Akka.Dispatch.SysMsg;
 using Akka.Event;
 using Akka.Util;
@@ -22,13 +23,20 @@ namespace Akka.Remote
 {
     /// <summary>
     /// INTERNAL API
+    /// Used to mark that a message is meant as a system call and should not be traced
     /// </summary>
-    internal interface IDaemonMsg { }
+    [InternalApi]
+    public interface IInternalRemotingMessage { }
+    
+    /// <summary>
+    /// INTERNAL API
+    /// </summary>
+    internal interface IDaemonMsg:IInternalRemotingMessage { }
 
     /// <summary>
     ///  INTERNAL API
     /// </summary>
-    internal class DaemonMsgCreate : IDaemonMsg
+    internal sealed class DaemonMsgCreate : IDaemonMsg
     {
         /// <summary>
         ///     Initializes a new instance of the <see cref="DaemonMsgCreate" /> class.
@@ -77,11 +85,11 @@ namespace Akka.Remote
     /// 
     /// It acts as the brain of the remote that responds to system remote messages and executes actions accordingly.
     /// </summary>
-    internal class RemoteSystemDaemon : VirtualPathContainer
+    internal sealed class RemoteSystemDaemon : VirtualPathContainer
     {
         private readonly ActorSystemImpl _system;
-        private readonly Switch _terminating = new Switch(false);
-        private readonly ConcurrentDictionary<IActorRef, IImmutableSet<IActorRef>> _parent2Children = new ConcurrentDictionary<IActorRef, IImmutableSet<IActorRef>>();
+        private readonly Switch _terminating = new(false);
+        private readonly ConcurrentDictionary<IActorRef, IImmutableSet<IActorRef>> _parent2Children = new();
         private readonly IActorRef _terminator;
 
         /// <summary>
@@ -123,7 +131,7 @@ namespace Akka.Remote
             if (message is IDaemonMsg)
             {
                 Log.Debug("Received command [{0}] to RemoteSystemDaemon on [{1}]", message, Path.Address);
-                if (message is DaemonMsgCreate) HandleDaemonMsgCreate((DaemonMsgCreate)message);
+                if (message is DaemonMsgCreate create) HandleDaemonMsgCreate(create);
             }
             else if (message is ActorSelectionMessage sel)
             {
@@ -156,11 +164,9 @@ namespace Akka.Remote
                     }
                 }
 
-                var t = Rec(ImmutableList<string>.Empty);
-                var concatenatedChildNames = t.Item1;
-                var m = t.Item2;
+                var (concatenatedChildNames, m) = Rec(ImmutableList<string>.Empty);
 
-                var child = GetChild(concatenatedChildNames);
+                var child = GetChild(concatenatedChildNames.ToList());
                 if (child.IsNobody())
                 {
                     var emptyRef = new EmptyLocalActorRef(_system.Provider,
@@ -174,9 +180,8 @@ namespace Akka.Remote
             }
             //Remote ActorSystem on another process / machine has died. 
             //Need to clean up any references to remote deployments here.
-            else if (message is AddressTerminated)
+            else if (message is AddressTerminated addressTerminated)
             {
-                var addressTerminated = (AddressTerminated)message;
                 //stop any remote actors that belong to this address
                 ForEachChild(@ref =>
                 {
@@ -260,8 +265,7 @@ namespace Akka.Remote
             var supervisor = (IInternalActorRef) message.Supervisor;
             var parent = supervisor;
             Props props = message.Props;
-            ActorPath childPath;
-            if(ActorPath.TryParse(message.Path, out childPath))
+            if(ActorPath.TryParse(message.Path, out var childPath))
             {
                 IEnumerable<string> subPath = childPath.ElementsWithUid.Drop(1); //drop the /remote
                 ActorPath p = Path/subPath;
@@ -302,18 +306,18 @@ namespace Akka.Remote
         /// </summary>
         /// <param name="name">The name.</param>
         /// <returns>ActorRef.</returns>
-        public override IActorRef GetChild(IEnumerable<string> name)
+        public override IActorRef GetChild(IReadOnlyList<string> name)
         {
             var path = name.Join("/");
             var n = 0;
             while (true)
             {
-                var nameAndUid = ActorCell.SplitNameAndUid(path);
-                if (TryGetChild(nameAndUid.Name, out var child))
+                var (s, uid) = ActorCell.GetNameAndUid(path);
+                if (TryGetChild(s, out var child))
                 {
-                    if (nameAndUid.Uid != ActorCell.UndefinedUid && nameAndUid.Uid != child.Path.Uid)
+                    if (uid != ActorCell.UndefinedUid && uid != child.Path.Uid)
                         return Nobody.Instance;
-                    return n == 0 ? child : child.GetChild(name.TakeRight(n));
+                    return n == 0 ? child : child.GetChild(name.TakeRight(n).ToList());
                 }
 
                 var last = path.LastIndexOf("/", StringComparison.Ordinal);

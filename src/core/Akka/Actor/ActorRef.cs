@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ActorRef.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -14,11 +14,13 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Akka.Actor.Internal;
+using Akka.Actor.Scheduler;
 using Akka.Annotations;
 using Akka.Dispatch.SysMsg;
 using Akka.Event;
 using Akka.Util;
 using Akka.Util.Internal;
+using Akka.Util.Internal.Collections;
 
 namespace Akka.Actor
 {
@@ -64,56 +66,67 @@ namespace Akka.Actor
     }
 
     /// <summary>
+    /// INTERNAL API - didn't want static helper methods declared inside generic class
+    /// </summary>
+    internal static class FutureActorRefDeathWatchSupport
+    {
+        internal static async Task ScheduleDeathWatch(IInternalActorRef notifier, IActorRef self, Task completionTask)
+        {
+            try
+            {
+                await completionTask;
+            }
+            catch
+            {
+                // we don't do error handling for this - we do not care
+            }
+            finally
+            {
+                // regardless of whether we succeeded or failed, we notify watchers
+                notifier.SendSystemMessage(TerminatedFor(self));
+            }
+            
+        }
+
+        internal static DeathWatchNotification TerminatedFor(IActorRef self)
+        {
+            return new DeathWatchNotification(self, true, false);
+        }
+    }
+
+    /// <summary>
     /// INTERNAL API.
     ///
     /// ActorRef implementation used for one-off tasks.
     /// </summary>
-    public class FutureActorRef : MinimalActorRef
+    public class FutureActorRef<T> : MinimalActorRef
     {
-        private readonly TaskCompletionSource<object> _result;
-        private readonly Action _unregister;
+        private readonly TaskCompletionSource<T> _result;
         private readonly ActorPath _path;
+        private readonly IActorRefProvider _provider;
 
         /// <summary>
         /// INTERNAL API
         /// </summary>
         /// <param name="result">TBD</param>
-        /// <param name="unregister">TBD</param>
         /// <param name="path">TBD</param>
-        public FutureActorRef(TaskCompletionSource<object> result, Action unregister, ActorPath path)
+        /// <param name="provider">TBD</param>
+        public FutureActorRef(TaskCompletionSource<T> result, ActorPath path, IActorRefProvider provider)
         {
-            if (ActorCell.Current != null)
-            {
-                _actorAwaitingResultSender = ActorCell.Current.Sender;
-            }
             _result = result;
-            _unregister = unregister;
             _path = path;
-            _result.Task.ContinueWith(_ => _unregister());
+            _provider = provider;
         }
 
         /// <summary>
         /// TBD
         /// </summary>
-        public override ActorPath Path
-        {
-            get { return _path; }
-        }
+        public override ActorPath Path => _path;
 
         /// <summary>
         /// TBD
         /// </summary>
-        /// <exception cref="System.NotImplementedException">TBD</exception>
-        public override IActorRefProvider Provider
-        {
-            get { throw new NotImplementedException(); }
-        }
-
-
-        private const int INITIATED = 0;
-        private const int COMPLETED = 1;
-        private int status = INITIATED;
-        private readonly IActorRef _actorAwaitingResultSender;
+        public override IActorRefProvider Provider => _provider;
 
         /// <summary>
         /// TBD
@@ -122,27 +135,68 @@ namespace Akka.Actor
         /// <param name="sender">TBD</param>
         protected override void TellInternal(object message, IActorRef sender)
         {
-
-            if (message is ISystemMessage sysM) //we have special handling for system messages
+            var handled = false;
+            
+            switch (message)
             {
-                SendSystemMessage(sysM);
+                case T t:
+                    handled = _result.TrySetResult(t);
+                    break;
+                case null:
+                    handled = _result.TrySetResult(default);
+                    break;
+                case Status.Failure f:
+                    handled = _result.TrySetException(f.Cause
+                        ?? new TaskCanceledException("Task cancelled by actor via Failure message."));
+                    break;
+#pragma warning disable CS0618
+                // for backwards compatibility
+                case Failure f:
+                    handled = _result.TrySetException(f.Exception
+                                                      ?? new TaskCanceledException("Task cancelled by actor via Failure message."));
+#pragma warning restore CS0618
+                    break;
+                default:
+                    _ = _result.TrySetException(new ArgumentException(
+                        $"Received message of type [{message.GetType()}] - Ask expected message of type [{typeof(T)}]"));
+                    break;
+            }
+
+            //ignore canceled ask and put unhandled answers into deadletter
+            if (!handled && !_result.Task.IsCanceled)
+                _provider.DeadLetters.Tell(message ?? default(T), this);            
+        }
+
+        public override void SendSystemMessage(ISystemMessage message)
+        {
+            if (message is Watch watch)
+            {
+                if (_result.Task.IsCompleted)
+                {
+                    watch.Watcher.SendSystemMessage(FutureActorRefDeathWatchSupport.TerminatedFor(this));
+                }
+                else
+                {
+                    _ = FutureActorRefDeathWatchSupport.ScheduleDeathWatch(watch.Watcher, watch.Watchee, _result.Task);
+                }
+                    
+            }
+            else if (message is Unwatch unwatch)
+            {
+                // we're not going to support Unwatch - watchers
+                // already have to handle scenarios where the Unwatch arrives too late
+                // anyway, so we're just going to treat this like that in order to keep
+                // state management as simple as possible
             }
             else
             {
-                if (Interlocked.Exchange(ref status, COMPLETED) == INITIATED)
-                {
-                    _result.TrySetResult(message);
-                }
+                // TODO: blow up the caller here by just throwing the exception at the callsite?
+                _result.TrySetException(new InvalidOperationException($"system message of type '{message.GetType().Name}' is invalid for {nameof(FutureActorRef<T>)}"));
             }
         }
 
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <param name="message">TBD</param>
-        public override void SendSystemMessage(ISystemMessage message)
-        {
-            base.SendSystemMessage(message);
+        public virtual void DeliverAsk(object message, ICanTell destination){
+            destination.Tell(message, this);
         }
     }
 
@@ -226,7 +280,9 @@ namespace Akka.Actor
         /// Use this value as an argument to <see cref="ICanTell.Tell"/> if there is not actor to
         /// reply to (e.g. when sending from non-actor code).
         /// </summary>
-        public static readonly IActorRef NoSender = null;
+        #nullable enable
+        public static readonly IActorRef? NoSender = null;
+        #nullable restore
     }
 
     /// <summary>
@@ -292,14 +348,14 @@ namespace Akka.Actor
         /// <param name="sender">TBD</param>
         protected abstract void TellInternal(object message, IActorRef sender);
 
-        /// <inheritdoc/>
+        
         public override string ToString()
         {
             if (Path.Uid == ActorCell.UndefinedUid) return $"[{Path}]";
             return $"[{Path}#{Path.Uid}]";
         }
 
-        /// <inheritdoc/>
+        
         public override bool Equals(object obj)
         {
             if (obj is IActorRef other)
@@ -308,7 +364,6 @@ namespace Akka.Actor
             return false;
         }
 
-        /// <inheritdoc/>
         public override int GetHashCode()
         {
             unchecked
@@ -320,7 +375,6 @@ namespace Akka.Actor
             }
         }
 
-        /// <inheritdoc/>
         /// <exception cref="ArgumentException">
         /// This exception is thrown if the given <paramref name="obj"/> isn't an <see cref="IActorRef"/>.
         /// </exception>
@@ -352,7 +406,7 @@ namespace Akka.Actor
                 && Path.Equals(other.Path);
         }
 
-        /// <inheritdoc/>
+        
         public int CompareTo(IActorRef other)
         {
             if (other is null) return 1;
@@ -407,7 +461,7 @@ namespace Akka.Actor
         /// </summary>
         /// <param name="name">The path elements.</param>
         /// <returns>The <see cref="IActorRef"/>, or if the requested path does not exist, returns <see cref="Nobody"/>.</returns>
-        IActorRef GetChild(IEnumerable<string> name);
+        IActorRef GetChild(IReadOnlyList<string> name);
 
         /// <summary>
         /// Resumes an actor if it has been suspended.
@@ -466,7 +520,7 @@ namespace Akka.Actor
         public abstract IActorRefProvider Provider { get; }
 
         /// <inheritdoc cref="IInternalActorRef"/>
-        public abstract IActorRef GetChild(IEnumerable<string> name);    //TODO: Refactor this to use an IEnumerator instead as this will be faster instead of enumerating multiple times over name, as the implementations currently do.
+        public abstract IActorRef GetChild(IReadOnlyList<string> name);    //TODO: Refactor this to use an IEnumerator instead as this will be faster instead of enumerating multiple times over name, as the implementations currently do.
 
         /// <inheritdoc cref="IInternalActorRef"/>
         public abstract void Resume(Exception causedByFailure = null);
@@ -515,9 +569,9 @@ namespace Akka.Actor
         }
 
         /// <inheritdoc cref="InternalActorRefBase"/>
-        public override IActorRef GetChild(IEnumerable<string> name)
+        public override IActorRef GetChild(IReadOnlyList<string> name)
         {
-            if (name.All(string.IsNullOrEmpty))
+            if (name.All(x => string.IsNullOrEmpty(x)))
                 return this;
             return ActorRefs.Nobody;
         }
@@ -563,10 +617,12 @@ namespace Akka.Actor
         {
             get { return true; }
         }
-
+        
         /// <inheritdoc cref="InternalActorRefBase"/>
         [Obsolete("Use Context.Watch and Receive<Terminated> [1.1.0]")]
+#pragma warning disable CS0809
         public override bool IsTerminated { get { return false; } }
+#pragma warning restore CS0809
     }
 
 
@@ -591,7 +647,7 @@ namespace Akka.Actor
             }
         }
 
-        private static readonly IgnoreActorRefSurrogate SurrogateInstance = new IgnoreActorRefSurrogate();
+        private static readonly IgnoreActorRefSurrogate SurrogateInstance = new();
 
         private const string fakeSystemName = "local";
 
@@ -653,9 +709,9 @@ namespace Akka.Actor
         /// <summary>
         /// Singleton instance of <see cref="Nobody"/>.
         /// </summary>
-        public static Nobody Instance = new Nobody();
+        public static Nobody Instance = new();
 
-        private static readonly NobodySurrogate SurrogateInstance = new NobodySurrogate();
+        private static readonly NobodySurrogate SurrogateInstance = new();
         private readonly ActorPath _path = new RootActorPath(Address.AllSystems, "/Nobody");
 
         private Nobody() { }
@@ -711,16 +767,16 @@ namespace Akka.Actor
         private IEnumerable<IActorRef> SelfAndChildren()
         {
             yield return this;
-            foreach(var child in Children.SelectMany(x =>
-            {
-                switch(x)
-                {
-                    case ActorRefWithCell cell:
-                        return cell.SelfAndChildren();
-                    default:
-                        return new[] { x };
-                }
-            }))
+            foreach (var child in Children.SelectMany(x =>
+             {
+                 switch (x)
+                 {
+                     case ActorRefWithCell cell:
+                         return cell.SelfAndChildren();
+                     default:
+                         return new[] { x };
+                 }
+             }))
             {
                 yield return child;
             }
@@ -737,7 +793,7 @@ namespace Akka.Actor
         private readonly IActorRefProvider _provider;
         private readonly ActorPath _path;
 
-        private readonly ConcurrentDictionary<string, IInternalActorRef> _children = new ConcurrentDictionary<string, IInternalActorRef>();
+        private readonly ConcurrentDictionary<string, IInternalActorRef> _children = new();
 
         /// <summary>
         /// TBD
@@ -804,7 +860,7 @@ namespace Akka.Actor
         /// <param name="actor">TBD</param>
         public void AddChild(string name, IInternalActorRef actor)
         {
-            _children.AddOrUpdate(name, actor, (k, v) =>
+            _children.AddOrUpdate(name, actor, (_, v) =>
             {
                 Log.Warning("{0} replacing child {1} ({2} -> {3})", name, actor, v, actor);
                 return v;
@@ -859,20 +915,17 @@ override def getChild(name: Iterator[String]): InternalActorRef = {
         /// </summary>
         /// <param name="name">TBD</param>
         /// <returns>TBD</returns>
-        public override IActorRef GetChild(IEnumerable<string> name)
+        public override IActorRef GetChild(IReadOnlyList<string> name)
         {
             //Using enumerator to avoid multiple enumerations of name.
-            var enumerator = name.GetEnumerator();
-            if (!enumerator.MoveNext())
-            {
-                //name was empty
+            if (name.Count == 0)
                 return this;
-            }
-            var firstName = enumerator.Current;
+  
+            var firstName = name[0];
             if (string.IsNullOrEmpty(firstName))
                 return this;
             if (_children.TryGetValue(firstName, out var child))
-                return child.GetChild(new Enumerable<string>(enumerator));
+                return child.GetChild(name.NoCopySlice(1));
             return ActorRefs.Nobody;
         }
 
@@ -912,7 +965,7 @@ override def getChild(name: Iterator[String]): InternalActorRef = {
                 _enumerator = enumerator;
             }
 
-            /// <inheritdoc/>
+            
             public IEnumerator<T> GetEnumerator()
             {
                 return _enumerator;

@@ -1,14 +1,13 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="Eventsourced.Recovery.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
-using System.Collections.Generic;
-using System.Linq;
 using Akka.Actor;
+using Akka.Event;
 using Akka.Persistence.Internal;
 
 namespace Akka.Persistence
@@ -30,12 +29,11 @@ namespace Akka.Persistence
 
         public override string ToString() => Name;
     }
-
-    /// <summary>
-    /// TBD
-    /// </summary>
+    
     public abstract partial class Eventsourced
     {
+        private ICancelable? _timeoutCancelable;
+        
         /// <summary>
         /// Initial state. Before starting the actual recovery it must get a permit from the `RecoveryPermitter`.
         /// When starting many persistent actors at the same time the journal and its data store is protected from
@@ -45,7 +43,7 @@ namespace Akka.Persistence
         /// </summary>
         private EventsourcedState WaitingRecoveryPermit(Recovery recovery)
         {
-            return new EventsourcedState("waiting for recovery permit", () => true, (receive, message) =>
+            return new EventsourcedState("waiting for recovery permit", () => true, (_, message) =>
             {
                 if (message is RecoveryPermitGranted)
                     StartRecovery(recovery);
@@ -65,8 +63,11 @@ namespace Akka.Persistence
         {
             // protect against snapshot stalling forever because journal overloaded and such
             var timeout = Extension.JournalConfigFor(JournalPluginId).GetTimeSpan("recovery-event-timeout", null, false);
-            var timeoutCancelable = Context.System.Scheduler.ScheduleTellOnceCancelable(timeout, Self, new RecoveryTick(true), Self);
-
+            _timeoutCancelable?.Cancel();
+            _timeoutCancelable = Context.System.Scheduler.ScheduleTellOnceCancelable(timeout, Self, new RecoveryTick(true), Self);
+            
+            var snapshotIsOptional = Extension.SnapshotStoreConfigFor(SnapshotPluginId).GetBoolean("snapshot-is-optional", false);
+            
             bool RecoveryBehavior(object message)
             {
                 Receive receiveRecover = ReceiveRecover;
@@ -83,7 +84,7 @@ namespace Akka.Persistence
                 }
             }
 
-            return new EventsourcedState("recovery started - replay max: " + maxReplays, () => true, (receive, message) =>
+            return new EventsourcedState("recovery started - replay max: " + maxReplays, () => true, (_, message) =>
             {
                 try
                 {
@@ -91,7 +92,8 @@ namespace Akka.Persistence
                     {
                         case LoadSnapshotResult res:
                         {
-                            timeoutCancelable.Cancel();
+                            _timeoutCancelable?.Cancel();
+                            _timeoutCancelable = null;
                             if (res.Snapshot != null)
                             {
                                 var offer = new SnapshotOffer(res.Snapshot.Metadata, res.Snapshot.Snapshot);
@@ -105,7 +107,7 @@ namespace Akka.Persistence
                                         Unhandled(offer);
                                     }
                                 }
-                                catch(Exception ex)
+                                catch (Exception ex)
                                 {
                                     try
                                     {
@@ -124,18 +126,28 @@ namespace Akka.Persistence
                             break;
                         }
                         case LoadSnapshotFailed failed:
-                            timeoutCancelable.Cancel();
-                            try
+                            _timeoutCancelable?.Cancel();
+                            _timeoutCancelable = null;
+                            if (snapshotIsOptional)
                             {
-                                OnRecoveryFailure(failed.Cause);
+                                Log.Info("Snapshot load error for persistenceId [{0}]. Replaying all events since snapshot-is-optional=true", PersistenceId);
+                                ChangeState(Recovering(RecoveryBehavior, timeout));
+                                Journal.Tell(new ReplayMessages(LastSequenceNr +1L, long.MaxValue, maxReplays, PersistenceId, Self));
                             }
-                            finally
+                            else 
                             {
-                                Context.Stop(Self);
+                                try
+                                {
+                                    OnRecoveryFailure(failed.Cause);
+                                }
+                                finally
+                                {
+                                    Context.Stop(Self);
+                                }
+                                ReturnRecoveryPermit();
                             }
-                            ReturnRecoveryPermit();
                             break;
-                        case RecoveryTick tick when tick.Snapshot:
+                        case RecoveryTick { Snapshot: true }:
                             try
                             {
                                 OnRecoveryFailure(
@@ -155,6 +167,8 @@ namespace Akka.Persistence
                 }
                 catch (Exception)
                 {
+                    _timeoutCancelable?.Cancel();
+                    _timeoutCancelable = null;
                     ReturnRecoveryPermit();
                     throw;
                 }
@@ -174,11 +188,12 @@ namespace Akka.Persistence
         private EventsourcedState Recovering(Receive recoveryBehavior, TimeSpan timeout)
         {
             // protect against event replay stalling forever because of journal overloaded and such
-            var timeoutCancelable = Context.System.Scheduler.ScheduleTellRepeatedlyCancelable(timeout, timeout, Self, new RecoveryTick(false), Self);
+            _timeoutCancelable?.Cancel();
+            _timeoutCancelable = Context.System.Scheduler.ScheduleTellRepeatedlyCancelable(timeout, timeout, Self, new RecoveryTick(false), Self);
             var eventSeenInInterval = false;
             var recoveryRunning = true;
 
-            return new EventsourcedState("replay started", () => recoveryRunning, (receive, message) =>
+            return new EventsourcedState("replay started", () => recoveryRunning, (_, message) =>
             {
                 try
                 {
@@ -193,7 +208,8 @@ namespace Akka.Persistence
                             }
                             catch (Exception cause)
                             {
-                                timeoutCancelable.Cancel();
+                                _timeoutCancelable?.Cancel();
+                                _timeoutCancelable = null;
                                 try
                                 {
                                     OnRecoveryFailure(cause, replayed.Persistent.Payload);
@@ -206,10 +222,12 @@ namespace Akka.Persistence
                             }
                             break;
                         case RecoverySuccess success:
-                            timeoutCancelable.Cancel();
+                            _timeoutCancelable?.Cancel();
+                            _timeoutCancelable = null;
                             OnReplaySuccess();
-                            _sequenceNr = success.HighestSequenceNr;
-                            LastSequenceNr = success.HighestSequenceNr;
+                            var highestSeqNr = Math.Max(success.HighestSequenceNr, LastSequenceNr);
+                            _sequenceNr = highestSeqNr;
+                            LastSequenceNr = highestSeqNr;
                             recoveryRunning = false;
                             try
                             {
@@ -223,7 +241,8 @@ namespace Akka.Persistence
                             ReturnRecoveryPermit();
                             break;
                         case ReplayMessagesFailure failure:
-                            timeoutCancelable.Cancel();
+                            _timeoutCancelable?.Cancel();
+                            _timeoutCancelable = null;
                             try
                             {
                                 OnRecoveryFailure(failure.Cause);
@@ -234,10 +253,11 @@ namespace Akka.Persistence
                             }
                             ReturnRecoveryPermit();
                             break;
-                        case RecoveryTick tick when !tick.Snapshot:
+                        case RecoveryTick { Snapshot: false }:
                             if (!eventSeenInInterval)
                             {
-                                timeoutCancelable.Cancel();
+                                _timeoutCancelable?.Cancel();
+                                _timeoutCancelable = null;
                                 try
                                 {
                                     OnRecoveryFailure(
@@ -255,6 +275,9 @@ namespace Akka.Persistence
                                 eventSeenInInterval = false;
                             }
                             break;
+                        case RecoveryTick { Snapshot: true }:
+                            // snapshot tick, ignore
+                            break;
                         default:
                             StashInternally(message);
                             break;
@@ -262,6 +285,8 @@ namespace Akka.Persistence
                 }
                 catch (Exception)
                 {
+                    _timeoutCancelable?.Cancel();
+                    _timeoutCancelable = null;
                     ReturnRecoveryPermit();
                     throw;
                 }
@@ -269,7 +294,7 @@ namespace Akka.Persistence
         }
 
         private void ReturnRecoveryPermit() =>
-            Extension.RecoveryPermitter().Tell(Akka.Persistence.ReturnRecoveryPermit.Instance, Self);
+            RecoveryPermitter.Tell(Akka.Persistence.ReturnRecoveryPermit.Instance, Self);
 
         private void TransitToProcessingState()
         {
@@ -333,11 +358,11 @@ namespace Akka.Persistence
         {
             if (_eventBatch.Count > 0)
             {
-                foreach (var p in _eventBatch.Reverse())
+                foreach (var p in _eventBatch)
                 {
                     _journalBatch.Add(p);
                 }
-                _eventBatch = new LinkedList<IPersistentEnvelope>();
+                _eventBatch.Clear();
             }
 
             FlushJournalBatch();
@@ -349,7 +374,7 @@ namespace Akka.Persistence
         /// </summary>
         private EventsourcedState PersistingEvents()
         {
-            return new EventsourcedState("persisting events", () => false, (receive, message) =>
+            return new EventsourcedState("persisting events", () => false, (_, message) =>
             {
                 var handled = CommonProcessingStateBehavior(message, err =>
                 {

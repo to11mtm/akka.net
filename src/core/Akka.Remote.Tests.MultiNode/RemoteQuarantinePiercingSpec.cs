@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="RemoteQuarantinePiercingSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -9,6 +9,7 @@
 using System;
 using Akka.Actor;
 using Akka.Configuration;
+using Akka.MultiNode.TestAdapter;
 using Akka.Remote.TestKit;
 using FluentAssertions;
 
@@ -35,8 +36,8 @@ namespace Akka.Remote.Tests.MultiNode
         {
             public Subject()
             {
-                Receive<string>(str => str == "shutdown", c => Context.System.Terminate());
-                Receive<string>(str => str == "identify", c =>
+                Receive<string>(str => str == "shutdown", _ => Context.System.Terminate());
+                Receive<string>(str => str == "identify", _ =>
                 {
                     Sender.Tell((AddressUidExtension.Uid(Context.System), Self));
                 });
@@ -89,13 +90,13 @@ namespace Akka.Remote.Tests.MultiNode
 
                 // Quarantine is up -- Cannot communicate with remote system any more
                 Sys.ActorSelection(new RootActorPath(secondAddress) / "user" / "subject").Tell("identify");
-                ExpectNoMsg(2.Seconds());
+                ExpectNoMsg(TimeSpan.FromSeconds(2));
 
                 // Shut down the other system -- which results in restart (see runOn(second))
                 TestConductor.Shutdown(_specConfig.Second).Wait(TimeSpan.FromSeconds(30));
 
                 // Now wait until second system becomes alive again
-                Within(30.Seconds(), () =>
+                Within(TimeSpan.FromSeconds(30), () =>
                 {
                     // retry because the Subject actor might not be started yet
                     AwaitAssert(() =>
@@ -118,7 +119,7 @@ namespace Akka.Remote.Tests.MultiNode
                 EnterBarrier("actors-started");
 
                 EnterBarrier("actor-identified");
-                Sys.WhenTerminated.Wait(30.Seconds());
+                Sys.WhenTerminated.Wait(TimeSpan.FromSeconds(30));
 
                 var freshSystem = ActorSystem.Create(Sys.Name, ConfigurationFactory.ParseString($@"
                     akka.remote.dot-netty.tcp.hostname = {addr.Host}
@@ -126,7 +127,7 @@ namespace Akka.Remote.Tests.MultiNode
                 ").WithFallback(Sys.Settings.Config));
 
                 freshSystem.ActorOf(Props.Create<RemoteQuarantinePiercingSpecConfig.Subject>(), "subject");
-                freshSystem.WhenTerminated.Wait(30.Seconds());
+                freshSystem.WhenTerminated.Wait(TimeSpan.FromSeconds(30));
             }, _specConfig.Second);
         }
     }

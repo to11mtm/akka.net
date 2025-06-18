@@ -1,7 +1,7 @@
-﻿//-----------------------------------------------------------------------
+//-----------------------------------------------------------------------
 // <copyright file="DistributedPubSubMediator.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -9,14 +9,14 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using Akka.Actor;
 using Akka.Cluster.Tools.PublishSubscribe.Internal;
 using Akka.Event;
 using Akka.Pattern;
+using Akka.Remote;
 using Akka.Routing;
 using Akka.Util;
-using Akka.Util.Internal;
-using Group = Akka.Cluster.Tools.PublishSubscribe.Internal.Group;
 using Status = Akka.Cluster.Tools.PublishSubscribe.Internal.Status;
 
 namespace Akka.Cluster.Tools.PublishSubscribe
@@ -99,8 +99,12 @@ namespace Akka.Cluster.Tools.PublishSubscribe
     /// replies.
     /// </para>
     /// </summary>
-    public class DistributedPubSubMediator : ReceiveActor
+    public class DistributedPubSubMediator : ReceiveActor, IWithTimers
     {
+        private const string GossipTimerKey = "GossipTimer";
+        private const string PruneTimerKey = "PruneTimer";
+        private const string PruneBufferTimerKey = "PruneBufferTimer";
+        
         /// <summary>
         /// TBD
         /// </summary>
@@ -112,34 +116,33 @@ namespace Akka.Cluster.Tools.PublishSubscribe
         }
 
         private readonly Cluster _cluster = Cluster.Get(Context.System);
+        private readonly string _role;
         private readonly DistributedPubSubSettings _settings;
-        private readonly ICancelable _gossipCancelable;
-        private readonly ICancelable _pruneCancelable;
         private readonly TimeSpan _pruneInterval;
         private readonly PerGroupingBuffer _buffer;
 
         private ISet<Address> _nodes = new HashSet<Address>();
-        private long deltaCount = 0L;
-        private ILoggingAdapter _log;
-        private IDictionary<Address, Bucket> _registry = new Dictionary<Address, Bucket>();
+        private long _deltaCount;
+        private readonly ILoggingAdapter _log;
+        private readonly Dictionary<Address, Bucket> _registry = new();
+
+        private readonly string _topicPrefix;
+        private readonly PubSubCache _cache;
+
+        private readonly int _maxBufferPerTopic;
+        private readonly TimeSpan _bufferedMessageTimeoutCheckInterval;
+        private readonly Dictionary<string, List<BufferedMessage>> _bufferedMessages = new();
+        private readonly List<string> _newlyAddedKeys = new();
+        
+        public ITimerScheduler Timers { get; set; }
 
         /// <summary>
         /// TBD
         /// </summary>
-        public ILoggingAdapter Log { get { return _log ?? (_log = Context.GetLogger()); } }
-
-        /// <summary>
-        /// TBD
-        /// </summary>
-        public IDictionary<Address, long> OwnVersions
-        {
-            get
-            {
-                return _registry
-                    .Select(entry => new KeyValuePair<Address, long>(entry.Key, entry.Value.Version))
-                    .ToDictionary(kv => kv.Key, kv => kv.Value);
-            }
-        }
+        public IImmutableDictionary<Address, long> OwnVersions
+            => _registry
+                .Select(entry => new KeyValuePair<Address, long>(entry.Key, entry.Value.Version))
+                .ToImmutableDictionary(kv => kv.Key, kv => kv.Value);
 
         /// <summary>
         /// TBD
@@ -157,18 +160,23 @@ namespace Akka.Cluster.Tools.PublishSubscribe
             if (!string.IsNullOrEmpty(_settings.Role) && !_cluster.SelfRoles.Contains(_settings.Role))
                 throw new ArgumentException($"The cluster member [{_cluster.SelfAddress}] doesn't have the role [{_settings.Role}]");
 
-            //Start periodic gossip to random nodes in cluster
-            _gossipCancelable = Context.System.Scheduler.ScheduleTellRepeatedlyCancelable(_settings.GossipInterval, _settings.GossipInterval, Self, GossipTick.Instance, Self);
+            _log = Context.GetLogger();
+            
+            _role = settings.Role;
+            _maxBufferPerTopic = settings.MaxBufferedMessagePerTopic;
+            _bufferedMessageTimeoutCheckInterval = settings.BufferedMessageTimeoutCheckInterval;
+            
             _pruneInterval = new TimeSpan(_settings.RemovedTimeToLive.Ticks / 2);
-            _pruneCancelable = Context.System.Scheduler.ScheduleTellRepeatedlyCancelable(_pruneInterval, _pruneInterval, Self, Prune.Instance, Self);
             _buffer = new PerGroupingBuffer();
 
+            _topicPrefix = Self.Path.ToStringWithoutAddress();
+            _cache = new PubSubCache();
+            
             Receive<Send>(send =>
             {
                 var routees = new List<Routee>();
-                ValueHolder valueHolder;
                 if (_registry.TryGetValue(_cluster.SelfAddress, out var bucket) &&
-                    bucket.Content.TryGetValue(send.Path, out valueHolder) &&
+                    bucket.Content.TryGetValue(send.Path, out var valueHolder) &&
                     send.LocalAffinity)
                 {
                     var routee = valueHolder.Routee;
@@ -192,24 +200,35 @@ namespace Akka.Cluster.Tools.PublishSubscribe
                     new Router(_settings.RoutingLogic, routees.ToArray()).Route(
                         Internal.Utils.WrapIfNeeded(send.Message), Sender);
                 else
-                    SendToDeadLetters(send.Message);
+                    IgnoreOrSendToDeadLetters(send, Sender);
             });
             Receive<SendToAll>(sendToAll =>
             {
-                PublishMessage(sendToAll.Path, sendToAll.Message, sendToAll.ExcludeSelf);
+                // TODO: Investigate this, this code looks very sketchy
+                PublishMessage(sendToAll.Path, sendToAll, sendToAll.ExcludeSelf);
             });
             Receive<Publish>(publish =>
             {
-                string path = Internal.Utils.MakeKey(Self.Path / Internal.Utils.EncodeName(publish.Topic));
+                var encodedTopic = _cache.EncodeName(publish.Topic);
+                var key = _cache.MakeKey(Self.Path, encodedTopic);
                 if (publish.SendOneMessageToEachGroup)
-                    PublishToEachGroup(path, publish.Message);
+                    PublishToEachGroup(key, publish);
                 else
-                    PublishMessage(path, publish.Message);
+                    PublishMessage(key, publish);
+            });
+            Receive<PublishWithAck>(publish =>
+            {
+                var encodedTopic = _cache.EncodeName(publish.Topic);
+                var key = _cache.MakeKey(Self.Path, encodedTopic);
+                if (publish.SendOneMessageToEachGroup)
+                    PublishToEachGroup(key, publish);
+                else
+                    PublishMessage(key, publish);
             });
             Receive<Put>(put =>
             {
                 if (put.Ref.Path.Address.HasGlobalScope)
-                    Log.Warning("Registered actor must be local: [{0}]", put.Ref);
+                    _log.Warning("Registered actor must be local: [{0}]", put.Ref);
                 else
                 {
                     PutToRegistry(Internal.Utils.MakeKey(put.Ref), put.Ref);
@@ -218,21 +237,20 @@ namespace Akka.Cluster.Tools.PublishSubscribe
             });
             Receive<Remove>(remove =>
             {
-                if (_registry.TryGetValue(_cluster.SelfAddress, out var bucket))
-                {
-                    if (bucket.Content.TryGetValue(remove.Path, out var valueHolder) && !valueHolder.Ref.IsNobody())
-                    {
-                        Context.Unwatch(valueHolder.Ref);
-                        PutToRegistry(remove.Path, null);
-                    }
-                }
+                if (!_registry.TryGetValue(_cluster.SelfAddress, out var bucket)) 
+                    return;
+                if (!bucket.Content.TryGetValue(remove.Path, out var valueHolder) || valueHolder.Ref.IsNobody()) 
+                    return;
+                
+                Context.Unwatch(valueHolder.Ref);
+                PutToRegistry(remove.Path, null);
             });
             Receive<Subscribe>(subscribe =>
             {
                 // each topic is managed by a child actor with the same name as the topic
-                var encodedTopic = Internal.Utils.EncodeName(subscribe.Topic);
+                var encodedTopic = _cache.EncodeName(subscribe.Topic);
 
-                _buffer.BufferOr(Internal.Utils.MakeKey(Self.Path / encodedTopic), subscribe, Sender, () =>
+                _buffer.BufferOr(_cache.MakeKey(Self.Path, encodedTopic), subscribe, Sender, () =>
                 {
                     var child = Context.Child(encodedTopic);
                     if (!child.IsNobody())
@@ -245,30 +263,36 @@ namespace Akka.Cluster.Tools.PublishSubscribe
             {
                 HandleRegisterTopic(register.TopicRef);
             });
-            Receive<NoMoreSubscribers>(msg =>
+            Receive<NoMoreSubscribers>(_ =>
             {
                 var key = Internal.Utils.MakeKey(Sender);
                 _buffer.InitializeGrouping(key);
                 Sender.Tell(TerminateRequest.Instance);
             });
-            Receive<NewSubscriberArrived>(msg =>
+            Receive<NewSubscriberArrived>(_ =>
             {
                 var key = Internal.Utils.MakeKey(Sender);
                 _buffer.ForwardMessages(key, Sender);
             });
-            Receive<GetTopics>(getTopics =>
+            Receive<GetTopics>(_ =>
             {
                 Sender.Tell(new CurrentTopics(GetCurrentTopics().ToImmutableHashSet()));
             });
             Receive<Subscribed>(subscribed =>
             {
                 subscribed.Subscriber.Tell(subscribed.Ack);
+
+                if (_newlyAddedKeys.Count <= 0) 
+                    return;
+                
+                Self.Tell(new NewBucketKeysAdded(_newlyAddedKeys.ToArray()));
+                _newlyAddedKeys.Clear();
             });
             Receive<Unsubscribe>(unsubscribe =>
             {
-                var encodedTopic = Internal.Utils.EncodeName(unsubscribe.Topic);
+                var encodedTopic = _cache.EncodeName(unsubscribe.Topic);
 
-                _buffer.BufferOr(Internal.Utils.MakeKey(Self.Path / encodedTopic), unsubscribe, Sender, () =>
+                _buffer.BufferOr(_cache.MakeKey(Self.Path, encodedTopic), unsubscribe, Sender, () =>
                 {
                     var child = Context.Child(encodedTopic);
                     if (!child.IsNobody())
@@ -276,6 +300,7 @@ namespace Akka.Cluster.Tools.PublishSubscribe
                     else
                     {
                         // no such topic here
+                        _cache.TryRemoveTopic(unsubscribe.Topic);
                     }
                 });
             });
@@ -287,20 +312,20 @@ namespace Akka.Cluster.Tools.PublishSubscribe
             {
                 // only accept status from known nodes, otherwise old cluster with same address may interact
                 // also accept from local for testing purposes
-                if (_nodes.Contains(Sender.Path.Address) || Sender.Path.Address.HasLocalScope)
-                {
-                    // gossip chat starts with a Status message, containing the bucket versions of the other node
-                    var delta = CollectDelta(status.Versions).ToArray();
-                    if (delta.Length != 0)
-                        Sender.Tell(new Delta(delta));
+                if (!_nodes.Contains(Sender.Path.Address) && !Sender.Path.Address.HasLocalScope) 
+                    return;
+                
+                // gossip chat starts with a Status message, containing the bucket versions of the other node
+                var delta = CollectDelta(status.Versions).ToImmutableList();
+                if (delta.Count != 0)
+                    Sender.Tell(new Delta(delta));
 
-                    if (!status.IsReplyToStatus && OtherHasNewerVersions(status.Versions))
-                        Sender.Tell(new Status(versions: OwnVersions, isReplyToStatus: true)); // it will reply with Delta
-                }
+                if (!status.IsReplyToStatus && OtherHasNewerVersions(status.Versions))
+                    Sender.Tell(new Status(versions: OwnVersions, isReplyToStatus: true)); // it will reply with Delta
             });
             Receive<Delta>(delta =>
             {
-                deltaCount += 1;
+                _deltaCount += 1;
 
                 // reply from Status message in the gossip chat
                 // the Delta contains potential updates (newer versions) from the other node
@@ -315,62 +340,109 @@ namespace Akka.Cluster.Tools.PublishSubscribe
                             if (!_registry.TryGetValue(bucket.Owner, out var myBucket))
                                 myBucket = new Bucket(bucket.Owner);
 
-                            if (bucket.Version > myBucket.Version)
-                                _registry[bucket.Owner] = new Bucket(myBucket.Owner, bucket.Version, myBucket.Content.SetItems(bucket.Content));
+                            if (bucket.Version <= myBucket.Version)
+                                continue;
+                            
+                            // Create a bucket diff, we're only interested in new items being added
+                            var keys = new HashSet<string>(bucket.Content.Keys);
+                            keys.ExceptWith(new HashSet<string>(myBucket.Content.Keys));
+                            if (keys.Count > 0)
+                            {
+                                // Send the diff to ourselves
+                                Self.Tell(new NewBucketKeysAdded(keys.ToArray()));
+                            }
+                            
+                            // Merge remote bucket with ours
+                            var newBucket = new Bucket(myBucket.Owner, bucket.Version, myBucket.Content.SetItems(bucket.Content));
+                            _registry[bucket.Owner] = newBucket;
                         }
                     }
                 }
             });
             Receive<GossipTick>(_ => HandleGossip());
             Receive<Prune>(_ => HandlePrune());
+            Receive<NewBucketKeysAdded>(subs =>
+            {
+                foreach (var key in subs.Topics)
+                {
+                    if (!_bufferedMessages.TryGetValue(key, out var buffer)) 
+                        continue;
+                    
+                    foreach (var bufferedMessage in buffer)
+                    {
+                        Self.Tell(bufferedMessage.Message, bufferedMessage.Sender);
+                    }
+
+                    _bufferedMessages.Remove(key);
+                }
+            });
+            Receive<PruneBufferTick>(_ =>
+            {
+                foreach (var buffer in _bufferedMessages.Values)
+                {
+                    var removed = buffer.Where(bufferedMessage => bufferedMessage.Deadline.IsOverdue).ToArray();
+                    foreach (var removedMsg in removed)
+                    {
+                        buffer.Remove(removedMsg);
+                        IgnoreOrSendToDeadLetters(removedMsg.Message, removedMsg.Sender);
+                    }
+                }
+            });
             Receive<Terminated>(terminated =>
             {
                 var key = Internal.Utils.MakeKey(terminated.ActorRef);
 
                 if (_registry.TryGetValue(_cluster.SelfAddress, out var bucket))
+                {
                     if (bucket.Content.TryGetValue(key, out var holder) && terminated.ActorRef.Equals(holder.Ref))
+                    {
                         PutToRegistry(key, null); // remove
+                        _cache.TryRemoveKey(key, _topicPrefix);
+                    }
+                }
 
                 _buffer.RecreateAndForwardMessagesIfNeeded(key, () => NewTopicActor(terminated.ActorRef.Path.Name));
             });
             Receive<ClusterEvent.CurrentClusterState>(state =>
             {
                 var nodes = state.Members
-                    .Where(m => m.Status != MemberStatus.Joining && IsMatchingRole(m))
+                    .Where(m => m.Status != MemberStatus.Joining && IsMatchingRole(m, _role))
                     .Select(m => m.Address);
 
                 _nodes = new HashSet<Address>(nodes);
             });
             Receive<ClusterEvent.MemberUp>(up =>
             {
-                if (IsMatchingRole(up.Member)) _nodes.Add(up.Member.Address);
+                if (IsMatchingRole(up.Member, _role)) _nodes.Add(up.Member.Address);
             });
             Receive<ClusterEvent.MemberWeaklyUp>(weaklyUp =>
             {
-                if (IsMatchingRole(weaklyUp.Member)) _nodes.Add(weaklyUp.Member.Address);
+                if (IsMatchingRole(weaklyUp.Member, _role)) _nodes.Add(weaklyUp.Member.Address);
             });
             Receive<ClusterEvent.MemberLeft>(left =>
             {
-                if (IsMatchingRole(left.Member))
-                {
-                    _nodes.Remove(left.Member.Address);
-                    _registry.Remove(left.Member.Address);
-                }
+                if (!IsMatchingRole(left.Member, _role)) 
+                    return;
+                
+                _nodes.Remove(left.Member.Address);
+                _registry.Remove(left.Member.Address);
             });
             Receive<ClusterEvent.MemberDowned>(downed =>
             {
-                if (IsMatchingRole(downed.Member))
-                {
-                    _nodes.Remove(downed.Member.Address);
-                    _registry.Remove(downed.Member.Address);
-                }
+                if (!IsMatchingRole(downed.Member, _role)) 
+                    return;
+                
+                _nodes.Remove(downed.Member.Address);
+                _registry.Remove(downed.Member.Address);
             });
             Receive<ClusterEvent.MemberRemoved>(removed =>
             {
                 var member = removed.Member;
                 if (member.Address == _cluster.SelfAddress)
+                {
                     Context.Stop(Self);
-                else if (IsMatchingRole(member))
+                }
+                else if (IsMatchingRole(member, _role))
                 {
                     _nodes.Remove(member.Address);
                     _registry.Remove(member.Address);
@@ -384,12 +456,12 @@ namespace Akka.Cluster.Tools.PublishSubscribe
             });
             Receive<DeltaCount>(_ =>
             {
-                Sender.Tell(deltaCount);
+                Sender.Tell(_deltaCount);
             });
             Receive<CountSubscribers>(msg =>
             {
-                var encTopic = Internal.Utils.EncodeName(msg.Topic);
-                _buffer.BufferOr(Internal.Utils.MakeKey(Self.Path / encTopic), msg, Sender, () =>
+                var encTopic = _cache.EncodeName(msg.Topic);
+                _buffer.BufferOr(_cache.MakeKey(Self.Path, encTopic), msg, Sender, () =>
                 {
                     var child = Context.Child(encTopic);
                     if (!child.IsNobody())
@@ -404,7 +476,33 @@ namespace Akka.Cluster.Tools.PublishSubscribe
             });
         }
 
-        private bool OtherHasNewerVersions(IDictionary<Address, long> versions)
+        private void BufferMessageOrDeadLetter(PublishWithAck message, IActorRef sender)
+        {
+            var topic = message.Topic;
+            var encodedTopic = _cache.EncodeName(topic);
+            var key = _cache.MakeKey(Self.Path, encodedTopic);
+            
+            if (!_bufferedMessages.TryGetValue(key, out var buffer))
+            {
+                buffer = [];
+                _bufferedMessages[key] = buffer;
+            }
+            
+            if(buffer.Count >= _maxBufferPerTopic)
+            {
+                _log.Warning("PublishWithAck buffer overflowed for topic [{0}]. New message inserted: {1}", topic, message);
+                while (buffer.Count >= _maxBufferPerTopic)
+                {
+                    var removed = buffer[0];
+                    buffer.RemoveAt(0);
+                    IgnoreOrSendToDeadLetters(removed.Message, removed.Sender);
+                }
+            }
+            
+            buffer.Add(new BufferedMessage(message, new Deadline(DateTime.UtcNow + message.Timeout), sender));
+        }
+        
+        private bool OtherHasNewerVersions(IImmutableDictionary<Address, long> versions)
         {
             return versions.Any(entry =>
             {
@@ -415,21 +513,18 @@ namespace Akka.Cluster.Tools.PublishSubscribe
             });
         }
 
-        private IEnumerable<Bucket> CollectDelta(IDictionary<Address, long> versions)
+        private IEnumerable<Bucket> CollectDelta(IImmutableDictionary<Address, long> versions)
         {
             // missing entries are represented by version 0
-            var filledOtherVersions = OwnVersions.ToDictionary(c => c.Key, c => 0L);
+            var filledOtherVersions = OwnVersions.ToDictionary(c => c.Key, _ => 0L);
             foreach (var version in versions)
             {
                 filledOtherVersions[version.Key] = version.Value;
             }
 
             var count = 0;
-            foreach (var entry in filledOtherVersions)
+            foreach (var (owner, v) in filledOtherVersions)
             {
-                var owner = entry.Key;
-                var v = entry.Value;
-
                 if (!_registry.TryGetValue(owner, out var bucket))
                     bucket = new Bucket(owner);
 
@@ -437,8 +532,7 @@ namespace Akka.Cluster.Tools.PublishSubscribe
                 {
                     var deltaContent = bucket.Content
                         .Where(kv => kv.Value.Version > v)
-                        .Aggregate(ImmutableDictionary<string, ValueHolder>.Empty,
-                            (current, kv) => current.SetItem(kv.Key, kv.Value));
+                        .ToImmutableDictionary(i => i.Key, i => i.Value);
 
                     count += deltaContent.Count;
 
@@ -449,8 +543,7 @@ namespace Akka.Cluster.Tools.PublishSubscribe
                         // exceeded the maxDeltaElements, pick the elements with lowest versions
                         var sortedContent = deltaContent.OrderBy(x => x.Value.Version).ToArray();
                         var chunk = sortedContent.Take(_settings.MaxDeltaElements - (count - sortedContent.Length)).ToList();
-                        var content = chunk.Aggregate(ImmutableDictionary<string, ValueHolder>.Empty,
-                            (current, kv) => current.SetItem(kv.Key, kv.Value));
+                        var content = chunk.ToImmutableDictionary(i => i.Key, i => i.Value);
 
                         yield return new Bucket(bucket.Owner, chunk.Last().Value.Version, content);
                     }
@@ -460,22 +553,15 @@ namespace Akka.Cluster.Tools.PublishSubscribe
 
         private IEnumerable<string> GetCurrentTopics()
         {
-            var topicPrefix = Self.Path.ToStringWithoutAddress();
-            foreach (var entry in _registry)
+            var topicPrefix = _topicPrefix;
+            foreach (var (_, bucket) in _registry)
             {
-                var bucket = entry.Value;
-                foreach (var kv in bucket.Content)
+                foreach (var (key, _) in bucket.Content)
                 {
-                    var key = kv.Key;
-                    var value = kv.Value;
-                    if (key.StartsWith(topicPrefix))
-                    {
-                        var topic = key.Substring(topicPrefix.Length + 1);
-                        if (!topic.Contains("/"))
-                        {
-                            yield return Uri.EscapeDataString(topic);
-                        }
-                    }
+                    var encodedTopic = Internal.Utils.KeyToEncodedTopic(key, topicPrefix);
+                    if (key is null)
+                        continue;
+                    yield return encodedTopic;
                 }
             }
         }
@@ -489,27 +575,68 @@ namespace Akka.Cluster.Tools.PublishSubscribe
         private void PutToRegistry(string key, IActorRef value)
         {
             var v = NextVersion();
-            if (!_registry.TryGetValue(_cluster.SelfAddress, out var bucket))
-                _registry.Add(_cluster.SelfAddress,
-                    new Bucket(_cluster.SelfAddress, v, ImmutableDictionary<string, ValueHolder>.Empty.Add(key, new ValueHolder(v, value))));
-            else
-                _registry[_cluster.SelfAddress] = new Bucket(bucket.Owner, v, bucket.Content.SetItem(key, new ValueHolder(v, value)));
+            var newBucket = _registry.TryGetValue(_cluster.SelfAddress, out var bucket)
+                ? new Bucket(bucket.Owner, v, bucket.Content.SetItem(key, new ValueHolder(v, value)))
+                : new Bucket(_cluster.SelfAddress, v, ImmutableDictionary<string, ValueHolder>.Empty.Add(key, new ValueHolder(v, value)));
+            
+            _registry[_cluster.SelfAddress] = newBucket;
+
+            // NOTE: We can't process this immediately here because message publishing needs to be done
+            //       AFTER we send `SubscribeAck`
+            _newlyAddedKeys.Add(key);
         }
 
-        private void SendToDeadLetters(object message)
+        private void IgnoreOrSendToDeadLetters(object message, IActorRef sender)
         {
-            Context.System.DeadLetters.Tell(new DeadLetter(message, Sender, Context.Self));
+            if (message is PublishWithAck needAck)
+            {
+                sender.Tell(new PublishFailed(needAck, PublishFailReason.Timeout));
+            }
+            
+            if (_settings.SendToDeadLettersWhenNoSubscribers)
+            {
+                var topic = message switch
+                {
+                    Publish publish => publish.Topic,
+                    PublishWithAck publish => publish.Topic,
+                    Send send => $"Send:{send.Path}",
+                    _ => null
+                };
+
+                // Use the specialized DeadLetterWithNoSubscribers class to clearly indicate
+                // that the message was not delivered because there were no subscribers,
+                // not because the mediator itself is dead.
+                var deadLetter = new DeadLetterWithNoSubscribers(message, topic, sender, Context.Self);
+                Context.System.DeadLetters.Tell(deadLetter);
+            }
         }
 
-        private void PublishMessage(string path, object message, bool allButSelf = false)
+        private void PublishMessage(string path, IWrappedMessage publish, bool allButSelf = false)
         {
+            var counter = 0;
+            foreach (var r in Refs())
+            {
+                if (r == null) continue;
+                r.Forward(publish.Message);
+                counter++;
+            }
+
+            if (counter == 0)
+            {
+                if(publish is PublishWithAck needAck)
+                    BufferMessageOrDeadLetter(needAck, Sender);
+                else
+                    IgnoreOrSendToDeadLetters(publish, Sender);
+            }
+            else if(publish is PublishWithAck needAck)
+                Sender.Tell(new PublishSucceeded(needAck));
+            
+            return;
+
             IEnumerable<IActorRef> Refs()
             {
-                foreach (var entry in _registry)
+                foreach (var (address, bucket) in _registry)
                 {
-                    var address = entry.Key;
-                    var bucket = entry.Value;
-
                     if (!(allButSelf && address == _cluster.SelfAddress) && bucket.Content.TryGetValue(path, out var valueHolder))
                     {
                         if (valueHolder != null && !valueHolder.Ref.IsNobody())
@@ -517,29 +644,22 @@ namespace Akka.Cluster.Tools.PublishSubscribe
                     }
                 }
             }
-
-            var counter = 0;
-            foreach (var r in Refs())
-            {
-                if (r == null) continue;
-                r.Forward(message);
-                counter++;
-            }
-
-            if (counter == 0) SendToDeadLetters(message);
         }
 
-        private void PublishToEachGroup(string path, object message)
+        private void PublishToEachGroup(string path, IWrappedMessage publish)
         {
             var prefix = path + "/";
             var lastKey = path + "0";   // '0' is the next char of '/'
 
             var groups = ExtractGroups(prefix, lastKey).GroupBy(kv => kv.Key).ToList();
-            var wrappedMessage = new SendToOneSubscriber(message);
+            var wrappedMessage = new SendToOneSubscriber(publish.Message);
 
             if (groups.Count == 0)
             {
-                SendToDeadLetters(message);
+                if(publish is PublishWithAck needAck)
+                    BufferMessageOrDeadLetter(needAck, Sender);
+                else
+                    IgnoreOrSendToDeadLetters(publish, Sender);
             }
             else
             {
@@ -549,48 +669,49 @@ namespace Akka.Cluster.Tools.PublishSubscribe
                     if (routees.Length != 0)
                         new Router(_settings.RoutingLogic, routees).Route(wrappedMessage, Sender);
                 }
+                
+                if(publish is PublishWithAck needAck)
+                    Sender.Tell(new PublishSucceeded(needAck));
             }
         }
 
         private IEnumerable<KeyValuePair<string, Routee>> ExtractGroups(string prefix, string lastKey)
         {
-            foreach (var bucket in _registry.Values)
+            foreach (var (_, bucket) in _registry)
             {
                 //TODO: optimize into tree-aware key range [prefix, lastKey]
-                foreach (var keyVal in bucket.Content.Where(kv => kv.Key.CompareTo(prefix) != -1 && kv.Key.CompareTo(lastKey) != 1))
+                foreach (var (key, value) in bucket.Content.Where(kv => kv.Key.CompareTo(prefix) != -1 && kv.Key.CompareTo(lastKey) != 1))
                 {
-                    yield return new KeyValuePair<string, Routee>(keyVal.Key, keyVal.Value.Routee);
+                    yield return new KeyValuePair<string, Routee>(key, value.Routee);
                 }
             }
         }
 
         private void HandlePrune()
         {
-            var modifications = new Dictionary<Address, Bucket>();
-            foreach (var entry in _registry)
+            var modifications = new List<Bucket>();
+            foreach (var bucket in _registry.Values)
             {
-                var owner = entry.Key;
-                var bucket = entry.Value;
-
                 var oldRemoved = bucket.Content
                     .Where(kv => kv.Value.Ref.IsNobody() && (bucket.Version - kv.Value.Version) > _settings.RemovedTimeToLive.TotalMilliseconds)
-                    .Select(kv => kv.Key);
+                    .Select(kv => kv.Key)
+                    .ToArray();
 
-                if (oldRemoved.Any())
+                if (oldRemoved.Length > 0)
                 {
-                    modifications.Add(owner, new Bucket(bucket.Owner, bucket.Version, bucket.Content.RemoveRange(oldRemoved)));
+                    modifications.Add(new Bucket(bucket.Owner, bucket.Version, bucket.Content.RemoveRange(oldRemoved)));
                 }
             }
 
             foreach (var entry in modifications)
             {
-                _registry[entry.Key] = entry.Value;
+                _registry[entry.Owner] = entry;
             }
         }
 
         private void HandleGossip()
         {
-            var node = SelectRandomNode(_nodes.Except(new[] { _cluster.SelfAddress }).ToArray());
+            var node = SelectRandomNode(_nodes.Except([_cluster.SelfAddress]).ToArray());
             if (node != null)
                 GossipTo(node);
         }
@@ -601,7 +722,8 @@ namespace Akka.Cluster.Tools.PublishSubscribe
             sel.Tell(new Status(versions: OwnVersions, isReplyToStatus: false));
         }
 
-        private Address SelectRandomNode(IList<Address> addresses)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static Address SelectRandomNode(IList<Address> addresses)
         {
             if (addresses == null || addresses.Count == 0) return null;
             return addresses[ThreadLocalRandom.Current.Next(addresses.Count)];
@@ -615,6 +737,11 @@ namespace Akka.Cluster.Tools.PublishSubscribe
             base.PreStart();
             if (_cluster.IsTerminated) throw new IllegalStateException("Cluster node must not be terminated");
             _cluster.Subscribe(Self, typeof(ClusterEvent.IMemberEvent));
+            
+            //Start periodic gossip to random nodes in cluster
+            Timers.StartPeriodicTimer(GossipTimerKey, GossipTick.Instance, _settings.GossipInterval, _settings.GossipInterval, Self);
+            Timers.StartPeriodicTimer(PruneTimerKey, Prune.Instance, _pruneInterval, _pruneInterval, Self);
+            Timers.StartPeriodicTimer(PruneBufferTimerKey, PruneBufferTick.Instance, _bufferedMessageTimeoutCheckInterval, _bufferedMessageTimeoutCheckInterval, Self);
         }
 
         /// <summary>
@@ -622,19 +749,33 @@ namespace Akka.Cluster.Tools.PublishSubscribe
         /// </summary>
         protected override void PostStop()
         {
+            Timers.CancelAll();
             base.PostStop();
+            
+            // We're shutting down, clear buffer
+            foreach (var list in _bufferedMessages.Values)
+            {
+                foreach (var bufferedMessage in list)
+                {
+                    bufferedMessage.Sender.Tell(new PublishFailed(
+                        (PublishWithAck)bufferedMessage.Message, 
+                        PublishFailReason.MediatorShuttingDown));
+                }
+            }
+            
+            _bufferedMessages.Clear();
+            _cache.Clear();
             _cluster.Unsubscribe(Self);
-            _gossipCancelable.Cancel();
-            _pruneCancelable.Cancel();
         }
 
-        private bool IsMatchingRole(Member member)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsMatchingRole(Member member, string role)
         {
-            return string.IsNullOrEmpty(_settings.Role) || member.HasRole(_settings.Role);
+            return string.IsNullOrEmpty(role) || member.HasRole(role);
         }
 
         // the version is a timestamp because it is also used when pruning removed entries
-        private long _version = 0L;
+        private long _version;
         private long NextVersion()
         {
             var current = DateTime.UtcNow.Ticks / 10000;
@@ -644,7 +785,10 @@ namespace Akka.Cluster.Tools.PublishSubscribe
 
         private IActorRef NewTopicActor(string encodedTopic)
         {
-            var t = Context.ActorOf(Actor.Props.Create(() => new Topic(_settings.RemovedTimeToLive, _settings.RoutingLogic)), encodedTopic);
+            var t = Context.ActorOf(
+                Actor.Props.Create(() => new Topic(_settings.RemovedTimeToLive, _settings.RoutingLogic, _settings.SendToDeadLettersWhenNoSubscribers))
+                    .WithDeploy(Deploy.Local), 
+                encodedTopic);
             HandleRegisterTopic(t);
             return t;
         }

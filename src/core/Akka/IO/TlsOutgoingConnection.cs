@@ -13,6 +13,7 @@ using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography.X509Certificates;
 using Akka.Actor;
+using Akka.Event;
 using Akka.Util;
 
 namespace Akka.IO

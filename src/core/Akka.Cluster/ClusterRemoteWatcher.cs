@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ClusterRemoteWatcher.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -9,6 +9,8 @@ using System;
 using System.Collections.Immutable;
 using System.Linq;
 using Akka.Actor;
+using Akka.Dispatch;
+using Akka.Event;
 using Akka.Remote;
 
 namespace Akka.Cluster
@@ -31,19 +33,21 @@ namespace Akka.Cluster
         /// <param name="heartbeatInterval">TBD</param>
         /// <param name="unreachableReaperInterval">TBD</param>
         /// <param name="heartbeatExpectedResponseAfter">TBD</param>
-        public static Props Props(
+        public new static Props Props(
             IFailureDetectorRegistry<Address> failureDetector,
             TimeSpan heartbeatInterval,
             TimeSpan unreachableReaperInterval,
             TimeSpan heartbeatExpectedResponseAfter)
         {
             return new Props(typeof(ClusterRemoteWatcher), new object[]
-            {
-                failureDetector, 
-                heartbeatInterval, 
-                unreachableReaperInterval, 
-                heartbeatExpectedResponseAfter
-            }).WithDeploy(Deploy.Local);
+                {
+                    failureDetector, 
+                    heartbeatInterval, 
+                    unreachableReaperInterval, 
+                    heartbeatExpectedResponseAfter
+                })
+                .WithDispatcher(Dispatchers.InternalDispatcherId)
+                .WithDeploy(Deploy.Local);
         }
 
         private readonly Cluster _cluster;

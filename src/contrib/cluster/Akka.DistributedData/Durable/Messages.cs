@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="Messages.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -57,10 +57,11 @@ namespace Akka.DistributedData.Durable
     /// </summary>
     public sealed class LoadAll : IEquatable<LoadAll>
     {
-        public static readonly LoadAll Instance = new LoadAll();
+        public static readonly LoadAll Instance = new();
         private LoadAll() { }
         public bool Equals(LoadAll other) => true;
         public override bool Equals(object obj) => obj is LoadAll;
+        public override int GetHashCode() => 761;
     }
 
     public sealed class LoadData
@@ -75,10 +76,11 @@ namespace Akka.DistributedData.Durable
 
     public sealed class LoadAllCompleted : IEquatable<LoadAllCompleted>
     {
-        public static readonly LoadAllCompleted Instance = new LoadAllCompleted();
+        public static readonly LoadAllCompleted Instance = new();
         private LoadAllCompleted() { }
         public bool Equals(LoadAllCompleted other) => true;
         public override bool Equals(object obj) => obj is LoadAllCompleted;
+        public override int GetHashCode() => 769;
     }
 
     public sealed class LoadFailedException : AkkaException
@@ -91,11 +93,9 @@ namespace Akka.DistributedData.Durable
         {
         }
 
-#if SERIALIZATION
         public LoadFailedException(SerializationInfo info, StreamingContext context) : base(info, context)
         {
         }
-#endif
     }
 
     public sealed class DurableDataEnvelope : IReplicatorMessage, IEquatable<DurableDataEnvelope>
@@ -127,7 +127,7 @@ namespace Akka.DistributedData.Durable
         {
             if (ReferenceEquals(null, obj)) return false;
             if (ReferenceEquals(this, obj)) return true;
-            return obj is DurableDataEnvelope && Equals((DurableDataEnvelope) obj);
+            return obj is DurableDataEnvelope envelope && Equals(envelope);
         }
     }
 }

@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ActorRef.Extensions.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -15,15 +15,16 @@ namespace Akka.Actor
     public static class ActorRefExtensions
     {
         /// <summary>
-        /// Determines if the specified <paramref name="actorRef"/> is valid.
+        /// Determines if the specified <paramref name="actorRef"/> is invalid.
         /// An <paramref name="actorRef"/> is thought to be invalid if it's one of the following:
         ///    <see langword="null"/>, <see cref="Nobody"/>, and <see cref="DeadLetterActorRef"/>
         /// </summary>
         /// <param name="actorRef">The actor that is being tested.</param>
-        /// <returns><c>true</c> if the <paramref name="actorRef"/> is valid; otherwise <c>false</c>.</returns>
+        /// <returns><c>true</c> if the <paramref name="actorRef"/> is invalid; otherwise <c>false</c>.</returns>
         public static bool IsNobody(this IActorRef actorRef)
         {
-            return actorRef == null || actorRef is Nobody || actorRef is DeadLetterActorRef;
+            return actorRef is null || actorRef is Nobody || actorRef is DeadLetterActorRef 
+                || actorRef.Path is null || (actorRef.Path.Uid == 0 && actorRef.Path.Name == "deadLetters");
         }
 
         /// <summary>

@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="MultiNodeSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -17,6 +17,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
 using Akka.Actor;
+using Akka.Actor.Setup;
 using Akka.Configuration;
 using Akka.Configuration.Hocon;
 using Akka.Event;
@@ -151,7 +152,7 @@ namespace Akka.Remote.TestKit
                         : ConfigurationFactory.Empty;
 
                 var builder = ImmutableList.CreateBuilder<Config>();
-                if (_nodeConf.TryGetValue(Myself, out var nodeConfig)) 
+                if (_nodeConf.TryGetValue(Myself, out var nodeConfig))
                     builder.Add(nodeConfig);
                 builder.Add(_commonConf);
                 builder.Add(transportConfig);
@@ -168,7 +169,7 @@ namespace Akka.Remote.TestKit
             return deployments == null ? _allDeploy : deployments.AddRange(_allDeploy);
         }
 
-        internal ImmutableList<RoleName> Roles
+        public ImmutableList<RoleName> Roles
         {
             get { return _roles; }
         }
@@ -185,7 +186,7 @@ namespace Akka.Remote.TestKit
     /// </summary>
     public abstract class MultiNodeSpec : TestKitBase, IMultiNodeSpecCallbacks, IDisposable
     {
-        //TODO: Sort out references to Java classes in 
+        //TODO: Sort out references to Java classes in
 
         /// <summary>
         /// Marker used to indicate that <see cref="MaxNodes"/> has not been set yet.
@@ -216,9 +217,9 @@ namespace Akka.Remote.TestKit
         /// <summary>
         /// Name (or IP address; must be resolvable)
         /// of the host this node is running on
-        /// 
+        ///
         /// <code>-Dmultinode.host=host.example.com</code>
-        /// 
+        ///
         /// InetAddress.getLocalHost.getHostAddress is used if empty or "localhost"
         /// is defined as system property "multinode.host".
         /// </summary>
@@ -246,7 +247,7 @@ namespace Akka.Remote.TestKit
 
         /// <summary>
         /// Port number of this node. Defaults to 0 which means a random port.
-        /// 
+        ///
         /// <code>-Dmultinode.port=0</code>
         /// </summary>
         public static int SelfPort
@@ -268,7 +269,7 @@ namespace Akka.Remote.TestKit
         /// <summary>
         /// Name (or IP address; must be resolvable using InetAddress.getByName)
         /// of the host that the server node is running on.
-        /// 
+        ///
         /// <code>-Dmultinode.server-host=server.example.com</code>
         /// </summary>
         public static string ServerName
@@ -292,13 +293,13 @@ namespace Akka.Remote.TestKit
         /// <summary>
         /// Default value for <see cref="ServerPort"/>
         /// </summary>
-        private const int ServerPortDefault = 4711;
+        private const int ServerPortDefault = 47110;
 
         private static int _serverPort = ServerPortUnsetValue;
 
         /// <summary>
         /// Port number of the node that's running the server system. Defaults to 4711.
-        /// 
+        ///
         /// <code>-Dmultinode.server-port=4711</code>
         /// </summary>
         public static int ServerPort
@@ -366,7 +367,7 @@ namespace Akka.Remote.TestKit
                         coordinated-shutdown.terminate-actor-system = off
                         coordinated-shutdown.run-by-actor-system-terminate = off
                         coordinated-shutdown.run-by-clr-shutdown-hook = off
-                        log-dead-letters = off 
+                        log-dead-letters = off
                         log-dead-letters-during-shutdown = on
                         actor {
                           default-dispatcher {
@@ -378,18 +379,19 @@ namespace Akka.Remote.TestKit
                             }
                           }
                         }
+                        cluster.downing-provider-class = """" #disable SBR by default
                       }").WithFallback(TestKitBase.DefaultConfig);
             }
         }
 
-        readonly RoleName _myself;
+        private readonly RoleName _myself;
         public RoleName Myself { get { return _myself; } }
-        readonly ILoggingAdapter _log;
+        private readonly ILoggingAdapter _log;
         private bool _isDisposed; //Automatically initialized to false;
-        readonly ImmutableList<RoleName> _roles;
-        readonly Func<RoleName, ImmutableList<string>> _deployments;
-        readonly ImmutableDictionary<RoleName, Replacement> _replacements;
-        readonly Address _myAddress;
+        private readonly ImmutableList<RoleName> _roles;
+        private readonly Func<RoleName, ImmutableList<string>> _deployments;
+        private readonly ImmutableDictionary<RoleName, Replacement> _replacements;
+        private readonly Address _myAddress;
 
         protected MultiNodeSpec(MultiNodeConfig config, Type type) :
             this(config.Myself, ActorSystem.Create(type.Name, config.Config), config.Roles, config.Deployments)
@@ -401,29 +403,42 @@ namespace Akka.Remote.TestKit
             ActorSystem system,
             ImmutableList<RoleName> roles,
             Func<RoleName, ImmutableList<string>> deployments)
-            : base(new XunitAssertions(), system)
+            : this(myself, system, null, roles, deployments)
+        {
+        }
+
+        protected MultiNodeSpec(
+            RoleName myself,
+            ActorSystemSetup setup,
+            ImmutableList<RoleName> roles,
+            Func<RoleName, ImmutableList<string>> deployments)
+            : this(myself, null, setup, roles, deployments)
+        {
+        }
+
+        private MultiNodeSpec(
+            RoleName myself,
+            ActorSystem system,
+            ActorSystemSetup setup,
+            ImmutableList<RoleName> roles,
+            Func<RoleName, ImmutableList<string>> deployments)
+            : base(new XunitAssertions(), system, setup, null, null)
         {
             _myself = myself;
             _log = Logging.GetLogger(Sys, this);
             _roles = roles;
             _deployments = deployments;
 
-#if CORECLR
-            var dnsTask = Dns.GetHostAddressesAsync(ServerName);
-            dnsTask.Wait();
-            var node = new IPEndPoint(dnsTask.Result[0], ServerPort);
-#else
             var node = new IPEndPoint(Dns.GetHostAddresses(ServerName)[0], ServerPort);
-#endif
             _controllerAddr = node;
 
-            AttachConductor(new TestConductor(system));
+            AttachConductor(new TestConductor(Sys));
 
             _replacements = _roles.ToImmutableDictionary(r => r, r => new Replacement("@" + r.Name + "@", r, this));
 
-            InjectDeployments(system, myself);
+            InjectDeployments(Sys, myself);
 
-            _myAddress = system.AsInstanceOf<ExtendedActorSystem>().Provider.DefaultAddress;
+            _myAddress = Sys.AsInstanceOf<ExtendedActorSystem>().Provider.DefaultAddress;
 
             Log.Info("Role [{0}] started with address [{1}]", myself.Name, _myAddress);
             MultiNodeSpecBeforeAll();
@@ -479,7 +494,7 @@ namespace Akka.Remote.TestKit
 
         /// <summary>
         /// MUST BE DEFINED BY USER.
-        /// 
+        ///
         /// Defines the number of participants required for starting the test. This
         /// might not be equals to the number of nodes available to the test.
         /// </summary>
@@ -508,17 +523,15 @@ namespace Akka.Remote.TestKit
         /// </summary>
         public void RunOn(Action thunk, params RoleName[] nodes)
         {
-            if (nodes.Length == 0) throw new ArgumentException("No node given to run on.");
             if (IsNode(nodes)) thunk();
         }
-        
+
         /// <summary>
         /// Execute the given block of code only on the given nodes (names according
         /// to the `roleMap`).
         /// </summary>
         public async Task RunOnAsync(Func<Task> thunkAsync, params RoleName[] nodes)
         {
-            if (nodes.Length == 0) throw new ArgumentException("No node given to run on.");
             if (IsNode(nodes)) await thunkAsync();
         }
 
@@ -536,18 +549,18 @@ namespace Akka.Remote.TestKit
         /// </summary>
         public void EnterBarrier(params string[] name)
         {
-            TestConductor.Enter(RemainingOr(TestConductor.Settings.BarrierTimeout), name.ToImmutableList());
+            TestConductor.Enter(RemainingOr(TestConductor.Settings.BarrierTimeout), Myself, name.ToImmutableList());
         }
 
         /// <summary>
         /// Query the controller for the transport address of the given node (by role name) and
         /// return that as an ActorPath for easy composition:
-        /// 
+        ///
         /// <code>var serviceA = Sys.ActorSelection(Node(new RoleName("master")) / "user" / "serviceA");</code>
         /// </summary>
         public ActorPath Node(RoleName role)
         {
-            //TODO: Async stuff here 
+            //TODO: Async stuff here
             return new RootActorPath(TestConductor.GetAddressFor(role).Result);
         }
 
@@ -566,7 +579,7 @@ namespace Akka.Remote.TestKit
         * Implementation (i.e. wait for start etc.)
         */
 
-        readonly IPEndPoint _controllerAddr;
+        private readonly IPEndPoint _controllerAddr;
 
         protected void AttachConductor(TestConductor tc)
         {
@@ -588,19 +601,17 @@ namespace Akka.Remote.TestKit
 
         // now add deployments, if so desired
 
-        sealed class Replacement
+        private sealed class Replacement
         {
-            readonly string _tag;
-            public string Tag { get { return _tag; } }
-            readonly RoleName _role;
-            public RoleName Role { get { return _role; } }
-            readonly Lazy<string> _addr;
+            public string Tag { get; }
+            public RoleName Role { get; }
+            private readonly Lazy<string> _addr;
             public string Addr { get { return _addr.Value; } }
 
             public Replacement(string tag, RoleName role, MultiNodeSpec spec)
             {
-                _tag = tag;
-                _role = role;
+                Tag = tag;
+                Role = role;
                 _addr = new Lazy<string>(() => spec.Node(role).Address.ToString());
             }
         }
@@ -666,7 +677,7 @@ namespace Akka.Remote.TestKit
             return system;
         }
 
-        /// <inheritdoc/>
+        
         public void Dispose()
         {
             Dispose(true);
@@ -677,9 +688,9 @@ namespace Akka.Remote.TestKit
 
 
         /// <summary>Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.</summary>
-        /// <param name="disposing">if set to <c>true</c> the method has been called directly or indirectly by a 
+        /// <param name="disposing">if set to <c>true</c> the method has been called directly or indirectly by a
         /// user's code. Managed and unmanaged resources will be disposed.<br />
-        /// if set to <c>false</c> the method has been called by the runtime from inside the finalizer and only 
+        /// if set to <c>false</c> the method has been called by the runtime from inside the finalizer and only
         /// unmanaged resources can be disposed.</param>
         protected void Dispose(bool disposing)
         {

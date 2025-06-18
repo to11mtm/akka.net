@@ -1,9 +1,12 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="TestJournalSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
+
+
+using Akka.Configuration;
 
 namespace Akka.Persistence.TestKit.Tests
 {
@@ -16,7 +19,10 @@ namespace Akka.Persistence.TestKit.Tests
 
     public class TestJournalSpec : PersistenceTestKit
     {
-        public TestJournalSpec()
+        // Expect should be passing by default, need to make them less sencitive to timing
+        private static readonly Config DefaultTimeoutConfig = "akka.test.single-expect-default = 30s";
+        
+        public TestJournalSpec() : base(DefaultTimeoutConfig)
         {
             _probe = CreateTestProbe();
         }
@@ -24,23 +30,23 @@ namespace Akka.Persistence.TestKit.Tests
         private readonly TestProbe _probe;
 
         [Fact]
-        public void must_return_ack_after_new_write_interceptor_is_set()
+        public async Task must_return_ack_after_new_write_interceptor_is_set()
         {
             JournalActorRef.Tell(new TestJournal.UseWriteInterceptor(null), TestActor);
 
-            ExpectMsg<TestJournal.Ack>(TimeSpan.FromSeconds(3));
+            await ExpectMsgAsync<TestJournal.Ack>(TimeSpan.FromSeconds(3));
         }
 
         [Fact]
         public async Task works_as_memory_journal_by_default()
         {
             var actor = ActorOf(() => new PersistActor(_probe));
-            _probe.ExpectMsg<RecoveryCompleted>();
+            await _probe.ExpectMsgAsync<RecoveryCompleted>();
 
             await Journal.OnWrite.Pass();
             actor.Tell(new PersistActor.WriteMessage("write"), TestActor);
             
-            _probe.ExpectMsg("ack");
+            await _probe.ExpectMsgAsync("ack");
         }
 
         [Fact]
@@ -48,21 +54,21 @@ namespace Akka.Persistence.TestKit.Tests
         {
             var actor = ActorOf(() => new PersistActor(_probe));
             Watch(actor);
-            _probe.ExpectMsg<RecoveryCompleted>();
+            await _probe.ExpectMsgAsync<RecoveryCompleted>();
 
             await Journal.OnRecovery.Pass();
             actor.Tell(new PersistActor.WriteMessage("1"), TestActor);
-            _probe.ExpectMsg("ack");
+            await _probe.ExpectMsgAsync("ack");
             actor.Tell(new PersistActor.WriteMessage("2"), TestActor);
-            _probe.ExpectMsg("ack");
+            await _probe.ExpectMsgAsync("ack");
 
             await actor.GracefulStop(TimeSpan.FromSeconds(1));
-            ExpectTerminated(actor);
+            await ExpectTerminatedAsync(actor);
 
             ActorOf(() => new PersistActor(_probe));
-            _probe.ExpectMsg("1");
-            _probe.ExpectMsg("2");
-            _probe.ExpectMsg<RecoveryCompleted>();
+            await _probe.ExpectMsgAsync("1");
+            await _probe.ExpectMsgAsync("2");
+            await _probe.ExpectMsgAsync<RecoveryCompleted>();
         }
 
         [Fact]
@@ -70,13 +76,13 @@ namespace Akka.Persistence.TestKit.Tests
         {
             var actor = ActorOf(() => new PersistActor(_probe));
             Watch(actor);
-            _probe.ExpectMsg<RecoveryCompleted>();
+            await _probe.ExpectMsgAsync<RecoveryCompleted>();
 
             await Journal.OnWrite.Fail();
             actor.Tell(new PersistActor.WriteMessage("write"), TestActor);
 
-            _probe.ExpectMsg("failure");
-            ExpectTerminated(actor);
+            await _probe.ExpectMsgAsync("failure");
+            await ExpectTerminatedAsync(actor);
         }
 
         [Fact]
@@ -84,24 +90,24 @@ namespace Akka.Persistence.TestKit.Tests
         {
             var actor = ActorOf(() => new PersistActor(_probe));
             Watch(actor);
-            _probe.ExpectMsg<RecoveryCompleted>();
+            await _probe.ExpectMsgAsync<RecoveryCompleted>();
 
             await Journal.OnRecovery.Pass();
             actor.Tell(new PersistActor.WriteMessage("1"), TestActor);
-            _probe.ExpectMsg("ack");
+            await _probe.ExpectMsgAsync("ack");
             actor.Tell(new PersistActor.WriteMessage("2"), TestActor);
-            _probe.ExpectMsg("ack");
+            await _probe.ExpectMsgAsync("ack");
 
             await Journal.OnWrite.Fail();
             actor.Tell(new PersistActor.WriteMessage("3"), TestActor);
 
-            _probe.ExpectMsg("failure");
-            ExpectTerminated(actor);
+            await _probe.ExpectMsgAsync("failure");
+            await ExpectTerminatedAsync(actor);
 
             ActorOf(() => new PersistActor(_probe));
-            _probe.ExpectMsg("1");
-            _probe.ExpectMsg("2");
-            _probe.ExpectMsg<RecoveryCompleted>();
+            await _probe.ExpectMsgAsync("1");
+            await _probe.ExpectMsgAsync("2");
+            await _probe.ExpectMsgAsync<RecoveryCompleted>();
         }
 
         [Fact]
@@ -109,34 +115,34 @@ namespace Akka.Persistence.TestKit.Tests
         {
             var actor = ActorOf(() => new PersistActor(_probe));
             Watch(actor);
-            _probe.ExpectMsg<RecoveryCompleted>();
+            await _probe.ExpectMsgAsync<RecoveryCompleted>();
 
             await Journal.OnWrite.Reject();
             actor.Tell(new PersistActor.WriteMessage("write"), TestActor);
 
-            _probe.ExpectMsg("rejected");
+            await _probe.ExpectMsgAsync("rejected");
         }
 
         [Fact]
         public async Task journal_must_reset_state_to_pass()
         {
-            await WithJournalWrite(write => write.Fail(), () =>
+            await WithJournalWrite(write => write.Fail(), async () =>
             {
                 var actor = ActorOf(() => new PersistActor(_probe));
                 Watch(actor);
-                _probe.ExpectMsg<RecoveryCompleted>();
+                await _probe.ExpectMsgAsync<RecoveryCompleted>();
 
                 actor.Tell(new PersistActor.WriteMessage("write"), TestActor);
-                _probe.ExpectMsg("failure");
-                ExpectTerminated(actor);
+                await _probe.ExpectMsgAsync("failure");
+                await ExpectTerminatedAsync(actor);
             });
 
             var actor2 = ActorOf(() => new PersistActor(_probe));
             Watch(actor2);
 
-            _probe.ExpectMsg<RecoveryCompleted>();
+            await _probe.ExpectMsgAsync<RecoveryCompleted>();
             actor2.Tell(new PersistActor.WriteMessage("write"), TestActor);
-            _probe.ExpectMsg("ack");
+            await _probe.ExpectMsgAsync("ack");
         }
     }
 }

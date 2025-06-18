@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ClusterMetricsExtensionSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -14,7 +14,8 @@ using Akka.Cluster.TestKit;
 using Akka.Configuration;
 using Akka.Remote.TestKit;
 using FluentAssertions;
-using Akka.Configuration;
+using Akka.MultiNode.TestAdapter;
+using FluentAssertions.Extensions;
 using ConfigurationFactory = Akka.Configuration.ConfigurationFactory;
 
 namespace Akka.Cluster.Metrics.Tests.MultiNode
@@ -107,11 +108,11 @@ namespace Akka.Cluster.Metrics.Tests.MultiNode
                 MetricsView.ClusterMetrics.Count.Should().Be(Roles.Count);
             }, TimeSpan.FromSeconds(30));
             
-            await WithinAsync(10.Seconds(), async () =>
-            {
+            await WithinAsync(10.Seconds(), () => {
                 var collector = new MetricsCollectorBuilder().Build(Cluster.System);
                 collector.Sample().Metrics.Count.Should().BeGreaterThan(3);
                 EnterBarrier("after");
+                return Task.CompletedTask;
             });
         }
 

@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="BarrierCoordinator.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -10,7 +10,6 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using Akka.Actor;
-using Akka.Util.Internal;
 using Akka.Event;
 
 namespace Akka.Remote.TestKit
@@ -28,7 +27,7 @@ namespace Akka.Remote.TestKit
     ///
     ///INTERNAL API.
     /// </summary>
-    internal class BarrierCoordinator : FSM<BarrierCoordinator.State, BarrierCoordinator.Data>, ILoggingFSM
+    internal sealed class BarrierCoordinator : FSM<BarrierCoordinator.State, BarrierCoordinator.Data>, ILoggingFSM
     {
         #region State types and messages
 
@@ -45,19 +44,11 @@ namespace Akka.Remote.TestKit
                 Name = name;
             }
 
-            public RoleName Name { get; private set; }
+            public RoleName Name { get; }
         }
 
         public sealed class Data
         {
-            public Data(IEnumerable<Controller.NodeInfo> clients, string barrier, IEnumerable<IActorRef> arrived, Deadline deadline) :
-                this(clients == null ? ImmutableHashSet.Create<Controller.NodeInfo>() : ImmutableHashSet.Create(clients.ToArray()),
-                barrier,
-                arrived == null ? ImmutableHashSet.Create<IActorRef>() : ImmutableHashSet.Create(arrived.ToArray()),
-                deadline)
-            {
-            }
-
             public Data(ImmutableHashSet<Controller.NodeInfo> clients, string barrier, ImmutableHashSet<IActorRef> arrived, Deadline deadline)
             {
                 Deadline = deadline;
@@ -66,13 +57,13 @@ namespace Akka.Remote.TestKit
                 Clients = clients;
             }
 
-            public ImmutableHashSet<Controller.NodeInfo> Clients { get; private set; }
+            public ImmutableHashSet<Controller.NodeInfo> Clients { get; }
 
-            public string Barrier { get; private set; }
+            public string Barrier { get; }
 
-            public ImmutableHashSet<IActorRef> Arrived { get; private set; }
+            public ImmutableHashSet<IActorRef> Arrived { get; }
 
-            public Deadline Deadline { get; private set; }
+            public Deadline Deadline { get; }
 
             public Data Copy(ImmutableHashSet<Controller.NodeInfo> clients = null, string barrier = null,
                 ImmutableHashSet<IActorRef> arrived = null, Deadline deadline = null)
@@ -96,7 +87,7 @@ namespace Akka.Remote.TestKit
             {
                 if (ReferenceEquals(null, obj)) return false;
                 if (ReferenceEquals(this, obj)) return true;
-                return obj is Data && Equals((Data) obj);
+                return obj is Data data && Equals(data);
             }
 
             /// <inheritdoc/>
@@ -143,7 +134,7 @@ namespace Akka.Remote.TestKit
                 BarrierData = barrierData;
             }
 
-            public Data BarrierData { get; private set; }
+            public Data BarrierData { get; }
 
             private bool Equals(BarrierTimeoutException other)
             {
@@ -155,7 +146,7 @@ namespace Akka.Remote.TestKit
             {
                 if (ReferenceEquals(null, obj)) return false;
                 if (ReferenceEquals(this, obj)) return true;
-                return obj is BarrierTimeoutException && Equals((BarrierTimeoutException) obj);
+                return obj is BarrierTimeoutException exception && Equals(exception);
             }
 
             /// <inheritdoc/>
@@ -195,7 +186,7 @@ namespace Akka.Remote.TestKit
                 BarrierData = barrierData;
             }
 
-            public Data BarrierData { get; private set; }
+            public Data BarrierData { get; }
 
             private bool Equals(FailedBarrierException other)
             {
@@ -207,7 +198,7 @@ namespace Akka.Remote.TestKit
             {
                 if (ReferenceEquals(null, obj)) return false;
                 if (ReferenceEquals(this, obj)) return true;
-                return obj is FailedBarrierException && Equals((FailedBarrierException) obj);
+                return obj is FailedBarrierException exception && Equals(exception);
             }
 
             /// <inheritdoc/>
@@ -248,9 +239,9 @@ namespace Akka.Remote.TestKit
                 BarrierData = barrierData;
             }
 
-            public Data BarrierData { get; private set; }
+            public Data BarrierData { get; }
 
-            public Controller.NodeInfo Node { get; private set; }
+            public Controller.NodeInfo Node { get; }
 
             private bool Equals(DuplicateNodeException other)
             {
@@ -262,7 +253,7 @@ namespace Akka.Remote.TestKit
             {
                 if (ReferenceEquals(null, obj)) return false;
                 if (ReferenceEquals(this, obj)) return true;
-                return obj is DuplicateNodeException && Equals((DuplicateNodeException) obj);
+                return obj is DuplicateNodeException exception && Equals(exception);
             }
 
             /// <inheritdoc/>
@@ -299,19 +290,19 @@ namespace Akka.Remote.TestKit
 
         public sealed class WrongBarrierException : Exception
         {
-            public WrongBarrierException(string barrier, IActorRef client, Data barrierData)
-                : base($"[{client}] tried to enter '{barrier}' while we were waiting for '{barrierData.Barrier}'")
+            public WrongBarrierException(string barrier, IActorRef client, RoleName roleName, Data barrierData)
+                : base($"[{client}] [{roleName}] tried to enter '{barrier}' while we were waiting for '{barrierData.Barrier}'")
             {
                 BarrierData = barrierData;
                 Client = client;
                 Barrier = barrier;
             }
 
-            public string Barrier { get; private set; }
+            public string Barrier { get; }
 
-            public IActorRef Client { get; private set; }
+            public IActorRef Client { get; }
 
-            public Data BarrierData { get; private set; }
+            public Data BarrierData { get; }
 
             private bool Equals(WrongBarrierException other)
             {
@@ -323,7 +314,7 @@ namespace Akka.Remote.TestKit
             {
                 if (ReferenceEquals(null, obj)) return false;
                 if (ReferenceEquals(this, obj)) return true;
-                return obj is WrongBarrierException && Equals((WrongBarrierException) obj);
+                return obj is WrongBarrierException exception && Equals(exception);
             }
 
             /// <inheritdoc/>
@@ -369,7 +360,7 @@ namespace Akka.Remote.TestKit
                 BarrierData = barrierData;
             }
 
-            public Data BarrierData { get; private set; }
+            public Data BarrierData { get; }
 
             private bool Equals(BarrierEmptyException other)
             {
@@ -381,7 +372,7 @@ namespace Akka.Remote.TestKit
             {
                 if (ReferenceEquals(null, obj)) return false;
                 if (ReferenceEquals(this, obj)) return true;
-                return obj is BarrierEmptyException && Equals((BarrierEmptyException) obj);
+                return obj is BarrierEmptyException exception && Equals(exception);
             }
 
             /// <inheritdoc/>
@@ -422,9 +413,9 @@ namespace Akka.Remote.TestKit
                 BarrierData = barrierData;
             }
 
-            public Data BarrierData { get; private set; }
+            public Data BarrierData { get; }
 
-            public RoleName Client { get; private set; }
+            public RoleName Client { get; }
 
             private bool Equals(ClientLostException other)
             {
@@ -436,7 +427,7 @@ namespace Akka.Remote.TestKit
             {
                 if (ReferenceEquals(null, obj)) return false;
                 if (ReferenceEquals(this, obj)) return true;
-                return obj is ClientLostException && Equals((ClientLostException) obj);
+                return obj is ClientLostException exception && Equals(exception);
             }
 
             /// <inheritdoc/>
@@ -492,89 +483,79 @@ namespace Akka.Remote.TestKit
             _failed = true;
         }
 
-        protected void InitFSM()
+        private void InitFSM()
         {
             StartWith(State.Idle, new Data(ImmutableHashSet.Create<Controller.NodeInfo>(), "", ImmutableHashSet.Create<IActorRef>(), null));
 
             WhenUnhandled(@event =>
             {
-                State<State, Data> nextState = null;
                 var clients = @event.StateData.Clients;
                 var arrived = @event.StateData.Arrived;
-                @event.FsmEvent.Match()
-                    .With<Controller.NodeInfo>(node =>
-                    {
+                switch (@event.FsmEvent)
+                {
+                    case Controller.NodeInfo node:
                         if (clients.Any(x => x.Name == node.Name)) throw new DuplicateNodeException(@event.StateData, node);
-                        nextState = Stay().Using(@event.StateData.Copy(clients.Add(node)));
-                    })
-                    .With<Controller.ClientDisconnected>(disconnected =>
-                    {
+                        return Stay().Using(@event.StateData.Copy(clients.Add(node)));
+                    
+                    case Controller.ClientDisconnected disconnected:
                         if (arrived == null || arrived.Count == 0)
-                            nextState =
-                                Stay()
-                                    .Using(
-                                        @event.StateData.Copy(clients.Where(x => x.Name != disconnected.Name).ToImmutableHashSet()));
-                        else
-                        {
-                            var client = clients.FirstOrDefault(x => x.Name == disconnected.Name);
-                            if (client == null) nextState = Stay();
-                            else
-                            {
-                                throw new ClientLostException(@event.StateData.Copy(clients.Remove(client), arrived:arrived.Where(x => x != client.FSM).ToImmutableHashSet()), disconnected.Name);
-                            }
-                        }
-                    });
-
-                return nextState;
+                            return Stay()
+                                .Using(@event.StateData.Copy(clients.Where(x => x.Name != disconnected.Name).ToImmutableHashSet()));
+                        
+                        var client = clients.FirstOrDefault(x => x.Name == disconnected.Name);
+                        if (client == null) 
+                            return Stay();
+                        
+                        throw new ClientLostException(@event.StateData.Copy(clients.Remove(client), arrived:arrived.Where(x => x != client.FSM).ToImmutableHashSet()), disconnected.Name);
+                    
+                    default:
+                        return null;
+                }
             });
 
             When(State.Idle, @event =>
             {
-                State<State, Data> nextState = null;
                 var clients = @event.StateData.Clients;
-                @event.FsmEvent.Match()
-                    .With<EnterBarrier>(barrier =>
-                    {
+                switch (@event.FsmEvent)
+                {
+                    case EnterBarrier barrier:
                         if (_failed)
-                            nextState =
-                                Stay().Replying(new ToClient<BarrierResult>(new BarrierResult(barrier.Name, false)));
-                        else if (clients.Select(x => x.FSM).SequenceEqual(new List<IActorRef>() {Sender}))
-                            nextState =
-                                Stay().Replying(new ToClient<BarrierResult>(new BarrierResult(barrier.Name, true)));
-                        else if (clients.All(x => !Equals(x.FSM, Sender)))
-                            nextState =
-                                Stay().Replying(new ToClient<BarrierResult>(new BarrierResult(barrier.Name, false)));
-                        else
-                        {
-                            nextState =
-                                GoTo(State.Waiting)
-                                    .Using(@event.StateData.Copy(barrier: barrier.Name,
-                                        arrived: ImmutableHashSet.Create(Sender),
-                                        deadline: GetDeadline(barrier.Timeout)));
-                        }
-                    })
-                    .With<RemoveClient>(client =>
-                    {
+                            return Stay().Replying(new ToClient<BarrierResult>(new BarrierResult(barrier.Name, false)));
+                        
+                        if (clients.Select(x => x.FSM).SequenceEqual(new List<IActorRef>() {Sender}))
+                            return Stay().Replying(new ToClient<BarrierResult>(new BarrierResult(barrier.Name, true)));
+                        
+                        if (clients.All(x => !Equals(x.FSM, Sender)))
+                            return Stay().Replying(new ToClient<BarrierResult>(new BarrierResult(barrier.Name, false)));
+                        
+                        return GoTo(State.Waiting)
+                            .Using(@event.StateData.Copy(
+                                barrier: barrier.Name,
+                                arrived: ImmutableHashSet.Create(Sender),
+                                deadline: GetDeadline(barrier.Timeout)));
+                    
+                    case RemoveClient client:
                         if (clients.Count == 0)
                             throw new BarrierEmptyException(@event.StateData, $"cannot remove {client.Name}: no client to remove");
-                        nextState =
-                            Stay().Using(@event.StateData.Copy(clients.Where(x => x.Name != client.Name).ToImmutableHashSet()));
-                    });
-
-                return nextState;
+                        
+                        return Stay().Using(@event.StateData.Copy(clients.Where(x => x.Name != client.Name).ToImmutableHashSet()));
+                    
+                    default:
+                        return null;
+                }
             });
 
             When(State.Waiting, @event =>
             {
-                State<State, Data> nextState = null;
                 var currentBarrier = @event.StateData.Barrier;
                 var clients = @event.StateData.Clients;
                 var arrived = @event.StateData.Arrived;
-                @event.FsmEvent.Match()
-                    .With<EnterBarrier>(barrier =>
-                    {
+
+                switch (@event.FsmEvent)
+                {
+                    case EnterBarrier barrier:
                         if (barrier.Name != currentBarrier)
-                            throw new WrongBarrierException(barrier.Name, Sender, @event.StateData);
+                            throw new WrongBarrierException(barrier.Name, Sender, barrier.Role, @event.StateData);
                         var together = clients.Any(x => Equals(x.FSM, Sender))
                             ? @event.StateData.Arrived.Add(Sender)
                             : @event.StateData.Arrived;
@@ -583,35 +564,30 @@ namespace Akka.Remote.TestKit
                         if (enterDeadline.TimeLeft < @event.StateData.Deadline.TimeLeft)
                         {
                             SetTimer("Timeout", StateTimeout.Instance, enterDeadline.TimeLeft, false);
-                            nextState = HandleBarrier(@event.StateData.Copy(arrived: together, deadline: enterDeadline));
+                            return HandleBarrier(@event.StateData.Copy(arrived: together, deadline: enterDeadline));
                         }
-                        else
-                        {
-                            nextState = HandleBarrier(@event.StateData.Copy(arrived: together));
-                        }
-                    })
-                    .With<RemoveClient>(client =>
-                    {
+                        
+                        return HandleBarrier(@event.StateData.Copy(arrived: together));
+                    
+                    case RemoveClient client:
                         var removedClient = clients.FirstOrDefault(x => x.Name == client.Name);
-                        if (removedClient == null) nextState = Stay();
-                        else
-                        {
-                            nextState =
-                                HandleBarrier(@event.StateData.Copy(clients.Remove(removedClient),
-                                    arrived: arrived.Where(x => !Equals(x, removedClient.FSM)).ToImmutableHashSet()));
-                        }
-                    })
-                    .With<FailBarrier>(barrier =>
-                    {
-                        if(barrier.Name != currentBarrier) throw new WrongBarrierException(barrier.Name, Sender, @event.StateData);
+                        if (removedClient == null) 
+                            return Stay();
+                        
+                        return HandleBarrier(@event.StateData.Copy(clients.Remove(removedClient),
+                                arrived: arrived.Where(x => !Equals(x, removedClient.FSM)).ToImmutableHashSet()));
+                    
+                    case FailBarrier barrier:
+                        if(barrier.Name != currentBarrier) 
+                            throw new WrongBarrierException(barrier.Name, Sender, barrier.Role, @event.StateData);
                         throw new FailedBarrierException(@event.StateData);
-                    })
-                    .With<StateTimeout>(() =>
-                    {
+                        
+                    case StateTimeout _:
                         throw new BarrierTimeoutException(@event.StateData);
-                    });
-
-                return nextState;
+                    
+                    default:
+                        return null;
+                }
             });
 
             OnTransition((state, nextState) =>
@@ -646,7 +622,7 @@ namespace Akka.Remote.TestKit
             }
         }
 
-        public Deadline GetDeadline(TimeSpan? timeout)
+        public static Deadline GetDeadline(TimeSpan? timeout)
         {
             return Deadline.Now + (timeout ?? TestConductor.Get(Context.System).Settings.BarrierTimeout);
         }

@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ActorTaskScheduler.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -21,11 +21,21 @@ namespace Akka.Dispatch
     public class ActorTaskScheduler : TaskScheduler
     {
         private readonly ActorCell _actorCell;
+
         /// <summary>
         /// TBD
         /// </summary>
         public object CurrentMessage { get; private set; }
-
+        
+        /// <summary>
+        /// Called when async task is scheduled, before Task.StartNew call
+        /// </summary>
+        protected virtual void OnBeforeTaskStarted() { }
+        /// <summary>
+        /// Called in completed scheduled task continuation
+        /// </summary>
+        protected virtual void OnAfterTaskCompleted() { }
+        
         /// <summary>
         /// TBD
         /// </summary>
@@ -34,7 +44,7 @@ namespace Akka.Dispatch
         {
             _actorCell = actorCell;
         }
-
+        
         /// <summary>
         /// TBD
         /// </summary>
@@ -116,7 +126,7 @@ namespace Akka.Dispatch
             RunTask(() =>
             {
                 action();
-                return Task.FromResult(0);
+                return Task.CompletedTask;
             });
         }
 
@@ -139,27 +149,33 @@ namespace Akka.Dispatch
             //suspend the mailbox
             dispatcher.Suspend(context);
 
-            ActorTaskScheduler actorScheduler = context.TaskScheduler;
+            var actorScheduler = context.TaskScheduler;
             actorScheduler.CurrentMessage = context.CurrentMessage;
 
+            actorScheduler.OnBeforeTaskStarted();
+            
             Task<Task>.Factory.StartNew(asyncAction, CancellationToken.None, TaskCreationOptions.None, actorScheduler)
                               .Unwrap()
                               .ContinueWith(parent =>
                               {
-                                  Exception exception = GetTaskException(parent);
-
+                                  var exception = GetTaskException(parent);
                                   if (exception == null)
                                   {
                                       dispatcher.Resume(context);
-
-                                      context.CheckReceiveTimeout();
+                                      context.CheckReceiveTimeout(context.CurrentMessage is not INotInfluenceReceiveTimeout);
                                   }
                                   else
                                   {
                                       context.Self.AsInstanceOf<IInternalActorRef>().SendSystemMessage(new ActorTaskSchedulerMessage(exception, actorScheduler.CurrentMessage));
                                   }
+                                  
+                                  // Used by TestActorRef to intercept async execution result
+                                  if(actorScheduler is IAsyncResultInterceptor interceptor)
+                                      interceptor.OnTaskCompleted(actorScheduler.CurrentMessage, exception);
+                                  
                                   //clear the current message field of the scheduler
                                   actorScheduler.CurrentMessage = null;
+                                  actorScheduler.OnAfterTaskCompleted();
                               }, actorScheduler);
         }
 
@@ -190,3 +206,7 @@ namespace Akka.Dispatch
     }
 }
 
+internal interface IAsyncResultInterceptor
+{
+    void OnTaskCompleted(object message, Exception exception);
+}

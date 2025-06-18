@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ClusterMetricsMessageSerializerSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -81,7 +81,7 @@ namespace Akka.Cluster.Metrics.Tests
         {
             var blob = _serializer.ToBinary(obj);
             var @ref = _serializer.FromBinary(blob, _serializer.Manifest(obj));
-            @ref.ShouldBeEquivalentTo(obj);
+            @ref.Should().BeEquivalentTo(obj);
         }
     }
 }

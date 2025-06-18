@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="Stage.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -56,7 +56,7 @@ namespace Akka.Streams.Stage
     /// <see cref="PushStage{TIn,TOut}"/> instead of <see cref="PushPullStage{TIn,TOut}"/>.
     /// </para>
     /// <para>
-    /// Stages are allowed to do early completion of downstream and cancel of upstream. This is done with <see cref="IContext.Finish"/>,
+    /// Stages are allowed to do early completion of downstream and cancel of upstream. This is done with <see cref="StatefulStage.Finish"/>,
     /// which is a combination of cancel/complete.
     /// </para>
     /// <para>
@@ -72,7 +72,7 @@ namespace Akka.Streams.Stage
     /// <see cref="IContext.AbsorbTermination"/> which stops the propagation of the termination signal, and puts the stage in a
     /// <see cref="IContext.IsFinishing"/> state. Depending on whether the stage has a pending pull signal it
     /// has not yet "consumed" by a push its <see cref="AbstractStage{TIn,TOut}.OnPull"/> handler might be called immediately or later. From
-    /// <see cref="AbstractStage{TIn,TOut}.OnPull"/> final elements can be pushed before completing downstream with <see cref="IContext.Finish"/> or
+    /// <see cref="AbstractStage{TIn,TOut}.OnPull"/> final elements can be pushed before completing downstream with <see cref="StatefulStage.Finish"/> or
     /// <see cref="IContext.PushAndFinish"/>.
     /// </para>
     /// <para>
@@ -185,7 +185,7 @@ namespace Akka.Streams.Stage
             /// <summary>
             /// TBD
             /// </summary>
-            public static readonly Finish Instance = new Finish();
+            public static readonly Finish Instance = new();
             private Finish() { }
         }
 
@@ -221,7 +221,7 @@ namespace Akka.Streams.Stage
             /// <summary>
             /// TBD
             /// </summary>
-            public static readonly Stay Instance = new Stay();
+            public static readonly Stay Instance = new();
             private Stay() { }
         }
 
@@ -275,12 +275,8 @@ namespace Akka.Streams.Stage
         /// <exception cref="ArgumentNullException">
         /// This exception is thrown when the specified <paramref name="state"/> is undefined.
         /// </exception>
-        public void Become(StageState<TIn, TOut> state)
-        {
-            if (state == null)
-                throw new ArgumentNullException(nameof(state));
-            _current = state;
-        }
+        public void Become(StageState<TIn, TOut> state) =>
+            _current = state ?? throw new ArgumentNullException(nameof(state));
 
         /// <summary>
         /// Invokes current state.
@@ -417,10 +413,11 @@ namespace Akka.Streams.Stage
                     {
                         _isEmitting = false;
 
-                        if (andThen is StatefulStage.Stay) ;
-                        else if (andThen is StatefulStage.Become<TIn, TOut>)
+                        if (andThen is StatefulStage.Stay)
                         {
-                            var become = andThen as StatefulStage.Become<TIn, TOut>;
+                        }
+                        else if (andThen is StatefulStage.Become<TIn, TOut> become)
+                        {
                             Become(become.State);
                         }
                         else if (andThen is StatefulStage.Finish)

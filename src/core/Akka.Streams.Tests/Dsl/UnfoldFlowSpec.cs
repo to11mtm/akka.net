@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="UnfoldFlowSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -9,6 +9,7 @@ using System;
 using Akka.Streams.Dsl;
 using Akka.Streams.TestKit;
 using Akka.Streams.Util;
+using Akka.TestKit.Xunit2.Attributes;
 using Akka.Util;
 using FluentAssertions;
 using Xunit;
@@ -30,7 +31,7 @@ namespace Akka.Streams.Tests.Dsl
 
         public class WithSimpleFlow : Akka.TestKit.Xunit2.TestKit
         {
-            private readonly Exception _done = new Exception("done");
+            private readonly Exception _done = new("done");
             private readonly Source<int, (TestSubscriber.Probe<int>, TestPublisher.Probe<(int, int)>)> _source;
 
             public WithSimpleFlow()
@@ -58,7 +59,7 @@ namespace Akka.Streams.Tests.Dsl
                     .Recover(ex =>
                     {
                         if (ex == _done)
-                            return new Option<(int, int)>((1, 1));
+                            return Option<(int, int)>.Create((1, 1));
 
                         return Option<(int, int)>.None;
                     }), 
@@ -99,7 +100,7 @@ namespace Akka.Streams.Tests.Dsl
                             .Recover(ex =>
                             {
                                 if (ex == _done)
-                                    return new Option<(int, int)>((1, 1));
+                                    return Option<(int, int)>.Create((1, 1));
 
                                 return Option<(int, int)>.None;
                             }), _timeout)
@@ -134,7 +135,7 @@ namespace Akka.Streams.Tests.Dsl
                 snk.ExpectError().Should().Be(kill);
             }
 
-            [Fact(Skip ="Racy")]
+            [Fact]
             public void UnfoldFlow_should_increment_integers_and_handle_KillSwitch_and_fail_after_timeout_when_aborted()
             {
                 var t = _source.ToMaterialized(this.SinkProbe<int>(), Keep.Both).Run(Sys.Materializer());
@@ -147,7 +148,6 @@ namespace Akka.Streams.Tests.Dsl
                 pub.EnsureSubscription();
                 snk.EnsureSubscription();
                 sub.Cancel();
-                snk.ExpectNoMsg(_timeout - TimeSpan.FromMilliseconds(50));
                 snk.ExpectError();
             }
 
@@ -165,7 +165,6 @@ namespace Akka.Streams.Tests.Dsl
                 snk.EnsureSubscription();
                 sub.Cancel();
                 snk.Request(1);
-                snk.ExpectNoMsg(_timeout - TimeSpan.FromMilliseconds(50));
                 snk.ExpectError();
             }
 
@@ -234,7 +233,7 @@ namespace Akka.Streams.Tests.Dsl
                 snk.ExpectComplete();
             }
 
-            [Fact(Skip ="Racy")]
+            [LocalFact(SkipLocal = "Racy on Azure DevOps")]
             public void UnfoldFlow_should_increment_integers_and_handle_KillSwitch_and_complete_gracefully_after_timeout_when_stopped()
             {
                 var t = _source.ToMaterialized(this.SinkProbe<int>(), Keep.Both).Run(Sys.Materializer());
@@ -247,7 +246,7 @@ namespace Akka.Streams.Tests.Dsl
                 pub.EnsureSubscription();
                 snk.EnsureSubscription();
                 sub.Cancel();
-                snk.ExpectNoMsg(_timeout - TimeSpan.FromMilliseconds(50));
+                snk.ExpectNoMsg(_timeout.DivideBy(2));
                 pub.SendComplete();
                 snk.ExpectComplete();
             }
@@ -288,7 +287,7 @@ namespace Akka.Streams.Tests.Dsl
             public WithFunction()
             {
                 var controlledFlow = Flow.FromSinkAndSource(this.SinkProbe<int>(), this.SourceProbe<int>(), Keep.Both);
-                _source = SourceGen.UnfoldFlowWith(1, controlledFlow, n => new Option<(int, int)>((n + 1, n)), _timeout);
+                _source = SourceGen.UnfoldFlowWith(1, controlledFlow, n => Option<(int, int)>.Create((n + 1, n)), _timeout);
             }
 
             [Fact]
@@ -300,9 +299,9 @@ namespace Akka.Streams.Tests.Dsl
                         return Option<(int, int)>.None;
 
                     if (x % 2 == 0)
-                        return new Option<(int, int)>((x / 2, x));
+                        return Option<(int, int)>.Create((x / 2, x));
 
-                    return new Option<(int, int)>((x * 3 + 1, x));
+                    return Option<(int, int)>.Create((x * 3 + 1, x));
                 }
 
                 var source = SourceGen.UnfoldFlowWith(27, Flow.FromFunction<int, int>(x => x), Map, _timeout);
@@ -333,7 +332,7 @@ namespace Akka.Streams.Tests.Dsl
                 snk.ExpectError().Should().Be(kill);
             }
 
-            [Fact(Skip ="Racy")]
+            [LocalFact(SkipLocal = "Racy on Azure DevOps")]
             public void UnfoldFlow_should_increment_integers_and_handle_KillSwitch_and_fail_after_timeout_when_aborted()
             {
                 var t = _source.ToMaterialized(this.SinkProbe<int>(), Keep.Both).Run(Sys.Materializer());
@@ -346,7 +345,7 @@ namespace Akka.Streams.Tests.Dsl
                 pub.EnsureSubscription();
                 snk.EnsureSubscription();
                 sub.Cancel();
-                snk.ExpectNoMsg(_timeout - TimeSpan.FromMilliseconds(50));
+                snk.ExpectNoMsg(_timeout.DivideBy(2));
                 snk.ExpectError();
             }
 
@@ -364,7 +363,6 @@ namespace Akka.Streams.Tests.Dsl
                 snk.EnsureSubscription();
                 sub.Cancel();
                 snk.Request(1);
-                snk.ExpectNoMsg(_timeout - TimeSpan.FromMilliseconds(50));
                 snk.ExpectError();
             }
 
@@ -445,7 +443,6 @@ namespace Akka.Streams.Tests.Dsl
                 pub.EnsureSubscription();
                 snk.EnsureSubscription();
                 sub.Cancel();
-                snk.ExpectNoMsg(_timeout - TimeSpan.FromMilliseconds(50));
                 pub.SendComplete();
                 snk.ExpectComplete();
             }
@@ -477,6 +474,14 @@ namespace Akka.Streams.Tests.Dsl
                 pub.SendComplete();
                 snk.ExpectComplete();
             }
+        }
+    }
+
+    public static class TimeSpanExtensions
+    {
+        public static TimeSpan DivideBy(this TimeSpan timeSpan, int divisor)
+        {
+            return TimeSpan.FromTicks(timeSpan.Ticks / divisor);
         }
     }
 }

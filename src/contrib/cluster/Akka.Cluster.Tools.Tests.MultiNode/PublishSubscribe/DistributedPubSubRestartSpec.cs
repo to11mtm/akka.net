@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="DistributedPubSubRestartSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -10,8 +10,11 @@ using Akka.Cluster.TestKit;
 using Akka.Cluster.Tools.PublishSubscribe;
 using Akka.Cluster.Tools.PublishSubscribe.Internal;
 using Akka.Configuration;
+using Akka.Event;
+using Akka.MultiNode.TestAdapter;
 using Akka.Remote.TestKit;
 using FluentAssertions;
+using FluentAssertions.Extensions;
 
 namespace Akka.Cluster.Tools.Tests.MultiNode.PublishSubscribe
 {
@@ -42,7 +45,8 @@ namespace Akka.Cluster.Tools.Tests.MultiNode.PublishSubscribe
         {
             public Shutdown()
             {
-                Receive<string>(str => str.Equals("shutdown"), evt =>
+                Context.GetLogger().Info("Shutdown actor started on {0}", Context.System.Name);
+                Receive<string>(str => str.Equals("shutdown"), _ =>
                 {
                     Context.System.Terminate();
                 });
@@ -138,11 +142,12 @@ namespace Akka.Cluster.Tools.Tests.MultiNode.PublishSubscribe
 
                 RunOn(() =>
                 {
+                    var node3Address = Cluster.Get(Sys).SelfAddress;
                     Sys.WhenTerminated.Wait(10.Seconds());
                     var newSystem = ActorSystem.Create(
                         Sys.Name,
                         ConfigurationFactory
-                            .ParseString($"akka.remote.dot-netty.tcp.port={Cluster.Get(Sys).SelfAddress.Port}")
+                            .ParseString($"akka.remote.dot-netty.tcp.port={node3Address.Port}")
                             .WithFallback(Sys.Settings.Config));
 
                     try
@@ -159,6 +164,7 @@ namespace Akka.Cluster.Tools.Tests.MultiNode.PublishSubscribe
                         newMediator.Tell(DeltaCount.Instance, probe.Ref);
                         probe.ExpectMsg(0L);
 
+                        newSystem.Log.Info("Shutdown actor started on {0}",node3Address);
                         newSystem.ActorOf<DistributedPubSubRestartSpecConfig.Shutdown>("shutdown");
                         newSystem.WhenTerminated.Wait(10.Seconds());
                     }

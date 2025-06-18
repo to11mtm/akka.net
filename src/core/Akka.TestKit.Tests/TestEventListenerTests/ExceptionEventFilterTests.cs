@@ -1,130 +1,175 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ExceptionEventFilterTests.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
+using System.Threading.Tasks;
+using Akka.Actor;
 using Akka.Event;
-using Akka.TestKit;
+using FluentAssertions;
 using Xunit;
 using Xunit.Sdk;
+using static FluentAssertions.FluentActions;
 
-namespace Akka.Testkit.Tests.TestEventListenerTests
+namespace Akka.TestKit.Tests.TestEventListenerTests
 {
-    //public class ExceptionEventFilterTests : EventFilterTestBase
-    //{
-    //    public ExceptionEventFilterTests()
-    //        : base("akka.logLevel=ERROR")
-    //    {
-    //    }
-    //    public class TestFinished : Exception { }
-    //    public class SomeException : Exception { }
+    public class ExceptionEventFilterTests : EventFilterTestBase
+    {
+        public ExceptionEventFilterTests()
+            : base("akka.logLevel=ERROR")
+        {
+        }
+        public class SomeException : Exception { }
 
-    //    protected override void SendInitLoggerMessage(InitLoggerMessage message)
-    //    {
-    //        throw new NotImplementedException();
-    //    }
+        protected override void SendRawLogEventMessage(object message)
+        {
+            Sys.EventStream.Publish(new Error(null, nameof(ExceptionEventFilterTests), GetType(), message));
+        }
 
-    //    protected override void AfterTest()
-    //    {
-    //        //After every test we make sure no uncatched messages have been logged
-    //        EnsureNoMoreLoggedMessages();
-    //        base.AfterTest();
-    //    }
+        [Fact]
+        public async Task SingleExceptionIsIntercepted()
+        {
+            await EventFilter.Exception<SomeException>()
+                .ExpectOneAsync(() => { Log.Error(new SomeException(), "whatever"); return Task.CompletedTask; });
+            await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100));
+        }
 
-    //    private void EnsureNoMoreLoggedMessages()
-    //    {
-    //        //We log a TestFinished exception. When it arrives to TestActor we know no other message has been logged7
-    //        //If we receive something else it means another message was logged, and ExpectMsg will fail
-    //        Log.Error(new TestFinished(), "Finished");
-    //        ExpectMsg<Error>(err => err.Cause is TestFinished,"cause to be <TestFinished>");
-    //    }
+        [Fact]
+        public async Task CanInterceptMessagesWhenStartIsSpecified()
+        {
+            await EventFilter.Exception<SomeException>(start: "what")
+                .ExpectOneAsync(() => { Log.Error(new SomeException(), "whatever"); return Task.CompletedTask; });
+            await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100));
+        }
 
-    //    [Fact]
-    //    public void SingleExceptionIsIntercepted()
-    //    {
-    //        EventFilter.Exception<SomeException>().Intercept(() => Log.Error(new SomeException(), "whatever"));
-    //    }
+        [Fact]
+        public async Task DoNotInterceptMessagesWhenStartDoesNotMatch()
+        {
+            EventFilter.Exception<SomeException>(start: "this is clearly not in message");
+            Log.Error(new SomeException(), "whatever");
+            await ExpectMsgAsync<Error>(err => (string)err.Message == "whatever");
+        }
 
-    //    [Fact]
-    //    public void CanInterceptMessagesWhenStartIsSpecified()
-    //    {
-    //        EventFilter.Exception<SomeException>(start: "what").Intercept(() => Log.Error(new SomeException(), "whatever"));
-    //    }
+        [Fact]
+        public async Task CanInterceptMessagesWhenMessageIsSpecified()
+        {
+            await EventFilter.Exception<SomeException>(message: "whatever")
+                .ExpectOneAsync(() => { Log.Error(new SomeException(), "whatever"); return Task.CompletedTask; });
+            await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100));
+        }
 
-    //    [Fact]
-    //    public void DoNotInterceptMessagesWhenStartDoesNotMatch()
-    //    {
-    //        EventFilter.Exception<SomeException>(start: "this is clearly not in message").Intercept(() => Log.Error(new SomeException(), "whatever"));
-    //        ExpectMsg<Error>(err => (string)err.Message == "whatever");
-    //    }
+        [Fact]
+        public async Task DoNotInterceptMessagesWhenMessageDoesNotMatch()
+        {
+            EventFilter.Exception<SomeException>(message: "this is clearly not the message");
+            Log.Error(new SomeException(), "whatever");
+            await ExpectMsgAsync<Error>(err => (string)err.Message == "whatever");
+        }
 
-    //    [Fact]
-    //    public void CanInterceptMessagesWhenMessageIsSpecified()
-    //    {
-    //        EventFilter.Exception<SomeException>(message: "whatever").Intercept(() => Log.Error(new SomeException(), "whatever"));
-    //    }
+        [Fact]
+        public async Task CanInterceptMessagesWhenContainsIsSpecified()
+        {
+            await EventFilter.Exception<SomeException>(contains: "ate")
+                .ExpectOneAsync(() => { Log.Error(new SomeException(), "whatever"); return Task.CompletedTask; });
+            await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100));
+        }
 
-    //    [Fact]
-    //    public void DoNotInterceptMessagesWhenMessageDoesNotMatch()
-    //    {
-    //        EventFilter.Exception<SomeException>(message: "this is clearly not the message").Intercept(() => Log.Error(new SomeException(), "whatever"));
-    //        ExpectMsg<Error>(err => (string)err.Message == "whatever");
-    //    }
-
-    //    [Fact]
-    //    public void CanInterceptMessagesWhenContainsIsSpecified()
-    //    {
-    //        EventFilter.Exception<SomeException>(contains: "ate").Intercept(() => Log.Error(new SomeException(), "whatever"));
-    //    }
-
-    //    [Fact]
-    //    public void DoNotInterceptMessagesWhenContainsDoesNotMatch()
-    //    {
-    //        EventFilter.Exception<SomeException>(contains: "this is clearly not in the message").Intercept(() => Log.Error(new SomeException(), "whatever"));
-    //        ExpectMsg<Error>(err => (string)err.Message == "whatever");
-    //    }
+        [Fact]
+        public async Task DoNotInterceptMessagesWhenContainsDoesNotMatch()
+        {
+            EventFilter.Exception<SomeException>(contains: "this is clearly not in the message");
+            Log.Error(new SomeException(), "whatever");
+            await ExpectMsgAsync<Error>(err => (string)err.Message == "whatever");
+        }
 
 
-    //    [Fact]
-    //    public void CanInterceptMessagesWhenSourceIsSpecified()
-    //    {
-    //        EventFilter.Exception<SomeException>(source: GetType().FullName).Intercept(() => Log.Error(new SomeException(), "whatever"));
-    //    }
+        [Fact]
+        public async Task CanInterceptMessagesWhenSourceIsSpecified()
+        {
+            await EventFilter.Exception<SomeException>(source: LogSource.Create(this, Sys).Source)
+                .ExpectOneAsync(() => { Log.Error(new SomeException(), "whatever"); return Task.CompletedTask; });
+            await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100));
+        }
 
-    //    [Fact]
-    //    public void DoNotInterceptMessagesWhenSourceDoesNotMatch()
-    //    {
-    //        EventFilter.Exception<SomeException>(source: "this is clearly not the source").Intercept(() => Log.Error(new SomeException(), "whatever"));
-    //        ExpectMsg<Error>(err => (string)err.Message == "whatever");
-    //    }
+        [Fact]
+        public async Task DoNotInterceptMessagesWhenSourceDoesNotMatch()
+        {
+            EventFilter.Exception<SomeException>(source: "this is clearly not the source");
+            Log.Error(new SomeException(), "whatever");
+            await ExpectMsgAsync<Error>(err => (string)err.Message == "whatever");
+        }
 
 
-    //    [Fact]
-    //    public void SpecifiedNumbersOfExceptionsCanBeIntercepted()
-    //    {
-    //        EventFilter.Exception<SomeException>(occurrences: 2).Intercept(() =>
-    //        {
-    //            Log.Error(new SomeException(), "whatever");
-    //            Log.Error(new SomeException(), "whatever");
-    //        });
-    //    }
+        [Fact]
+        public async Task SpecifiedNumbersOfExceptionsCanBeIntercepted()
+        {
+            await EventFilter.Exception<SomeException>()
+                .ExpectAsync(2, () => {
+                    Log.Error(new SomeException(), "whatever");
+                    Log.Error(new SomeException(), "whatever");
+                    return Task.CompletedTask;
+                });
+            await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100));
+        }
 
-    //    [Fact]
-    //    public void ShouldFailIfMoreExceptionsThenSpecifiedAreLogged()
-    //    {
-    //        var exception = XAssert.Throws<AssertException>(() =>
-    //            EventFilter.Exception<SomeException>(occurrences: 2).Intercept(() =>
-    //            {
-    //                Log.Error(new SomeException(), "whatever");
-    //                Log.Error(new SomeException(), "whatever");
-    //                Log.Error(new SomeException(), "whatever");
-    //            }));
-    //        Assert.Contains("1 messages too many", exception.Message, StringComparison.OrdinalIgnoreCase);
-    //    }
+        [Fact]
+        public async Task ShouldFailIfMoreExceptionsThenSpecifiedAreLogged()
+        {
+            await Awaiting(async () =>
+                {
+                    await EventFilter.Exception<SomeException>().ExpectAsync(2, () => {
+                        Log.Error(new SomeException(), "whatever");
+                        Log.Error(new SomeException(), "whatever");
+                        Log.Error(new SomeException(), "whatever");
+                        return Task.CompletedTask;
+                    });                    
+                })
+                .Should().ThrowAsync<FailException>().WithMessage("Received 1 message too many.*");
+        }
 
-    //}
+        [Fact]
+        public async Task ShouldReportCorrectMessageCount()
+        {
+            var toSend = "Eric Cartman";
+            var actor = ActorOf( ExceptionTestActor.Props() );
+
+            await EventFilter
+                .Exception<InvalidOperationException>(source: actor.Path.ToString())
+                // expecting 2 because the same exception is logged in PostRestart
+                .ExpectAsync(2, () => { actor.Tell( toSend ); return Task.CompletedTask; });
+        }
+
+        internal sealed class ExceptionTestActor : UntypedActor
+        {
+            private ILoggingAdapter Log { get; } = Context.GetLogger();
+
+            protected override void PostRestart(Exception reason)
+            {
+                Log.Error(reason, "[PostRestart]");
+                base.PostRestart(reason);
+            }
+
+            protected override void OnReceive( object message )
+            {
+                switch (message)
+                {
+                    case string _:
+                        throw new InvalidOperationException( "I'm sailing away. Set an open course" );
+
+                    default:
+                        Unhandled( message );
+                        break;
+                }
+            }
+
+            public static Props Props()
+            {
+                return Actor.Props.Create( () => new ExceptionTestActor() );
+            }
+        }
+    }
 }
 

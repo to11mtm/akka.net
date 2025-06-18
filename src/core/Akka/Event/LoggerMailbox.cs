@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="LoggerMailbox.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -82,15 +82,15 @@ namespace Akka.Event
         {
             if (HasMessages)
             {
-                Envelope envelope;
-
+                var logger = _system.Settings.StdoutLogger;
+                
                 // Drain all remaining messages to the StandardOutLogger.
                 // CleanUp is called after switching out the mailbox, which is why
                 // this kind of look works without a limit.
-                while (TryDequeue(out envelope))
+                while (TryDequeue(out var envelope))
                 {
                     // Logging.StandardOutLogger is a MinimalActorRef, i.e. not a "real" actor
-                    Logging.StandardOutLogger.Tell(envelope.Message, envelope.Sender);
+                    logger.Tell(envelope.Message, envelope.Sender);
                 }
             }
             MessageQueue.CleanUp(owner, deadletters);

@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="MatchBuilder.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -38,9 +38,9 @@ namespace Akka.Tools.MatchHandler
         //    builder2:  action = s=>G(s); predicate = s=>s!=""
 
         private static readonly Type _itemType = typeof(TItem);
-        private readonly List<TypeHandler> _typeHandlers = new List<TypeHandler>(); //Contains all handlers, with the handled types and predicates
-        private readonly List<Argument> _arguments = new List<Argument>();                //Contains Actions,Predicates and Funcs that has been added
-        private readonly List<object> _signature = new List<object>();
+        private readonly List<TypeHandler> _typeHandlers = new(); //Contains all handlers, with the handled types and predicates
+        private readonly List<Argument> _arguments = new();                //Contains Actions,Predicates and Funcs that has been added
+        private readonly List<object> _signature = new();
         private readonly IMatchCompiler<TItem> _compiler;
         private State _state;
 
@@ -52,11 +52,8 @@ namespace Akka.Tools.MatchHandler
         /// <exception cref="ArgumentNullException">
         /// This exception is thrown if the given <paramref name="compiler"/> is undefined.
         /// </exception>
-        public MatchBuilder(IMatchCompiler<TItem> compiler)
-        {
-            if(compiler == null) throw new ArgumentNullException(nameof(compiler), "Compiler cannot be null");
-            _compiler = compiler;
-        }
+        public MatchBuilder(IMatchCompiler<TItem> compiler) =>
+            _compiler = compiler ?? throw new ArgumentNullException(nameof(compiler), "Compiler cannot be null");
 
         /// <summary>
         /// Adds a handler that is called if the item being matched is of type <typeparamref name="T"/>
@@ -171,21 +168,6 @@ namespace Akka.Tools.MatchHandler
             return partialAction;
         }
 
-#if !CORECLR
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <param name="typeBuilder">TBD</param>
-        /// <param name="methodName">TBD</param>
-        /// <param name="attributes">TBD</param>
-        /// <returns>TBD</returns>
-        public void BuildToMethod(TypeBuilder typeBuilder, string methodName, MethodAttributes attributes = MethodAttributes.Public | MethodAttributes.Static)
-        {
-            _compiler.CompileToMethod(_typeHandlers, _arguments, new MatchBuilderSignature(_signature), typeBuilder, methodName, methodAttributes: attributes);
-            _state = State.Built;
-        }
-#endif
-
         private static void EnsureCanHandleType(Type handlesType)
         {
             if(!_itemType.IsAssignableFrom(handlesType))
@@ -210,12 +192,10 @@ namespace Akka.Tools.MatchHandler
 
         private void AddHandler(Type handlesType, PredicateAndHandler predicateAndHandler)
         {
-            TypeHandler typeHandler;
-
             //if the previous handler handles the same type, we don't need an entirely new TypeHandler,
             //we can just add the handler to its' list of handlers
 
-            if(!TryGetPreviousTypeHandlerIfItHandlesSameType(handlesType, out typeHandler))
+            if(!TryGetPreviousTypeHandlerIfItHandlesSameType(handlesType, out var typeHandler))
             {
                 //Either no previous handler had been added, or it handled a different type.
                 //Create a new handler and store it.

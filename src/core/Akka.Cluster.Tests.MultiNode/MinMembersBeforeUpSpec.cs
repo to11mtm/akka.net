@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="MinMembersBeforeUpSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -12,6 +12,7 @@ using System.Threading;
 using Akka.Actor;
 using Akka.Cluster.TestKit;
 using Akka.Configuration;
+using Akka.MultiNode.TestAdapter;
 using Akka.Remote.TestKit;
 using Akka.TestKit;
 
@@ -103,7 +104,7 @@ namespace Akka.Cluster.Tests.MultiNode
 
             CommonConfig = ConfigurationFactory.ParseString(@"
                 akka.cluster.min-nr-of-members = 3
-                akka.cluster.allow-weakly-up-members = on
+                akka.cluster.allow-weakly-up-members = 3s
             ").WithFallback(MultiNodeClusterSpec.ClusterConfigWithFailureDetectorPuppet());
         }
     }

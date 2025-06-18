@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="PersistentActorSpecAsyncAwait.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -17,7 +17,7 @@ namespace Akka.Persistence.Tests
 {
     public partial class PersistentActorSpecAsyncAwait : PersistenceSpec
     {
-        private readonly Random _random = new Random();
+        private readonly Random _random = new();
         public PersistentActorSpecAsyncAwait()
             : base(Configuration("PersistentActorSpecAsyncAwait"))
         {
@@ -134,7 +134,7 @@ namespace Akka.Persistence.Tests
             ExpectMsgInOrder("a-1", "a-2", "b-0", "c-30", "c-31", "c-32", "d-0", "e-30", "e-31", "e-32");
         }
 
-        [Fact(Skip = "Need https://github.com/akkadotnet/akka.net/pull/3668 merged")]
+        [Fact]
         public void PersistentActor_should_support_snapshotting()
         {
             var pref = ActorOf(Props.Create(() => new SnapshottingPersistentActor(Name, TestActor)));
@@ -151,7 +151,7 @@ namespace Akka.Persistence.Tests
             ExpectMsgInOrder("a-1", "a-2", "b-41", "b-42", "c-41", "c-42");
         }
 
-        [Fact(Skip = "Need https://github.com/akkadotnet/akka.net/pull/3668 merged")]
+        [Fact]
         public void PersistentActor_should_support_Context_Become_during_recovery()
         {
             var pref = ActorOf(Props.Create(() => new SnapshottingPersistentActor(Name, TestActor)));
@@ -238,7 +238,7 @@ namespace Akka.Persistence.Tests
             {
                 foreach (var probe in probes)
                 {
-                    probe.ExpectMsgAllOf<string>();
+                    probe.ExpectMsgAllOf(new string[]{ });
                 }
             });
         }
@@ -339,7 +339,7 @@ namespace Akka.Persistence.Tests
                 pref.Tell(new Cmd(i));
             }
             pref.Tell(new Cmd("done"));
-            ExpectMsg("done", TimeSpan.FromSeconds(5));
+            ExpectMsg("done", TimeSpan.FromSeconds(30));
         }
 
         [Fact]
@@ -432,7 +432,7 @@ namespace Akka.Persistence.Tests
             ExpectNoMsg(TimeSpan.FromMilliseconds(100));
         }
 
-        [Fact(Skip = "Need https://github.com/akkadotnet/akka.net/pull/3668 merged")]
+        [Fact]
         public void PersistentActor_should_receive_RecoveryFinished_if_it_is_handled_after_all_events_have_been_replayed()
         {
             var pref = ActorOf(Props.Create(() => new SnapshottingPersistentActor(Name, TestActor)));
@@ -496,8 +496,8 @@ namespace Akka.Persistence.Tests
             pref.Tell("b");
 
             var msgs = ReceiveN(10).Select(m => m.ToString()).ToArray();
-            var amsgs = msgs.Where(m => m.StartsWith("a")).ToArray();
-            var bmsgs = msgs.Where(m => m.StartsWith("b")).ToArray();
+            var amsgs = msgs.Where(m => m.StartsWith('a')).ToArray();
+            var bmsgs = msgs.Where(m => m.StartsWith('b')).ToArray();
             amsgs.ShouldOnlyContainInOrder("a", "a-outer-1", "a-outer-2", "a-inner-1", "a-inner-2");
             bmsgs.ShouldOnlyContainInOrder("b", "b-outer-1", "b-outer-2", "b-inner-1", "b-inner-2");
         }

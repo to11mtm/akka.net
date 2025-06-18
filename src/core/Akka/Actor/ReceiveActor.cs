@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ReceiveActor.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -20,7 +20,7 @@ namespace Akka.Actor
     public abstract class ReceiveActor : UntypedActor, IInitializableActor
     {
         private bool _shouldUnhandle = true;
-        private readonly Stack<MatchBuilder> _matchHandlerBuilders = new Stack<MatchBuilder>();
+        private readonly Stack<MatchBuilder> _matchHandlerBuilders = new();
         private PartialAction<object> _partialReceive = _ => false;
         private bool _hasBeenInitialized;
 
@@ -111,7 +111,7 @@ namespace Akka.Actor
             return newHandler;
         }
 
-        private Action<T> WrapAsyncHandler<T>(Func<T, Task> asyncHandler)
+        private static Action<T> WrapAsyncHandler<T>(Func<T, Task> asyncHandler)
         {
             return m =>
             {
@@ -211,7 +211,7 @@ namespace Akka.Actor
         protected void Receive<T>(Action<T> handler, Predicate<T> shouldHandle = null)
         {
             EnsureMayConfigureMessageHandlers();
-            _matchHandlerBuilders.Peek().Match<T>(handler, shouldHandle);
+            _matchHandlerBuilders.Peek().Match(handler, shouldHandle);
         }
 
         /// <summary>
@@ -227,7 +227,7 @@ namespace Akka.Actor
         /// <exception cref="InvalidOperationException">This exception is thrown if this method is called outside of the actor's constructor or from <see cref="Become(Action)"/>.</exception>
         protected void Receive<T>(Predicate<T> shouldHandle, Action<T> handler)
         {
-            Receive<T>(handler, shouldHandle);
+            Receive(handler, shouldHandle);
         }
 
         /// <summary>
@@ -279,7 +279,7 @@ namespace Akka.Actor
         protected void Receive<T>(Func<T, bool> handler)
         {
             EnsureMayConfigureMessageHandlers();
-            _matchHandlerBuilders.Peek().Match<T>(handler);
+            _matchHandlerBuilders.Peek().Match(handler);
         }
 
         /// <summary>

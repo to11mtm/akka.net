@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="FramingSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -9,17 +9,21 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
-using System.Text; 
+using System.Text;
+using System.Threading.Tasks;
 using Akka.IO;
+using Akka.TestKit.Extensions;
 using Akka.Streams.Dsl;
 using Akka.Streams.Implementation.Fusing;
 using Akka.Streams.Stage;
-using Akka.Streams.TestKit.Tests;
+using Akka.Streams.TestKit;
 using Akka.TestKit;
 using Akka.Util;
 using FluentAssertions;
 using Xunit;
 using Xunit.Abstractions;
+using FluentAssertions.Extensions;
+using static FluentAssertions.FluentActions;
 
 namespace Akka.Streams.Tests.Dsl
 {
@@ -50,7 +54,7 @@ namespace Akka.Streams.Tests.Dsl
                     _stage = stage;
                     _buffer = ByteString.Empty;
 
-                    SetHandler(stage.Inlet, stage.Outlet, this);
+                    SetHandlers(stage.Inlet, stage.Outlet, this);
                 }
 
                 public override void OnPush()
@@ -136,7 +140,7 @@ namespace Akka.Streams.Tests.Dsl
                         .RunWith(Sink.Seq<ByteString>(), Materializer);
 
                     task.Wait(TimeSpan.FromDays(3)).Should().BeTrue();
-                    task.Result.ShouldAllBeEquivalentTo(testSequence);
+                    task.Result.Should().BeEquivalentTo(testSequence);
                 }
             }
         }
@@ -150,21 +154,21 @@ namespace Akka.Streams.Tests.Dsl
                 .RunWith(Sink.Seq<string>(), Materializer);
 
             task1.Wait(TimeSpan.FromDays(3)).Should().BeTrue();
-            task1.Result.ShouldAllBeEquivalentTo(new[] {"a", "b", "c", "d"});
+            task1.Result.Should().BeEquivalentTo(new[] {"a", "b", "c", "d"});
 
             var task2 =
                 Source.Single(ByteString.FromString("ab\n"))
                     .Via(SimpleLines("\n", 1))
                     .Limit(100)
                     .RunWith(Sink.Seq<string>(), Materializer);
-            task2.Invoking(t => t.Wait(TimeSpan.FromSeconds(3))).ShouldThrow<Framing.FramingException>();
+            task2.Invoking(t => t.Wait(TimeSpan.FromSeconds(3))).Should().Throw<Framing.FramingException>();
 
             var task3 =
                 Source.Single(ByteString.FromString("aaa"))
                     .Via(SimpleLines("\n", 2))
                     .Limit(100)
                     .RunWith(Sink.Seq<string>(), Materializer);
-            task3.Invoking(t => t.Wait(TimeSpan.FromSeconds(3))).ShouldThrow<Framing.FramingException>();
+            task3.Invoking(t => t.Wait(TimeSpan.FromSeconds(3))).Should().Throw<Framing.FramingException>();
         }
 
         [Fact]
@@ -188,11 +192,11 @@ namespace Akka.Streams.Tests.Dsl
                     .Grouped(1000)
                     .RunWith(Sink.First<IEnumerable<string>>(), Materializer);
 
-            task.Invoking(t => t.Wait(TimeSpan.FromSeconds(3))).ShouldThrow<Framing.FramingException>();
+            task.Invoking(t => t.Wait(TimeSpan.FromSeconds(3))).Should().Throw<Framing.FramingException>();
         }
 
         [Fact]
-        public void Delimiter_bytes_based_framing_must_allow_truncated_frames_if_configured_so()
+        public async Task Delimiter_bytes_based_framing_must_allow_truncated_frames_if_configured_so()
         {
             var task =
                 Source.Single(ByteString.FromString("I have no end"))
@@ -200,7 +204,8 @@ namespace Akka.Streams.Tests.Dsl
                     .Grouped(1000)
                     .RunWith(Sink.First<IEnumerable<string>>(), Materializer);
 
-            task.AwaitResult().Should().ContainSingle(s => s.Equals("I have no end"));
+            var complete = await task.ShouldCompleteWithin(3.Seconds());
+            complete.Should().ContainSingle(s => s.Equals("I have no end"));
         }
 
         private static string RandomString(int length)
@@ -213,13 +218,13 @@ namespace Akka.Streams.Tests.Dsl
 
         private static readonly ByteString ReferenceChunk = ByteString.FromString(RandomString(0x100001));
 
-        private static readonly List<ByteOrder> ByteOrders = new List<ByteOrder>
+        private static readonly List<ByteOrder> ByteOrders = new()
         {
             ByteOrder.BigEndian,
             ByteOrder.LittleEndian
         };
 
-        private static readonly List<int> FrameLengths = new List<int>
+        private static readonly List<int> FrameLengths = new()
         {
             0,
             1,
@@ -236,47 +241,102 @@ namespace Akka.Streams.Tests.Dsl
             0x10001
         };
 
-        private static readonly List<int> FieldLengths = new List<int> {1, 2, 3, 4};
+        private static readonly List<int> FieldLengths = new() {1, 2, 3, 4};
 
-        private static readonly List<int> FieldOffsets = new List<int> {0, 1, 2, 3, 15, 16, 31, 32, 44, 107};
+        private static readonly List<int> FieldOffsets = new() {0, 1, 2, 3, 15, 16, 31, 32, 44, 107};
 
-        private static ByteString Encode(ByteString payload, int fieldOffset, int fieldLength, ByteOrder byteOrder)
+        private static ByteString Encode(ByteString payload, int fieldOffset, int fieldLength, ByteOrder byteOrder) =>
+            EncodeComplexFrame(payload, fieldLength, byteOrder, ByteString.FromBytes(new byte[fieldOffset]), ByteString.Empty);
+
+        private static ByteString EncodeComplexFrame(
+            ByteString payload, 
+            int fieldLength, 
+            ByteOrder byteOrder, 
+            ByteString offset, 
+            ByteString tail)
         {
             var h = ByteString.FromBytes(new byte[4].PutInt(payload.Count, order: byteOrder));
             var header = byteOrder == ByteOrder.LittleEndian ? h.Slice(0, fieldLength) : h.Slice(4 - fieldLength);
 
-            return ByteString.FromBytes(new byte[fieldOffset]) + header + payload;
+            return offset + header + payload + tail;
         }
 
         [Fact]
         public void Length_field_based_framing_must_work_with_various_byte_orders_frame_lengths_and_offsets()
         {
-            var counter = 1;
-            foreach (var byteOrder in ByteOrders)
+            IEnumerable<Task<(IEnumerable<ByteString>, List<ByteString>, (ByteOrder, int, int))>> GetFutureResults()
             {
+                foreach (var byteOrder in ByteOrders)
                 foreach (var fieldOffset in FieldOffsets)
+                foreach (var fieldLength in FieldLengths)
                 {
-                    foreach (var fieldLength in FieldLengths)
+                    var encodedFrames = FrameLengths.Where(x => x < 1L << (fieldLength * 8)).Select(length =>
                     {
-                        var encodedFrames = FrameLengths.Where(x => x < 1L << (fieldLength * 8)).Select(length =>
-                          {
-                              var payload = ReferenceChunk.Slice(0, length);
-                              return Encode(payload, fieldOffset, fieldLength, byteOrder);
-                          }).ToList();
+                        var payload = ReferenceChunk.Slice(0, length);
+                        return Encode(payload, fieldOffset, fieldLength, byteOrder);
+                    }).ToList();
 
-                        var task = Source.From(encodedFrames)
-                            .Via(Rechunk)
-                            .Via(Framing.LengthField(fieldLength, int.MaxValue, fieldOffset, byteOrder))
-                            .Grouped(10000)
-                            .RunWith(Sink.First<IEnumerable<ByteString>>(), Materializer);
-
-                        task.Wait(TimeSpan.FromSeconds(3)).Should().BeTrue();
-                        task.Result.ShouldAllBeEquivalentTo(encodedFrames);
-
-                        _helper.WriteLine($"{counter++} from 80 passed");
-                    }
+                    yield return Source.From(encodedFrames)
+                        .Via(Rechunk)
+                        .Via(Framing.LengthField(fieldLength, int.MaxValue, fieldOffset, byteOrder))
+                        .Grouped(10000)
+                        .RunWith(Sink.First<IEnumerable<ByteString>>(), Materializer)
+                        .ContinueWith(t => (t.Result, encodedFrames, (byteOrder, fieldOffset, fieldLength)));
                 }
             }
+
+            Parallel.ForEach(GetFutureResults(), async futureResult => 
+            { 
+                var (result, encodedFrames, (byteOrder, fieldOffset, fieldLength)) = await futureResult;
+                result.ShouldBeSame(encodedFrames, $"byteOrder: {byteOrder}, fieldOffset: {fieldOffset}, fieldLength: {fieldLength}");
+            });
+        }
+
+        [Fact]
+        public void Length_field_based_framing_must_work_with_various_byte_orders_frame_lengths_and_offsets_using_ComputeFrameSize()
+        {
+            IEnumerable<Task<(IEnumerable<ByteString>, List<ByteString>, (ByteOrder, int, int))>> GetFutureResults()
+            {
+                foreach (var byteOrder in ByteOrders)
+                foreach (var fieldOffset in FieldOffsets)
+                foreach (var fieldLength in FieldLengths)
+                {
+                    int ComputeFrameSize(IReadOnlyList<byte> offset, int length)
+                    {
+                        var sizeWithoutTail = offset.Count + fieldLength + length;
+                        return offset.Count > 0 ? offset[0] + sizeWithoutTail : sizeWithoutTail;
+                    }
+
+                    var random = new Random();
+                    byte[] Offset()
+                    {
+                        var arr = new byte[fieldOffset];
+                        if (arr.Length > 0) arr[0] = Convert.ToByte(random.Next(128));
+                        return arr;
+                    }
+
+                    var encodedFrames = FrameLengths.Where(x => x < 1L << (fieldLength * 8)).Select(length =>
+                    {
+                        var payload = ReferenceChunk.Slice(0, length);
+                        var offsetBytes = Offset();
+                        var tailBytes = offsetBytes.Length > 0 ? new byte[offsetBytes[0]] : Array.Empty<byte>();
+                        return EncodeComplexFrame(payload, fieldLength, byteOrder, ByteString.FromBytes(offsetBytes), ByteString.FromBytes(tailBytes));
+                    }).ToList();
+
+                    yield return Source.From(encodedFrames)
+                        .Via(Rechunk)
+                        .Via(Framing.LengthField(fieldLength, fieldOffset, int.MaxValue, byteOrder, ComputeFrameSize))
+                        .Grouped(10000)
+                        .RunWith(Sink.First<IEnumerable<ByteString>>(), Materializer)
+                        .ContinueWith(t => (t.Result, encodedFrames, (byteOrder, fieldOffset, fieldLength)));
+                }
+            }
+
+            Parallel.ForEach(GetFutureResults(), async futureResult => 
+            { 
+                var (result, encodedFrames, (byteOrder, fieldOffset, fieldLength)) = await futureResult;
+                result.ShouldBeSame(encodedFrames, $"byteOrder: {byteOrder}, fieldOffset: {fieldOffset}, fieldLength: {fieldLength}");
+            });
         }
 
         [Fact]
@@ -304,7 +364,7 @@ namespace Akka.Streams.Tests.Dsl
                     list.Add(s);
                     return list;
                 }, Materializer);
-            task1.Invoking(t => t.Wait(TimeSpan.FromSeconds(3))).ShouldThrow<Framing.FramingException>();
+            task1.Invoking(t => t.Wait(TimeSpan.FromSeconds(3))).Should().Throw<Framing.FramingException>();
 
             var task2 = Source.Single(Encode(ReferenceChunk.Slice(0, 100), 49, 1, ByteOrder.BigEndian))
                 .Via(Framing.LengthField(1, 100, 0, ByteOrder.BigEndian))
@@ -313,7 +373,7 @@ namespace Akka.Streams.Tests.Dsl
                     list.Add(s);
                     return list;
                 }, Materializer);
-            task2.Invoking(t => t.Wait(TimeSpan.FromSeconds(3))).ShouldThrow<Framing.FramingException>();
+            task2.Invoking(t => t.Wait(TimeSpan.FromSeconds(3))).Should().Throw<Framing.FramingException>();
         }
 
         [Fact]
@@ -340,7 +400,7 @@ namespace Akka.Streams.Tests.Dsl
                                         .Wait(TimeSpan.FromSeconds(5))
                                         .ShouldBeTrue("Stream should complete withing 5 seconds");
                             };
-                            action.ShouldThrow<Framing.FramingException>();
+                            action.Should().Throw<Framing.FramingException>();
                         }
                     }
                 }
@@ -365,11 +425,11 @@ namespace Akka.Streams.Tests.Dsl
                 .RunWith(Sink.Seq<ByteString>(), Materializer);
 
             task.Wait(TimeSpan.FromSeconds(3)).Should().BeTrue();
-            task.Result.ShouldAllBeEquivalentTo(testMessages);
+            task.Result.Should().BeEquivalentTo(testMessages);
         }
 
         [Fact]
-        public void Length_field_based_framing_must_fail_the_stage_on_negative_length_field_values()
+        public async Task Length_field_based_framing_must_fail_the_stage_on_negative_length_field_values()
         {
             // A 4-byte message containing only an Int specifying the length of the payload
             // The issue shows itself if length in message is less than or equal
@@ -380,13 +440,49 @@ namespace Akka.Streams.Tests.Dsl
                 .Via(Flow.Create<ByteString>().Via(Framing.LengthField(4, 1000)))
                 .RunWith(Sink.Seq<ByteString>(), Materializer);
 
-            result.Invoking(t => t.AwaitResult())
-                .ShouldThrow<Framing.FramingException>()
-                .WithMessage("Decoded frame header reported negative size -4");
+            await Awaiting(async () => await result)
+                .Should().ThrowAsync<Framing.FramingException>()
+                .WithMessage("Decoded frame header reported negative size -4")
+                .ShouldCompleteWithin(3.Seconds());
+        }
+        
+        [Fact]
+        public async Task Length_field_based_framing_must_ignore_length_field_value_when_provided_computeFrameSize()
+        {
+            int ComputeFrameSize(IReadOnlyList<byte> offset, int length) => 8;
+
+            var tempArray = new byte[4].PutInt(unchecked((int)0xFF010203), order: ByteOrder.LittleEndian);
+            Array.Resize(ref tempArray, 8);
+            var bs = ByteString.FromBytes(tempArray.PutInt(checked(0x04050607), order: ByteOrder.LittleEndian));
+
+            var result = Source.Single(bs)
+                .Via(Flow.Create<ByteString>().Via(Framing.LengthField(4, 0, 1000, ByteOrder.LittleEndian, ComputeFrameSize)))
+                .RunWith(Sink.Seq<ByteString>(), Materializer);
+
+            var complete = await result.ShouldCompleteWithin(3.Seconds());
+            complete.Should().BeEquivalentTo(ImmutableArray.Create(bs));
+        }
+        
+        [Fact]
+        public async Task Length_field_based_framing_must_fail_the_stage_on_computeFrameSize_values_less_than_minimum_chunk_size()
+        {
+            int ComputeFrameSize(IReadOnlyList<byte> offset, int length) => 3;
+
+            // A 4-byte message containing only an Int specifying the length of the payload
+            var bytes = ByteString.FromBytes(BitConverter.GetBytes(4));
+            
+            var result = Source.Single(bytes)
+                .Via(Flow.Create<ByteString>().Via(Framing.LengthField(4, 0, 1000, ByteOrder.LittleEndian, ComputeFrameSize)))
+                .RunWith(Sink.Seq<ByteString>(), Materializer);
+
+            await Awaiting(async () => await result)
+                .Should().ThrowAsync<Framing.FramingException>()
+                .WithMessage("Computed frame size 3 is less than minimum chunk size 4")
+                .ShouldCompleteWithin(3.Seconds());
         }
 
         [Fact]
-        public void Length_field_based_framing_must_let_zero_length_field_values_pass_through()
+        public async Task Length_field_based_framing_must_let_zero_length_field_values_pass_through()
         {
             // Interleave empty frames with a frame with data
             var b = ByteString.FromBytes(BitConverter.GetBytes(42).ToArray());
@@ -398,7 +494,8 @@ namespace Akka.Streams.Tests.Dsl
                 .Via(Flow.Create<ByteString>().Via(Framing.LengthField(4, 1000)))
                 .RunWith(Sink.Seq<ByteString>(), Materializer);
 
-            result.AwaitResult().Should().BeEquivalentTo(bytes.ToImmutableList());
+            var complete = await result.ShouldCompleteWithin(3.Seconds());
+            complete.Should().BeEquivalentTo(bytes.ToImmutableList());
         }
     }
 }

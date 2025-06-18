@@ -1,13 +1,14 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="NodeLeavingAndExitingSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System.Linq;
 using Akka.Actor;
 using Akka.Cluster.TestKit;
+using Akka.MultiNode.TestAdapter;
 using Akka.Remote.TestKit;
 using Akka.TestKit;
 
@@ -45,25 +46,24 @@ namespace Akka.Cluster.Tests.MultiNode
 
             protected override void OnReceive(object message)
             {
-                message.Match()
-                    .With<ClusterEvent.CurrentClusterState>(state =>
-                    {
+                switch (message)
+                {
+                    case ClusterEvent.CurrentClusterState state:
                         if (state.Members.Any(c => c.Address.Equals(_secondAddress) && c.Status == MemberStatus.Exiting))
                         {
                             _exitingLatch.CountDown();
                         }
-                    })
-                    .With<ClusterEvent.MemberExited>(m =>
-                    {
+                        break;
+                    case ClusterEvent.MemberExited m:
                         if (m.Member.Address.Equals(_secondAddress))
                         {
                             _exitingLatch.CountDown();
                         }
-                    })
-                    .With<ClusterEvent.MemberRemoved>(_ =>
-                    {
+                        break;
+                    case ClusterEvent.MemberRemoved _:
                         // not tested here
-                    });
+                        break;
+                }
             }
         }
 

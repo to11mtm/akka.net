@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="WriteAggregatorSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -28,15 +28,15 @@ namespace Akka.DistributedData.Tests
 
             public TestWriteAggregator(
                 IKey<T> key,
-                T data, 
+                T data,
                 Delta delta,
-                IWriteConsistency consistency, 
+                IWriteConsistency consistency,
                 IImmutableDictionary<Address, IActorRef> probes,
-                IImmutableSet<Address> nodes,
+                IImmutableList<Address> nodes,
                 IImmutableSet<Address> unreachable,
                 IActorRef replyTo,
-                bool durable) 
-                : base(key, new DataEnvelope(data), delta, consistency, null, nodes, unreachable, replyTo, durable)
+                bool durable)
+                : base(key, new DataEnvelope(data), delta, consistency, null, nodes, unreachable, false, replyTo, durable)
             {
                 _probes = probes;
             }
@@ -64,7 +64,7 @@ namespace Akka.DistributedData.Tests
         private static Props TestWriteAggregatorProps(GSet<string> data,
             IWriteConsistency consistency,
             IImmutableDictionary<Address, IActorRef> probes,
-            IImmutableSet<Address> nodes,
+            IImmutableList<Address> nodes,
             IImmutableSet<Address> unreachable,
             IActorRef replyTo,
             bool durable) => Actor.Props.Create(() => new TestWriteAggregator<GSet<string>>(KeyA, data, null, consistency, probes, nodes, unreachable, replyTo, durable));
@@ -73,23 +73,23 @@ namespace Akka.DistributedData.Tests
             Delta delta,
             IWriteConsistency consistency,
             IImmutableDictionary<Address, IActorRef> probes,
-            IImmutableSet<Address> nodes,
+            IImmutableList<Address> nodes,
             IImmutableSet<Address> unreachable,
             IActorRef replyTo,
             bool durable) => Actor.Props.Create(() => new TestWriteAggregator<ORSet<string>>(KeyB, data, delta, consistency, probes, nodes, unreachable, replyTo, durable));
 
-        private static readonly GSetKey<string> KeyA = new GSetKey<string>("a");
-        private static readonly ORSetKey<string> KeyB = new ORSetKey<string>("b");
+        private static readonly GSetKey<string> KeyA = new("a");
+        private static readonly ORSetKey<string> KeyB = new("b");
 
-        private readonly Address _nodeA = new Address("akka.tcp", "Sys", "a", 2552);
-        private readonly Address _nodeB = new Address("akka.tcp", "Sys", "b", 2552);
-        private readonly Address _nodeC = new Address("akka.tcp", "Sys", "c", 2552);
-        private readonly Address _nodeD = new Address("akka.tcp", "Sys", "d", 2552);
-        private readonly IImmutableSet<Address> _nodes;
+        private readonly Address _nodeA = new("akka.tcp", "Sys", "a", 2552);
+        private readonly Address _nodeB = new("akka.tcp", "Sys", "b", 2552);
+        private readonly Address _nodeC = new("akka.tcp", "Sys", "c", 2552);
+        private readonly Address _nodeD = new("akka.tcp", "Sys", "d", 2552);
+        private readonly IImmutableList<Address> _nodes;
 
         private readonly GSet<string> _data = GSet.Create("A", "B");
-        private readonly WriteTo _writeThree = new WriteTo(3, TimeSpan.FromSeconds(3));
-        private readonly WriteMajority _writeMajority = new WriteMajority(TimeSpan.FromSeconds(3));
+        private readonly WriteTo _writeThree = new(3, TimeSpan.FromSeconds(3));
+        private readonly WriteMajority _writeMajority = new(TimeSpan.FromSeconds(3));
         private readonly WriteAll _writeAll;
 
         private readonly ORSet<string> _fullState1;
@@ -104,7 +104,7 @@ namespace Akka.DistributedData.Tests
                 map-size = 10MiB
             }}"), "WriteAggregatorSpec", output)
         {
-            _nodes = ImmutableHashSet.CreateRange(new[] {_nodeA, _nodeB, _nodeC, _nodeD});
+            _nodes = ImmutableList.CreateRange(new[] {_nodeA, _nodeB, _nodeC, _nodeD});
 
             var cluster = Akka.Cluster.Cluster.Get(Sys);
             _fullState1 = ORSet<string>.Empty.Add(cluster, "a").Add(cluster, "b");
@@ -169,7 +169,7 @@ namespace Akka.DistributedData.Tests
                 Watch(aggregator);
                 ExpectTerminated(aggregator);
             });
-            
+
         }
 
         [Fact]
@@ -177,16 +177,42 @@ namespace Akka.DistributedData.Tests
         {
             var minCap = 5;
 
-            ReadWriteAggregator.CalculateMajorityWithMinCapacity(minCap, 3).Should().Be(3);
-            ReadWriteAggregator.CalculateMajorityWithMinCapacity(minCap, 4).Should().Be(4);
-            ReadWriteAggregator.CalculateMajorityWithMinCapacity(minCap, 5).Should().Be(5);
-            ReadWriteAggregator.CalculateMajorityWithMinCapacity(minCap, 6).Should().Be(5);
-            ReadWriteAggregator.CalculateMajorityWithMinCapacity(minCap, 7).Should().Be(5);
-            ReadWriteAggregator.CalculateMajorityWithMinCapacity(minCap, 8).Should().Be(5);
-            ReadWriteAggregator.CalculateMajorityWithMinCapacity(minCap, 9).Should().Be(5);
-            ReadWriteAggregator.CalculateMajorityWithMinCapacity(minCap, 10).Should().Be(6);
-            ReadWriteAggregator.CalculateMajorityWithMinCapacity(minCap, 11).Should().Be(6);
-            ReadWriteAggregator.CalculateMajorityWithMinCapacity(minCap, 12).Should().Be(7);
+            ReadWriteAggregator.CalculateMajority(minCap, 3, 0).Should().Be(3);
+            ReadWriteAggregator.CalculateMajority(minCap, 4, 0).Should().Be(4);
+            ReadWriteAggregator.CalculateMajority(minCap, 5, 0).Should().Be(5);
+            ReadWriteAggregator.CalculateMajority(minCap, 6, 0).Should().Be(5);
+            ReadWriteAggregator.CalculateMajority(minCap, 7, 0).Should().Be(5);
+            ReadWriteAggregator.CalculateMajority(minCap, 8, 0).Should().Be(5);
+            ReadWriteAggregator.CalculateMajority(minCap, 9, 0).Should().Be(5);
+            ReadWriteAggregator.CalculateMajority(minCap, 10, 0).Should().Be(6);
+            ReadWriteAggregator.CalculateMajority(minCap, 11, 0).Should().Be(6);
+            ReadWriteAggregator.CalculateMajority(minCap, 12, 0).Should().Be(7);
+        }
+
+        [Fact]
+        public void WriteAggregator_must_callculate_majority_with_additional()
+        {
+            ReadWriteAggregator.CalculateMajority(0, 3, 1).Should().Be(3);
+            ReadWriteAggregator.CalculateMajority(0, 3, 2).Should().Be(3);
+            ReadWriteAggregator.CalculateMajority(0, 4, 1).Should().Be(4);
+            ReadWriteAggregator.CalculateMajority(0, 5, 1).Should().Be(4);
+            ReadWriteAggregator.CalculateMajority(0, 5, 2).Should().Be(5);
+            ReadWriteAggregator.CalculateMajority(0, 6, 1).Should().Be(5);
+            ReadWriteAggregator.CalculateMajority(0, 7, 1).Should().Be(5);
+            ReadWriteAggregator.CalculateMajority(0, 8, 1).Should().Be(6);
+            ReadWriteAggregator.CalculateMajority(0, 8, 2).Should().Be(7);
+            ReadWriteAggregator.CalculateMajority(0, 9, 1).Should().Be(6);
+            ReadWriteAggregator.CalculateMajority(0, 10, 1).Should().Be(7);
+            ReadWriteAggregator.CalculateMajority(0, 11, 1).Should().Be(7);
+            ReadWriteAggregator.CalculateMajority(0, 11, 3).Should().Be(9);
+        }
+
+        [Fact]
+        public void WriteAggregator_must_callculate_majority_with_additional_and_min_capactiy()
+        {
+            ReadWriteAggregator.CalculateMajority(5, 9, 1).Should().Be(6);
+            ReadWriteAggregator.CalculateMajority(7, 9, 1).Should().Be(7);
+            ReadWriteAggregator.CalculateMajority(10, 9, 1).Should().Be(9);
         }
 
         [Fact]
@@ -249,13 +275,13 @@ namespace Akka.DistributedData.Tests
             probe.ExpectMsg<DeltaPropagation>();
             probe.LastSender.Tell(WriteAck.Instance);
             probe.ExpectMsg<DeltaPropagation>();
-            // nack
-            probe.LastSender.Tell(DeltaNack.Instance);
             probe.ExpectMsg<DeltaPropagation>();
-            // no reply
+            
+            // nack - will force a write to be sent right away
+            probe.LastSender.Tell(DeltaNack.Instance);
+            probe.ExpectMsg<Write>();
 
             // only 1 ack so we expect 3 full state Write
-            probe.ExpectMsg<Write>();
             probe.LastSender.Tell(WriteAck.Instance);
             probe.ExpectMsg<Write>();
             probe.ExpectMsg<Write>();
@@ -274,7 +300,7 @@ namespace Akka.DistributedData.Tests
             var probe = CreateTestProbe();
             var aggregator = Sys.ActorOf(TestWriteAggregatorProps(_data, _writeThree, Probes(probe.Ref), _nodes, ImmutableHashSet<Address>.Empty, TestActor, true));
             Watch(aggregator);
-            
+
             probe.ExpectMsg<Write>();
             probe.LastSender.Tell(WriteAck.Instance);
             probe.ExpectMsg<Write>();
@@ -294,7 +320,7 @@ namespace Akka.DistributedData.Tests
             var probe = CreateTestProbe();
             var aggregator = Sys.ActorOf(TestWriteAggregatorProps(_data, _writeThree, Probes(probe.Ref), _nodes, ImmutableHashSet<Address>.Empty, TestActor, true));
             Watch(aggregator);
-            
+
             aggregator.Tell(new UpdateSuccess(KeyA, null));
             probe.ExpectMsg<Write>();
             probe.LastSender.Tell(WriteAck.Instance);
@@ -353,7 +379,7 @@ namespace Akka.DistributedData.Tests
         }
 
         private IImmutableDictionary<Address, IActorRef> Probes(IActorRef probe) =>
-            _nodes.Select(address => 
+            _nodes.Select(address =>
                 new KeyValuePair<Address, IActorRef>(
                     address,
                     Sys.ActorOf(Props.Create(() => new WriteAckAdapter(probe)))))

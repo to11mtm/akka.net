@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ClusterSingletonProxySettings.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -27,12 +27,14 @@ namespace Akka.Cluster.Tools.Singleton
         /// <returns>TBD</returns>
         public static ClusterSingletonProxySettings Create(ActorSystem system)
         {
-            system.Settings.InjectTopLevelFallback(ClusterSingletonManager.DefaultConfig());
+            system.Settings.InjectTopLevelFallback(ClusterSingleton.DefaultConfig());
             var config = system.Settings.Config.GetConfig("akka.cluster.singleton-proxy");
             if (config.IsNullOrEmpty())
                 throw ConfigurationException.NullOrEmptyConfig<ClusterSingletonProxySettings>("akka.cluster.singleton-proxy");
 
-            return Create(config);
+            var considerAppVersion =
+                system.Settings.Config.GetBoolean("akka.cluster.singleton.consider-app-version", false);
+            return Create(config, considerAppVersion);
         }
 
         /// <summary>
@@ -40,8 +42,9 @@ namespace Akka.Cluster.Tools.Singleton
         /// the default configuration `akka.cluster.singleton-proxy`.
         /// </summary>
         /// <param name="config">TBD</param>
+        /// <param name="considerAppVersion">TBD</param>
         /// <returns>TBD</returns>
-        public static ClusterSingletonProxySettings Create(Config config)
+        public static ClusterSingletonProxySettings Create(Config config, bool considerAppVersion)
         {
             if (config.IsNullOrEmpty())
                 throw ConfigurationException.NullOrEmptyConfig<ClusterSingletonProxySettings>();
@@ -53,7 +56,10 @@ namespace Akka.Cluster.Tools.Singleton
                 singletonName: config.GetString("singleton-name"),
                 role: role,
                 singletonIdentificationInterval: config.GetTimeSpan("singleton-identification-interval"),
-                bufferSize: config.GetInt("buffer-size", 0));
+                bufferSize: config.GetInt("buffer-size", 0),
+                considerAppVersion: considerAppVersion, 
+                logSingletonIdentificationFailure: config.GetBoolean("log-singleton-identification-failure", true),
+                singletonIdentificationFailurePeriod: config.GetTimeSpan("singleton-identification-failure-period", TimeSpan.FromSeconds(30)));
         }
 
         /// <summary>
@@ -75,6 +81,23 @@ namespace Akka.Cluster.Tools.Singleton
         /// If the location of the singleton is unknown the proxy will buffer this number of messages and deliver them when the singleton is identified.
         /// </summary>
         public int BufferSize { get; }
+        
+        /// <summary>
+        /// Should <see cref="Member.AppVersion"/> be considered when the cluster singleton instance is being moved to another node.
+        /// When set to false, singleton instance will always be created on oldest member.
+        /// When set to true, singleton instance will be created on the oldest member with the highest <see cref="Member.AppVersion"/> number.
+        /// </summary>
+        public bool ConsiderAppVersion { get; }
+        
+        /// <summary>
+        /// Should the singleton proxy publish a warning if no singleton actor were found after a period of time
+        /// </summary>
+        public bool LogSingletonIdentificationFailure { get; }
+        
+        /// <summary>
+        /// The period the proxy will wait until it logs a missing singleton warning, defaults to 1 minute
+        /// </summary>
+        public TimeSpan SingletonIdentificationFailurePeriod { get; }
 
         /// <summary>
         /// Creates new instance of the <see cref="ClusterSingletonProxySettings"/>.
@@ -88,24 +111,78 @@ namespace Akka.Cluster.Tools.Singleton
         /// are sent via the proxy. Use 0 to disable buffering, i.e.messages will be dropped immediately if the location
         /// of the singleton is unknown.
         /// </param>
+        /// <param name="considerAppVersion">
+        /// Should <see cref="Member.AppVersion"/> be considered when the cluster singleton instance is being moved to another node.
+        /// When set to false, singleton instance will always be created on oldest member.
+        /// When set to true, singleton instance will be created on the oldest member with the highest <see cref="Member.AppVersion"/> number.
+        /// </param>
         /// <exception cref="ArgumentException">
         /// This exception is thrown when either the specified <paramref name="singletonIdentificationInterval"/>
         /// or <paramref name="bufferSize"/> is less than or equal to zero.
         /// </exception>
         /// <exception cref="ArgumentNullException"></exception>
-        public ClusterSingletonProxySettings(string singletonName, string role, TimeSpan singletonIdentificationInterval, int bufferSize)
+        [Obsolete("Use constructor with logSingletonIdentificationFailure and logSingletonIdentificationInterval parameter instead. Since v1.5.30")]
+        public ClusterSingletonProxySettings(
+            string singletonName,
+            string role,
+            TimeSpan singletonIdentificationInterval,
+            int bufferSize,
+            bool considerAppVersion)
+            : this(singletonName, role, singletonIdentificationInterval, bufferSize, considerAppVersion, true, TimeSpan.FromSeconds(30))
+        {
+        }
+
+        /// <summary>
+        /// Creates new instance of the <see cref="ClusterSingletonProxySettings"/>.
+        /// </summary>
+        /// <param name="singletonName">The actor name of the singleton actor that is started by the <see cref="ClusterSingletonManager"/>.</param>
+        /// <param name="role">The role of the cluster nodes where the singleton can be deployed. If None, then any node will do.</param>
+        /// <param name="singletonIdentificationInterval">Interval at which the proxy will try to resolve the singleton instance.</param>
+        /// <param name="bufferSize">
+        /// If the location of the singleton is unknown the proxy will buffer this number of messages and deliver them
+        /// when the singleton is identified.When the buffer is full old messages will be dropped when new messages
+        /// are sent via the proxy. Use 0 to disable buffering, i.e.messages will be dropped immediately if the location
+        /// of the singleton is unknown.
+        /// </param>
+        /// <param name="considerAppVersion">
+        /// Should <see cref="Member.AppVersion"/> be considered when the cluster singleton instance is being moved to another node.
+        /// When set to false, singleton instance will always be created on oldest member.
+        /// When set to true, singleton instance will be created on the oldest member with the highest <see cref="Member.AppVersion"/> number.
+        /// </param>
+        /// <param name="logSingletonIdentificationFailure">
+        /// Should the singleton proxy log a warning if no singleton actor were found after a period of time
+        /// </param>
+        /// <param name="singletonIdentificationFailurePeriod">
+        /// The period the proxy will wait until it logs a missing singleton warning, defaults to 1 minute
+        /// </param>
+        /// <exception cref="ArgumentException">
+        /// This exception is thrown when either the specified <paramref name="singletonIdentificationInterval"/>
+        /// or <paramref name="bufferSize"/> is less than or equal to zero.
+        /// </exception>
+        /// <exception cref="ArgumentNullException"></exception>
+        public ClusterSingletonProxySettings(
+            string singletonName,
+            string role,
+            TimeSpan singletonIdentificationInterval, 
+            int bufferSize, 
+            bool considerAppVersion,
+            bool logSingletonIdentificationFailure,
+            TimeSpan singletonIdentificationFailurePeriod)
         {
             if (string.IsNullOrEmpty(singletonName))
                 throw new ArgumentNullException(nameof(singletonName));
             if (singletonIdentificationInterval == TimeSpan.Zero)
                 throw new ArgumentException("singletonIdentificationInterval must be positive", nameof(singletonIdentificationInterval));
-            if (bufferSize <= 0)
-                throw new ArgumentException("bufferSize must be positive", nameof(bufferSize));
+            if (bufferSize < 0)
+                throw new ArgumentException("bufferSize must not be negative", nameof(bufferSize));
 
             SingletonName = singletonName;
             Role = role;
             SingletonIdentificationInterval = singletonIdentificationInterval;
             BufferSize = bufferSize;
+            ConsiderAppVersion = considerAppVersion;
+            LogSingletonIdentificationFailure = logSingletonIdentificationFailure;
+            SingletonIdentificationFailurePeriod = singletonIdentificationFailurePeriod;
         }
 
         /// <summary>
@@ -144,20 +221,6 @@ namespace Akka.Cluster.Tools.Singleton
         /// </summary>
         /// <param name="singletonIdentificationInterval">The identification level of the singleton proxy.</param>
         /// <returns>A new setting with the provided <paramref name="singletonIdentificationInterval" />.</returns>
-        [Obsolete("For compatibility reasons only. Use method with TimeSpan parameter instead")]
-        public ClusterSingletonProxySettings WithSingletonIdentificationInterval(string singletonIdentificationInterval)
-        {
-            return this;
-        }
-
-        /// <summary>
-        /// Creates a new <see cref="ClusterSingletonProxySettings" /> setting with the specified <paramref name="singletonIdentificationInterval"/>.
-        /// <note>
-        /// This method is immutable and returns a new instance of the setting.
-        /// </note>
-        /// </summary>
-        /// <param name="singletonIdentificationInterval">The identification level of the singleton proxy.</param>
-        /// <returns>A new setting with the provided <paramref name="singletonIdentificationInterval" />.</returns>
         public ClusterSingletonProxySettings WithSingletonIdentificationInterval(TimeSpan singletonIdentificationInterval)
         {
             return Copy(singletonIdentificationInterval: singletonIdentificationInterval);
@@ -176,14 +239,33 @@ namespace Akka.Cluster.Tools.Singleton
             return Copy(bufferSize: bufferSize);
         }
 
-        private ClusterSingletonProxySettings Copy(string singletonName = null, Option<string> role = default,
-            TimeSpan? singletonIdentificationInterval = null, int? bufferSize = null)
+        public ClusterSingletonProxySettings WithLogSingletonIdentificationFailure(bool logSingletonIdentificationFailure)
+        {
+            return Copy(logSingletonIdentificationFailure: logSingletonIdentificationFailure);
+        }
+
+        public ClusterSingletonProxySettings WithSingletonIdentificationFailureDuration(TimeSpan singletonIdentificationFailurePeriod)
+        {
+            return Copy(singletonIdentificationFailurePeriod: singletonIdentificationFailurePeriod);
+        }
+
+        private ClusterSingletonProxySettings Copy(
+            string singletonName = null,
+            Option<string> role = default,
+            TimeSpan? singletonIdentificationInterval = null,
+            int? bufferSize = null,
+            bool? considerAppVersion = null,
+            bool? logSingletonIdentificationFailure = null,
+            TimeSpan? singletonIdentificationFailurePeriod = null)
         {
             return new ClusterSingletonProxySettings(
                 singletonName: singletonName ?? SingletonName,
                 role: role.HasValue ? role.Value : Role,
                 singletonIdentificationInterval: singletonIdentificationInterval ?? SingletonIdentificationInterval,
-                bufferSize: bufferSize ?? BufferSize);
+                bufferSize: bufferSize ?? BufferSize,
+                considerAppVersion: considerAppVersion ?? ConsiderAppVersion,
+                logSingletonIdentificationFailure: logSingletonIdentificationFailure ?? LogSingletonIdentificationFailure,
+                singletonIdentificationFailurePeriod: singletonIdentificationFailurePeriod ?? SingletonIdentificationFailurePeriod);
         }
     }
 }

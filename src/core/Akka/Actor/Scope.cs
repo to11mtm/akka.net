@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="Scope.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -37,7 +37,6 @@ namespace Akka.Actor
         /// <returns>The newly created <see cref="Akka.Actor.Scope"/></returns>
         public abstract Scope Copy();
 
-        /// <inheritdoc/>
         public virtual bool Equals(Scope other)
         {
             if (other == null) return false;
@@ -54,15 +53,10 @@ namespace Akka.Actor
     {
         private NoScopeGiven() { }
 
-        private static readonly NoScopeGiven _instance = new NoScopeGiven();
-
         /// <summary>
         /// The singleton instance of this scope.
         /// </summary>
-        public static NoScopeGiven Instance
-        {
-            get { return _instance; }
-        }
+        public static NoScopeGiven Instance { get; } = new();
 
         /// <summary>
         /// Creates a new <see cref="Akka.Actor.Scope" /> from this scope using another <see cref="Akka.Actor.Scope" />

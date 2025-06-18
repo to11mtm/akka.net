@@ -1,158 +1,124 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="CoreAPISpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
-using System;
-using System.IO;
-using System.Linq;
-using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Cluster;
 using Akka.Cluster.Tools.Singleton;
 using Akka.Persistence;
 using Akka.Remote;
-using Akka.Streams.Dsl;
-using ApiApprover;
-using ApprovalTests;
-using Mono.Cecil;
 using Xunit;
 using Akka.Persistence.Query;
-using PublicApiGenerator;
 using static PublicApiGenerator.ApiGenerator;
 using Akka.Cluster.Sharding;
 using Akka.Cluster.Metrics;
-using Akka.Persistence.Query.Sql;
-using Akka.Persistence.Sql.Common.Journal;
+using Akka.Persistence.Query.InMemory;
+using Akka.Streams;
+using Akka.TestKit;
+using VerifyXunit;
 
 namespace Akka.API.Tests
 {
     public class CoreAPISpec
     {
-        [Fact]
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        public void ApproveCore()
+        static Task VerifyAssembly<T>()
         {
-            var publicApi = Filter(GeneratePublicApi(typeof(ActorSystem).Assembly));
-            Approvals.Verify(publicApi);
+            return Verifier.Verify(GeneratePublicApi(typeof(T).Assembly));
         }
 
         [Fact]
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        public void ApproveRemote()
+        public Task ApproveCore()
         {
-            var publicApi = Filter(GeneratePublicApi(typeof(RemoteSettings).Assembly));
-            Approvals.Verify(publicApi);
+            return VerifyAssembly<ActorSystem>();
         }
 
         [Fact]
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        public void ApprovePersistence()
+        public Task ApproveRemote()
         {
-            var publicApi = Filter(GeneratePublicApi(typeof(Persistent).Assembly));
-            Approvals.Verify(publicApi);
+            return VerifyAssembly<RemoteSettings>();
         }
 
         [Fact]
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        public void ApprovePersistenceQuery()
+        public Task ApprovePersistence()
         {
-            var publicApi = Filter(GeneratePublicApi(typeof(PersistenceQuery).Assembly));
-            Approvals.Verify(publicApi);
+            return VerifyAssembly<Persistent>();
         }
 
         [Fact]
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        public void ApprovePersistenceSqlCommon()
+        public Task ApprovePersistenceQuery()
         {
-            var publicApi = Filter(GeneratePublicApi(typeof(SqlJournal).Assembly));
-            Approvals.Verify(publicApi);
+            return VerifyAssembly<PersistenceQuery>();
         }
 
         [Fact]
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        public void ApprovePersistenceSqlCommonQuery()
+        public Task ApprovePersistenceInMemoryQuery()
         {
-            var publicApi = Filter(GeneratePublicApi(typeof(SqlReadJournal).Assembly));
-            Approvals.Verify(publicApi);
+            return VerifyAssembly<InMemoryReadJournal>();
         }
 
         [Fact]
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        public void ApproveCluster()
+        public Task ApproveCluster()
         {
-            var publicApi = Filter(GeneratePublicApi(typeof(ClusterSettings).Assembly));
-            Approvals.Verify(publicApi);
+            return VerifyAssembly<ClusterSettings>();
         }
 
         [Fact]
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        public void ApproveClusterTools()
+        public Task ApproveClusterTools()
         {
-            var publicApi = Filter(GeneratePublicApi(typeof(ClusterSingletonManager).Assembly));
-            Approvals.Verify(publicApi);
+            return VerifyAssembly<ClusterSingletonManager>();
         }
 
         [Fact]
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        public void ApproveStreams()
+        public Task ApproveStreams()
         {
-            var publicApi = Filter(GeneratePublicApi(typeof(Source).Assembly));
-            Approvals.Verify(publicApi);
+            return VerifyAssembly<Shape>();
         }
 
         [Fact]
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        public void ApproveClusterSharding()
+        public Task ApproveClusterSharding()
         {
-            var publicApi = Filter(GeneratePublicApi(typeof(ClusterSharding).Assembly));
-            Approvals.Verify(publicApi);
+            return VerifyAssembly<ClusterSharding>();
         }
 
         [Fact]
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        public void ApproveClusterMetrics()
+        public Task ApproveClusterMetrics()
         {
-            var publicApi = Filter(GeneratePublicApi(typeof(ClusterMetrics).Assembly));
-            Approvals.Verify(publicApi);
+            return VerifyAssembly<ClusterMetrics>();
         }
 
         [Fact]
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        public void ApproveDistributedData()
+        public Task ApproveDistributedData()
         {
-            var publicApi = Filter(GeneratePublicApi(typeof(DistributedData.DistributedData).Assembly));
-            Approvals.Verify(publicApi);
+            return VerifyAssembly<DistributedData.DistributedData>();
         }
 
         [Fact]
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        public void ApproveCoordination()
+        public Task ApproveCoordination()
         {
-            var publicApi = Filter(GeneratePublicApi(typeof(Coordination.Lease).Assembly));
-            Approvals.Verify(publicApi);
+            return VerifyAssembly<Coordination.Lease>();
+        }
+
+        [Fact]
+        public Task ApproveDiscovery()
+        {
+            return VerifyAssembly<Discovery.Lookup>();
         }
         
         [Fact]
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        public void ApproveDiscovery()
+        public Task ApproveTestKit()
         {
-            var publicApi = Filter(GeneratePublicApi(typeof(Discovery.Lookup).Assembly));
-            Approvals.Verify(publicApi);
+            return VerifyAssembly<TestKitBase>();
         }
-
-        static string Filter(string text)
+        
+        
+        [Fact]
+        public Task ApproveTestKitXunit2()
         {
-            return string.Join(Environment.NewLine, text.Split(new[]
-            {
-                Environment.NewLine
-            }, StringSplitOptions.RemoveEmptyEntries)
-                .Where(l => !l.StartsWith("[assembly: ReleaseDateAttribute("))
-                .Where(l => !string.IsNullOrWhiteSpace(l))
-                );
+            return VerifyAssembly<TestKit.Xunit2.TestKit>();
         }
-
     }
 }

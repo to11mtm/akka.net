@@ -1,13 +1,14 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="Tcp.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using System.Collections.Immutable;
 using System.Net;
+using System.Runtime.Serialization;
 using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Annotations;
@@ -27,12 +28,12 @@ namespace Akka.Streams.Dsl
         /// </summary>
         /// <param name="system">TBD</param>
         /// <returns>TBD</returns>
-        public override TcpExt CreateExtension(ExtendedActorSystem system) => new TcpExt(system);
+        public override TcpExt CreateExtension(ExtendedActorSystem system) => new(system);
 
         /// <summary>
         /// Represents a successful TCP server binding.
         /// </summary>
-        public struct ServerBinding
+        public readonly struct ServerBinding
         {
             private readonly Func<Task> _unbindAction;
 
@@ -62,7 +63,7 @@ namespace Akka.Streams.Dsl
         /// <summary>
         /// Represents an accepted incoming TCP connection.
         /// </summary>
-        public struct IncomingConnection
+        public readonly struct IncomingConnection
         {
             /// <summary>
             /// Initializes a new instance of the <see cref="IncomingConnection"/> class.
@@ -109,7 +110,7 @@ namespace Akka.Streams.Dsl
         /// <summary>
         /// Represents a prospective outgoing TCP connection.
         /// </summary>
-        public struct OutgoingConnection
+        public readonly struct OutgoingConnection
         {
             /// <summary>
             /// Initializes a new instance of the <see cref="OutgoingConnection"/> class.
@@ -179,21 +180,15 @@ namespace Akka.Streams.Dsl
         /// <param name="idleTimeout">TBD</param>
         /// <exception cref="ArgumentException">TBD</exception>
         /// <returns>TBD</returns>
+        // TODO: this really needs to be an async method
         public Source<Tcp.IncomingConnection, Task<Tcp.ServerBinding>> Bind(string host, int port, int backlog = 100,
             IImmutableList<Inet.SocketOption> options = null, bool halfClose = false, TimeSpan? idleTimeout = null)
         {
-            IPAddress[] ipAddresses;
-            if (IPAddress.TryParse(host,out var ipAddress))
-            {
-                ipAddresses = new[] { ipAddress };
-            }
-            else
-            {
-                ipAddresses = System.Net.Dns.GetHostAddressesAsync(host).Result;   
-            }
             // DnsEndpoint isn't allowed
+            var ipAddresses = System.Net.Dns.GetHostAddressesAsync(host).Result;
             if (ipAddresses.Length == 0)
-                throw new ArgumentException($"Couldn't resolve IpAdress for host {host}", nameof(host));
+                throw new ArgumentException($"Couldn't resolve IpAddress for host {host}", nameof(host));
+
             return Source.FromGraph(new ConnectionSourceStage(_system.Tcp(), new IPEndPoint(ipAddresses[0], port), backlog,
                 options, halfClose, idleTimeout, BindShutdownTimeout));
         }
@@ -283,8 +278,7 @@ namespace Akka.Streams.Dsl
 
         internal static EndPoint CreateEndpoint(string host, int port)
         {
-            IPAddress address;
-            return IPAddress.TryParse(host, out address)
+            return IPAddress.TryParse(host, out var address)
                 ? (EndPoint) new IPEndPoint(address, port)
                 : new DnsEndPoint(host, port);
         }
@@ -309,6 +303,13 @@ namespace Akka.Streams.Dsl
         {
             Duration = duration;
         }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="TcpIdleTimeoutException"/> class.
+        /// </summary>
+        /// <param name="info">The <see cref="SerializationInfo" /> that holds the serialized object data about the exception being thrown.</param>
+        /// <param name="context">The <see cref="StreamingContext" /> that contains contextual information about the source or destination.</param>
+        public TcpIdleTimeoutException(SerializationInfo info, StreamingContext context) : base(info, context) { }
 
         public TimeSpan Duration { get; }
     }

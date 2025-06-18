@@ -1,18 +1,21 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ActorMaterializerSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using System.Linq;
+using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Pattern;
 using Akka.Streams.Dsl;
 using Akka.Streams.Implementation;
 using Akka.TestKit;
+using Akka.TestKit.Extensions;
 using FluentAssertions;
+using FluentAssertions.Extensions;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -35,15 +38,15 @@ namespace Akka.Streams.Tests
         }
 
         [Fact]
-        public void ActorMaterializer_should_properly_shut_down_actors_associated_with_it()
+        public async Task ActorMaterializer_should_properly_shut_down_actors_associated_with_it()
         {
             var m = Sys.Materializer();
             var f = Source.Maybe<int>().RunAggregate(0, (x, y) => x + y, m);
 
             m.Shutdown();
 
-            Action action = () => f.Wait(TimeSpan.FromSeconds(3));
-            action.ShouldThrow<AbruptTerminationException>();
+            Func<Task> task = () => f.ShouldCompleteWithin(3.Seconds());
+            await task.Should().ThrowAsync<AbruptTerminationException>();
         }
 
         [Fact]
@@ -53,21 +56,21 @@ namespace Akka.Streams.Tests
             m.Shutdown();
 
             Action action = () => Source.From(Enumerable.Range(1, 5)).RunForeach(Console.Write, m);
-            action.ShouldThrow<IllegalStateException>();
+            action.Should().Throw<IllegalStateException>();
         }
 
         [Fact]
-        public void ActorMaterializer_should_shut_down_supervisor_actor_it_encapsulates()
+        public async Task ActorMaterializer_should_shut_down_supervisor_actor_it_encapsulates()
         {
-            var m = Sys.Materializer() as ActorMaterializerImpl;
+            var m = (ActorMaterializerImpl) Sys.Materializer();
             Source.From(Enumerable.Empty<object>()).To(Sink.Ignore<object>()).Run(m);
 
             m.Supervisor.Tell(StreamSupervisor.GetChildren.Instance);
-            ExpectMsg<StreamSupervisor.Children>();
+            await ExpectMsgAsync<StreamSupervisor.Children>();
             m.Shutdown();
 
             m.Supervisor.Tell(StreamSupervisor.GetChildren.Instance);
-            ExpectNoMsg(TimeSpan.FromSeconds(1));
+            await ExpectNoMsgAsync(TimeSpan.FromSeconds(1));
         }
 
         [Fact]
@@ -75,7 +78,7 @@ namespace Akka.Streams.Tests
         {
             var m = Sys.Materializer();
             Action action = () => Source.ActorPublisher<object>(Props.Create(typeof(TestActor), "wrong", "args")).RunWith(Sink.First<object>(), m);
-            action.ShouldThrow<ArgumentException>();
+            action.Should().Throw<ArgumentException>();
         }
 
         [Fact]
@@ -85,6 +88,24 @@ namespace Akka.Streams.Tests
             var m = sys.Materializer();
             sys.Terminate().Wait();
             m.IsShutdown.Should().BeTrue();
+        }
+
+        [Fact]
+        public async Task CanMaterializeStreamsUsingActorSystem()
+        {
+            Func<Task> task = () => Source.Single(1).RunForeach(_ => { }, Sys);
+            await task.Should().NotThrowAsync();
+        }
+        
+        [Fact]
+        public void ShouldReturnSameMaterializerForActorSystem()
+        {
+            var mat1 = Sys.Materializer();
+            var mat2 = Sys.Materializer();
+            var mat3 = Sys.Materializer(namePrefix: "different");
+            
+            mat1.Should().Be(mat2);
+            mat1.Should().NotBe(mat3);
         }
     }
 }

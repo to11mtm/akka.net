@@ -1,34 +1,61 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="GetShardTypeNamesSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using Akka.Cluster.Tools.Singleton;
 using Akka.Configuration;
+using Akka.TestKit;
 using Akka.TestKit.TestActors;
 using Akka.Util;
 using FluentAssertions;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace Akka.Cluster.Sharding.Tests
 {
-    public class GetShardTypeNamesSpec : Akka.TestKit.Xunit2.TestKit
+    public class GetShardTypeNamesSpec : AkkaSpec
     {
-        public GetShardTypeNamesSpec() : base(GetConfig())
+        private class MessageExtractor: IMessageExtractor
         {
-        }
+            public string EntityId(object message)
+                => message switch
+                {
+                    int i => i.ToString(),
+                    _ => null
+                };
 
-        public static Config GetConfig()
-        {
-            return ConfigurationFactory.ParseString(@"akka.actor.provider = cluster
-                                                     akka.remote.dot-netty.tcp.port = 0")
+            public object EntityMessage(object message)
+                => message;
+
+            public string ShardId(object message)
+                => message switch
+                {
+                    int i => (i % 10).ToString(),
+                    _ => null
+                };
+
+            public string ShardId(string entityId, object messageHint = null)
+                => (int.Parse(entityId) % 10).ToString();
+        }
+        
+        private static Config SpecConfig =>
+            ConfigurationFactory.ParseString(@"
+                akka.actor.provider = cluster
+                akka.remote.dot-netty.tcp.port = 0
+                akka.cluster.sharding.fail-on-invalid-entity-state-transition = on")
 
                 .WithFallback(Sharding.ClusterSharding.DefaultConfig())
                 .WithFallback(DistributedData.DistributedData.DefaultConfig())
-                .WithFallback(ClusterSingletonManager.DefaultConfig());
+                .WithFallback(ClusterSingleton.DefaultConfig());
+
+        private readonly MessageExtractor _messageExtractor = new();
+        
+        public GetShardTypeNamesSpec(ITestOutputHelper helper) : base(SpecConfig, helper)
+        {
         }
 
         [Fact]
@@ -42,30 +69,10 @@ namespace Akka.Cluster.Sharding.Tests
         {
             Cluster.Get(Sys).Join(Cluster.Get(Sys).SelfAddress);
             var settings = ClusterShardingSettings.Create(Sys);
-            ClusterSharding.Get(Sys).Start("type1", EchoActor.Props(this), settings, ExtractEntityId, ExtractShardId);
-            ClusterSharding.Get(Sys).Start("type2", EchoActor.Props(this), settings, ExtractEntityId, ExtractShardId);
+            ClusterSharding.Get(Sys).Start("type1", SimpleEchoActor.Props(), settings, _messageExtractor);
+            ClusterSharding.Get(Sys).Start("type2", SimpleEchoActor.Props(), settings, _messageExtractor);
 
-            ClusterSharding.Get(Sys).ShardTypeNames.ShouldBeEquivalentTo(new string[] { "type1", "type2" });
-        }
-
-        private Option<(string, object)> ExtractEntityId(object message)
-        {
-            switch (message)
-            {
-                case int i:
-                    return (i.ToString(), message);
-            }
-            throw new NotSupportedException();
-        }
-
-        private string ExtractShardId(object message)
-        {
-            switch (message)
-            {
-                case int i:
-                    return (i % 10).ToString();
-            }
-            throw new NotSupportedException();
+            ClusterSharding.Get(Sys).ShardTypeNames.Should().BeEquivalentTo("type1", "type2");
         }
     }
 }

@@ -1,19 +1,16 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="WrappedPayloadSupport.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using Akka.Actor;
-using Akka.Remote.Transport;
-using Akka.Serialization;
-using Akka.Util;
 using Google.Protobuf;
 
 namespace Akka.Remote.Serialization
 {
-    internal class WrappedPayloadSupport
+    internal sealed class WrappedPayloadSupport
     {
         private readonly ExtendedActorSystem _system;
 
@@ -50,7 +47,7 @@ namespace Akka.Remote.Serialization
                 : string.Empty;
 
             return _system.Serialization.Deserialize(
-                ByteStringConverters._getByteArrayUnsafeFunc(payload.Message),
+                payload.Message.ToByteArray(),
                 payload.SerializerId,
                 manifest);
         }

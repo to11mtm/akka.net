@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="XAssert.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -16,13 +16,13 @@ namespace Akka.TestKit
 {
     public static class XAssert
     {
-        private static readonly XunitAssertions _assertions = new XunitAssertions();
+        private static readonly XunitAssertions _assertions = new();
         /// <summary>
         /// Fails the test with the specified reason.
         /// </summary>
         public static void Fail(string reason)
         {
-            Assert.True(false, reason);
+            Assert.Fail(reason);
         }
 
         /// <summary>
@@ -53,9 +53,9 @@ namespace Akka.TestKit
             }
             catch(Exception ex)
             {
-                if(ex is T)
+                if(ex is T exception1)
                 {
-                    return (T) ex;
+                    return exception1;
                 }
                 exception = ex;
             }

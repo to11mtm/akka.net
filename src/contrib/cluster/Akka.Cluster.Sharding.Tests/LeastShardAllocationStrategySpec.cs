@@ -1,26 +1,27 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="LeastShardAllocationStrategySpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
+using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.TestKit;
-using Akka.TestKit.Xunit2;
-using Xunit;
-using FluentAssertions;
-using System.Collections;
-using System;
 using Akka.Util;
+using FluentAssertions;
+using Xunit;
+using Xunit.Abstractions;
 using static Akka.Cluster.ClusterEvent;
 
 namespace Akka.Cluster.Sharding.Tests
 {
-    public class LeastShardAllocationStrategySpec : TestKit.Xunit2.TestKit
+    public class LeastShardAllocationStrategySpec : AkkaSpec
     {
         private class DummyActorRef : MinimalActorRef
         {
@@ -97,10 +98,10 @@ namespace Akka.Cluster.Sharding.Tests
         /// <typeparam name="TValue"></typeparam>
         internal sealed class ImmutableDictionaryKeepOrder<TKey, TValue> : IImmutableDictionary<TKey, TValue>
         {
-            public static readonly ImmutableDictionaryKeepOrder<TKey, TValue> Empty = new ImmutableDictionaryKeepOrder<TKey, TValue>(ImmutableDictionary<TKey, TValue>.Empty, ImmutableList<KeyValuePair<TKey, TValue>>.Empty);
+            public static readonly ImmutableDictionaryKeepOrder<TKey, TValue> Empty = new(ImmutableDictionary<TKey, TValue>.Empty, ImmutableList<KeyValuePair<TKey, TValue>>.Empty);
 
-            private readonly ImmutableDictionary<TKey, TValue> _dictionary = ImmutableDictionary<TKey, TValue>.Empty;
-            private readonly ImmutableList<KeyValuePair<TKey, TValue>> _items = ImmutableList<KeyValuePair<TKey, TValue>>.Empty;
+            private readonly ImmutableDictionary<TKey, TValue> _dictionary;
+            private readonly ImmutableList<KeyValuePair<TKey, TValue>> _items;
 
             private ImmutableDictionaryKeepOrder(ImmutableDictionary<TKey, TValue> dictionary, ImmutableList<KeyValuePair<TKey, TValue>> items)
             {
@@ -220,7 +221,7 @@ namespace Akka.Cluster.Sharding.Tests
         private readonly IImmutableList<string> shards = Enumerable.Range(1, 999).Select(n => n.ToString("000")).ToImmutableList();
         private readonly IShardAllocationStrategy strategyWithoutLimits;
 
-        public LeastShardAllocationStrategySpec()
+        public LeastShardAllocationStrategySpec(ITestOutputHelper helper) : base(helper)
         {
             memberA = NewUpMember("127.0.0.1");
             memberB = NewUpMember("127.0.0.2");
@@ -233,7 +234,7 @@ namespace Akka.Cluster.Sharding.Tests
             strategyWithoutLimits = StrategyWithFakeCluster(absoluteLimit: 1000, relativeLimit: 1.0);
         }
 
-        internal class TestLeastShardAllocationStrategy : Internal.LeastShardAllocationStrategy
+        internal class TestLeastShardAllocationStrategy : Sharding.Internal.LeastShardAllocationStrategy
         {
             private readonly Func<CurrentClusterState> clusterState;
             private readonly Func<Member> selfMember;
@@ -311,76 +312,76 @@ namespace Akka.Cluster.Sharding.Tests
         }
 
         [Fact]
-        public void LeastShardAllocationStrategy_must_rebalance_shards_4_4_0()
+        public async Task LeastShardAllocationStrategy_must_rebalance_shards_4_4_0()
         {
             var allocationStrategy = strategyWithoutLimits;
             var allocations = CreateAllocations(aCount: 4, bCount: 4);
-            var result = allocationStrategy.Rebalance(allocations, ImmutableHashSet<string>.Empty).Result;
+            var result = await allocationStrategy.Rebalance(allocations, ImmutableHashSet<string>.Empty);
             result.Should().BeEquivalentTo("001", "005");
             AllocationCountsAfterRebalance(allocationStrategy, allocations, result).Should().Equal(3, 3, 2);
         }
 
         [Fact]
-        public void LeastShardAllocationStrategy_must_rebalance_shards_4_4_2()
+        public async Task LeastShardAllocationStrategy_must_rebalance_shards_4_4_2()
         {
             // this is handled by phase 2, to find diff of 2
             var allocationStrategy = strategyWithoutLimits;
             var allocations = CreateAllocations(aCount: 4, bCount: 4, cCount: 2);
-            var result = allocationStrategy.Rebalance(allocations, ImmutableHashSet<string>.Empty).Result;
+            var result = await allocationStrategy.Rebalance(allocations, ImmutableHashSet<string>.Empty);
             result.Should().BeEquivalentTo("001");
             AllocationCountsAfterRebalance(allocationStrategy, allocations, result).OrderBy(i => i).Should().Equal(new[] { 3, 4, 3 }.OrderBy(i => i));
         }
 
         [Fact]
-        public void LeastShardAllocationStrategy_must_rebalance_shards_5_5_0()
+        public async Task LeastShardAllocationStrategy_must_rebalance_shards_5_5_0()
         {
             var allocationStrategy = strategyWithoutLimits;
             var allocations = CreateAllocations(aCount: 5, bCount: 5);
-            var result1 = allocationStrategy.Rebalance(allocations, ImmutableHashSet<string>.Empty).Result;
+            var result1 = await allocationStrategy.Rebalance(allocations, ImmutableHashSet<string>.Empty);
             result1.Should().BeEquivalentTo("001", "006");
 
             // so far [4, 4, 2]
             AllocationCountsAfterRebalance(allocationStrategy, allocations, result1).Should().Equal(4, 4, 2);
             var allocations2 = AfterRebalance(allocationStrategy, allocations, result1);
             // second phase will find the diff of 2, resulting in [3, 4, 3]
-            var result2 = allocationStrategy.Rebalance(allocations2, ImmutableHashSet<string>.Empty).Result;
+            var result2 = await allocationStrategy.Rebalance(allocations2, ImmutableHashSet<string>.Empty);
             result2.Should().BeEquivalentTo("002");
             AllocationCountsAfterRebalance(allocationStrategy, allocations2, result2).OrderBy(i => i).Should().Equal(new[] { 3, 4, 3 }.OrderBy(i => i));
         }
 
         [Fact]
-        public void LeastShardAllocationStrategy_must_rebalance_shards_50_50_0()
+        public async Task LeastShardAllocationStrategy_must_rebalance_shards_50_50_0()
         {
             var allocationStrategy = strategyWithoutLimits;
             var allocations = CreateAllocations(aCount: 50, cCount: 50);
-            var result1 = allocationStrategy.Rebalance(allocations, ImmutableHashSet<string>.Empty).Result;
+            var result1 = await allocationStrategy.Rebalance(allocations, ImmutableHashSet<string>.Empty);
             result1.Should().BeEquivalentTo(shards.Take(50 - 34).Union(shards.Skip(50).Take(50 - 34)));
 
             // so far [34, 34, 32]
             AllocationCountsAfterRebalance(allocationStrategy, allocations, result1).OrderBy(i => i).Should().Equal(new[] { 34, 34, 32 }.OrderBy(i => i));
             var allocations2 = AfterRebalance(allocationStrategy, allocations, result1);
             // second phase will find the diff of 2, resulting in [33, 34, 33]
-            var result2 = allocationStrategy.Rebalance(allocations2, ImmutableHashSet<string>.Empty).Result;
+            var result2 = await allocationStrategy.Rebalance(allocations2, ImmutableHashSet<string>.Empty);
             result2.Should().BeEquivalentTo("017");
             AllocationCountsAfterRebalance(allocationStrategy, allocations2, result2).OrderBy(i => i).Should().Equal(new[] { 33, 34, 33 }.OrderBy(i => i));
         }
 
         [Fact]
-        public void LeastShardAllocationStrategy_must_respect_absolute_limit_of_number_shards()
+        public async Task LeastShardAllocationStrategy_must_respect_absolute_limit_of_number_shards()
         {
             var allocationStrategy = StrategyWithFakeCluster(absoluteLimit: 3, relativeLimit: 1.0);
             var allocations = CreateAllocations(aCount: 1, bCount: 9);
-            var result = allocationStrategy.Rebalance(allocations, ImmutableHashSet<string>.Empty).Result;
+            var result = await allocationStrategy.Rebalance(allocations, ImmutableHashSet<string>.Empty);
             result.Should().BeEquivalentTo("002", "003", "004");
             AllocationCountsAfterRebalance(allocationStrategy, allocations, result).Should().Equal(2, 6, 2);
         }
 
         [Fact]
-        public void LeastShardAllocationStrategy_must_respect_relative_limit_of_number_shards()
+        public async Task LeastShardAllocationStrategy_must_respect_relative_limit_of_number_shards()
         {
             var allocationStrategy = StrategyWithFakeCluster(absoluteLimit: 5, relativeLimit: 0.3);
             var allocations = CreateAllocations(aCount: 1, bCount: 9);
-            var result = allocationStrategy.Rebalance(allocations, ImmutableHashSet<string>.Empty).Result;
+            var result = await allocationStrategy.Rebalance(allocations, ImmutableHashSet<string>.Empty);
             result.Should().BeEquivalentTo("002", "003", "004");
             AllocationCountsAfterRebalance(allocationStrategy, allocations, result).Should().Equal(2, 6, 2);
         }
@@ -414,15 +415,15 @@ namespace Akka.Cluster.Sharding.Tests
             var fakeRegionD = NewFakeRegion("most", newVersionMember3);
 
             var shardsAndMembers = ImmutableList.Create(
-                new Internal.AbstractLeastShardAllocationStrategy.RegionEntry(fakeRegionB, newVersionMember1, ImmutableList<string>.Empty),
-                new Internal.AbstractLeastShardAllocationStrategy.RegionEntry(fakeRegionA, leavingMember, ImmutableList<string>.Empty),
-                new Internal.AbstractLeastShardAllocationStrategy.RegionEntry(fakeRegionD, newVersionMember3, ImmutableList.Create("ShardId2", "ShardId3")),
-                new Internal.AbstractLeastShardAllocationStrategy.RegionEntry(fakeLocalRegion, oldMember, ImmutableList<string>.Empty),
-                new Internal.AbstractLeastShardAllocationStrategy.RegionEntry(fakeRegionC, newVersionMember2, ImmutableList.Create("ShardId1"))
+                new Sharding.Internal.AbstractLeastShardAllocationStrategy.RegionEntry(fakeRegionB, newVersionMember1, ImmutableList<string>.Empty),
+                new Sharding.Internal.AbstractLeastShardAllocationStrategy.RegionEntry(fakeRegionA, leavingMember, ImmutableList<string>.Empty),
+                new Sharding.Internal.AbstractLeastShardAllocationStrategy.RegionEntry(fakeRegionD, newVersionMember3, ImmutableList.Create("ShardId2", "ShardId3")),
+                new Sharding.Internal.AbstractLeastShardAllocationStrategy.RegionEntry(fakeLocalRegion, oldMember, ImmutableList<string>.Empty),
+                new Sharding.Internal.AbstractLeastShardAllocationStrategy.RegionEntry(fakeRegionC, newVersionMember2, ImmutableList.Create("ShardId1"))
                 );
 
             var sortedRegions =
-                shardsAndMembers.Sort(Internal.AbstractLeastShardAllocationStrategy.ShardSuitabilityOrdering.Instance).Select(i => i.Region);
+                shardsAndMembers.Sort(Sharding.Internal.AbstractLeastShardAllocationStrategy.ShardSuitabilityOrdering.Instance).Select(i => i.Region);
 
             // only node b has the new version
             sortedRegions.Should().Equal(

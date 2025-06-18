@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="WeightedRouteesSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -16,7 +16,6 @@ using Akka.Routing;
 using Akka.TestKit;
 using Akka.Util.Internal;
 using FluentAssertions;
-using Akka.Configuration;
 using Xunit;
 using ConfigurationFactory = Akka.Configuration.ConfigurationFactory;
 
@@ -77,17 +76,17 @@ namespace Akka.Cluster.Metrics.Tests
         {
             var empty = new WeightedRoutees(ImmutableArray<Routee>.Empty, _a1, ImmutableDictionary<Address, int>.Empty);
             empty.IsEmpty.Should().BeTrue();
-            empty.Invoking(e => _ = e.Total).ShouldThrow<IllegalStateException>();
+            empty.Invoking(e => _ = e.Total).Should().Throw<IllegalStateException>();
             
             var empty2 = new WeightedRoutees(ImmutableArray.Create<Routee>(_routeeA), _a1, ImmutableDictionary<Address, int>.Empty.Add(_a1, 0));
             empty2.IsEmpty.Should().BeTrue();
-            empty2.Invoking(e => _ = e.Total).ShouldThrow<IllegalStateException>();
-            empty2.Invoking(e => _ = e[0]).ShouldThrow<IllegalStateException>();
+            empty2.Invoking(e => _ = e.Total).Should().Throw<IllegalStateException>();
+            empty2.Invoking(e => _ = e[0]).Should().Throw<IllegalStateException>();
             
             var weighted = new WeightedRoutees(_routees, _a1, ImmutableDictionary<Address, int>.Empty);
             weighted.Total.Should().Be(3);
-            weighted.Invoking(e => _ = e[0]).ShouldThrow<ArgumentException>();
-            weighted.Invoking(e => _ = e[4]).ShouldThrow<ArgumentException>();
+            weighted.Invoking(e => _ = e[0]).Should().Throw<ArgumentException>();
+            weighted.Invoking(e => _ = e[4]).Should().Throw<ArgumentException>();
         }
 
         [Fact]

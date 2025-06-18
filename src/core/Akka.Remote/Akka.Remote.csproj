@@ -7,22 +7,33 @@
     <PackageTags>$(AkkaPackageTags);network</PackageTags>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
+    <PropertyGroup>
+        <Description>Remoting support for Akka.NET. Allows actors to communicate over the network.</Description>
+        <TargetFrameworks>$(NetStandardLibVersion);$(NetLibVersion)</TargetFrameworks>
+        <PackageTags>$(AkkaPackageTags);network</PackageTags>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    </PropertyGroup>
+    <ItemGroup>
+        <EmbeddedResource Include="Configuration\Remote.conf" />
+        <ProjectReference Include="..\Akka\Akka.csproj" />
+      <ProjectReference Include="..\Akka.Streams\Akka.Streams.csproj" />
+    </ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="DotNetty.Handlers" Version="0.7.6" />
+        <PackageReference Include="Google.Protobuf" Version="$(ProtobufVersion)" />
+        <PackageReference Include="Grpc.Tools" Version="$(GrpcToolsVersion)">
+          <PrivateAssets>all</PrivateAssets>
+          <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+        </PackageReference>
+    </ItemGroup>
+
   <ItemGroup>
-    <EmbeddedResource Include="Configuration\Remote.conf" />
-    <ProjectReference Include="..\Akka.Streams\Akka.Streams.csproj" />
-    <ProjectReference Include="..\Akka\Akka.csproj" />
+    <Protobuf Access="internal" Include="../../protobuf/ContainerFormats.proto" />
+    <Protobuf Access="internal" Include="../../protobuf/SystemMessageFormats.proto" />
+    <Protobuf Access="internal" Include="../../protobuf/WireFormats.proto" />
+
   </ItemGroup>
-  <ItemGroup>
-    <PackageReference Include="DotNetty.Handlers" Version="0.6.0" />
-    <PackageReference Include="Google.Protobuf" Version="$(ProtobufVersion)" />
-  </ItemGroup>
-  <PropertyGroup Condition=" '$(TargetFramework)' == '$(NetStandardLibVersion)' ">
-    <DefineConstants>$(DefineConstants);CORECLR</DefineConstants>
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
-    <DefineConstants>$(DefineConstants);RELEASE</DefineConstants>
-  </PropertyGroup>
-  <PropertyGroup>
-    <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
-  </PropertyGroup>
+    <PropertyGroup>
+        <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
+    </PropertyGroup>
 </Project>

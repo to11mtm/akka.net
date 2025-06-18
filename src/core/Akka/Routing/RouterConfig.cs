@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="RouterConfig.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -9,6 +9,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Akka.Actor;
+using Akka.Annotations;
 using Akka.Configuration;
 using Akka.Dispatch;
 using Akka.Util;
@@ -42,12 +43,6 @@ namespace Akka.Routing
         }
 
         /// <summary>
-        /// A configuration that specifies that no router is to be used.
-        /// </summary>
-        [Obsolete("Use NoRouter.Instance instead [1.1.0]")]
-        public static RouterConfig NoRouter => Routing.NoRouter.Instance;
-
-        /// <summary>
         /// Creates a router that is responsible for routing messages to routees within the provided <paramref name="system"/>.
         /// </summary>
         /// <param name="system">The ActorSystem this router belongs to.</param>
@@ -78,7 +73,7 @@ namespace Akka.Routing
         /// <returns><c>true</c> if this message is handled by the router; otherwise <c>false</c>.</returns>
         public virtual bool IsManagementMessage(object message)
         {
-            return message is IAutoReceivedMessage || message is RouterManagementMessage;
+            return message is IAutoReceivedMessage or RouterManagementMessage;
         }
 
         /// <summary>
@@ -108,7 +103,13 @@ namespace Akka.Routing
         /// <summary>
         /// The router "head" actor.
         /// </summary>
-        internal abstract RouterActor CreateRouterActor();
+        /// <remarks>
+        /// WARNING: make sure you know what you're doing before you attempt to implement this method.
+        ///
+        /// Should only return <see cref="RoutedActorRef"/> types.
+        /// </remarks>
+        [InternalApi]
+        public abstract ActorBase CreateRouterActor();
 
         /// <summary>
         /// Creates a surrogate representation of the current router.
@@ -117,7 +118,7 @@ namespace Akka.Routing
         /// <returns>The surrogate representation of the current router.</returns>
         public abstract ISurrogate ToSurrogate(ActorSystem system);
 
-        /// <inheritdoc/>
+        
         public bool Equals(RouterConfig other)
         {
             if (ReferenceEquals(null, other)) return false;
@@ -126,8 +127,21 @@ namespace Akka.Routing
             return GetType() == other.GetType() && (GetType() == typeof(NoRouter) || string.Equals(RouterDispatcher, other.RouterDispatcher));
         }
 
-        /// <inheritdoc/>
+        
         public override bool Equals(object obj) => Equals(obj as RouterConfig);
+
+        public override int GetHashCode()
+        {
+            if (GetType() == typeof(NoRouter))
+                return GetType().GetHashCode();
+            
+            unchecked
+            {
+                int hashCode = GetType().GetHashCode();
+                hashCode = (hashCode * 397) ^ (RouterDispatcher?.GetHashCode() ?? 0);
+                return hashCode;
+            }
+        }
     }
 
     /// <summary>
@@ -146,19 +160,13 @@ namespace Akka.Routing
         protected Group(IEnumerable<string> paths, string routerDispatcher) : base(routerDispatcher)
         {
             // equivalent of turning the paths into an immutable sequence
-            InternalPaths = paths?.ToArray() ?? new string[0];
+            InternalPaths = paths?.ToArray() ?? Array.Empty<string>();
         }
 
         /// <summary>
         /// Internal property for holding the supplied paths
         /// </summary>
         protected readonly string[] InternalPaths;
-
-        /// <summary>
-        /// Retrieves the paths of all routees declared on this router.
-        /// </summary>
-        [Obsolete("Deprecated since Akka.NET v1.1. Use Paths(ActorSystem) instead.")]
-        public IEnumerable<string> Paths => null;
 
         /// <summary>
         /// Retrieves the actor paths used by this router during routee selection.
@@ -191,12 +199,12 @@ namespace Akka.Routing
         /// TBD
         /// </summary>
         /// <returns>TBD</returns>
-        internal override RouterActor CreateRouterActor()
+        public override ActorBase CreateRouterActor()
         {
             return new RouterActor();
         }
 
-        /// <inheritdoc/>
+       
         public bool Equals(Group other)
         {
             if (ReferenceEquals(null, other)) return false;
@@ -204,7 +212,7 @@ namespace Akka.Routing
             return InternalPaths.SequenceEqual(other.InternalPaths);
         }
 
-        /// <inheritdoc/>
+        
         public override bool Equals(object obj)
         {
             if (ReferenceEquals(null, obj)) return false;
@@ -213,7 +221,7 @@ namespace Akka.Routing
             return Equals((Group)obj);
         }
 
-        /// <inheritdoc/>
+        
         public override int GetHashCode() => InternalPaths?.GetHashCode() ?? 0;
     }
 
@@ -336,7 +344,7 @@ namespace Akka.Routing
         /// TBD
         /// </summary>
         /// <returns>TBD</returns>
-        internal override RouterActor CreateRouterActor()
+        public override ActorBase CreateRouterActor()
         {
             if (Resizer == null)
                 return new RouterPoolActor(SupervisorStrategy);
@@ -347,15 +355,9 @@ namespace Akka.Routing
         /// <summary>
         /// TBD
         /// </summary>
-        public static SupervisorStrategy DefaultSupervisorStrategy
-        {
-            get
-            {
-                return new OneForOneStrategy(Decider.From(Directive.Escalate));
-            }
-        }
+        public static SupervisorStrategy DefaultSupervisorStrategy => SupervisorStrategy.DefaultStrategy;
 
-        /// <inheritdoc/>
+
         public bool Equals(Pool other)
         {
             if (ReferenceEquals(null, other)) return false;
@@ -364,7 +366,7 @@ namespace Akka.Routing
                    NrOfInstances == other.NrOfInstances;
         }
 
-        /// <inheritdoc/>
+        
         public override bool Equals(object obj)
         {
             if (ReferenceEquals(null, obj)) return false;
@@ -373,7 +375,7 @@ namespace Akka.Routing
             return Equals((Pool)obj);
         }
 
-        /// <inheritdoc/>
+        
         public override int GetHashCode()
         {
             unchecked
@@ -407,11 +409,8 @@ namespace Akka.Routing
         {
         }
 
-        /// <summary>
-        /// TBD
-        /// </summary>
-        /// <returns>TBD</returns>
-        internal override RouterActor CreateRouterActor()
+        
+        public override ActorBase CreateRouterActor()
         {
             return new RouterActor();
         }
@@ -447,7 +446,7 @@ namespace Akka.Routing
         /// This router is set to use the default dispatcher <see cref="Dispatchers.DefaultDispatcherId"/>.
         /// </note>
         /// </summary>
-        public static FromConfig Instance { get; } = new FromConfig();
+        public static FromConfig Instance { get; } = new();
 
         /// <summary>
         /// N/A
@@ -469,7 +468,7 @@ namespace Akka.Routing
         /// This exception is automatically thrown since <see cref="FromConfig"/> cannot create router actors.
         /// </exception>
         /// <returns>N/A</returns>
-        internal override RouterActor CreateRouterActor()
+        public override ActorBase CreateRouterActor()
         {
             throw new NotSupportedException("FromConfig must not create RouterActor");
         }
@@ -600,7 +599,7 @@ namespace Akka.Routing
         /// This exception is automatically thrown since <see cref="NoRouter"/> cannot create router actors.
         /// </exception>
         /// <returns>N/A</returns>
-        internal override RouterActor CreateRouterActor()
+        public override ActorBase CreateRouterActor()
         {
             throw new NotSupportedException("NoRouter must not create RouterActor");
         }
@@ -642,7 +641,7 @@ namespace Akka.Routing
         /// <summary>
         /// TBD
         /// </summary>
-        public static NoRouter Instance { get; } = new NoRouter();
+        public static NoRouter Instance { get; } = new();
 
         /// <summary>
         /// This class represents a surrogate of a <see cref="NoRouter"/> router.

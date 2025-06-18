@@ -1,28 +1,35 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="FlowSelectAsyncSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Streams.Dsl;
 using Akka.Streams.Implementation;
 using Akka.Streams.Supervision;
 using Akka.Streams.TestKit;
-using Akka.Streams.TestKit.Tests;
+using Akka.Streams.Tests.TestHelpers;
 using Akka.TestKit;
 using Akka.TestKit.Internal;
+using Akka.TestKit.Xunit2.Attributes;
 using Akka.Util;
 using Akka.Util.Internal;
 using FluentAssertions;
+using Akka.TestKit.Extensions;
 using Xunit;
 using Xunit.Abstractions;
+using FluentAssertions.Extensions;
+using static FluentAssertions.FluentActions;
+using Directive = Akka.Streams.Supervision.Directive;
 
 // ReSharper disable InvokeAsExtensionMethod
 #pragma warning disable 162
@@ -40,29 +47,28 @@ namespace Akka.Streams.Tests.Dsl
         }
 
         [Fact]
-        public void A_Flow_with_SelectAsync_must_produce_task_elements()
+        public async Task A_Flow_with_SelectAsync_must_produce_task_elements()
         {
-            this.AssertAllStagesStopped(() =>
-            {
+            await this.AssertAllStagesStoppedAsync(async() => {
                 var c = this.CreateManualSubscriberProbe<int>();
                 Source.From(Enumerable.Range(1, 3))
                     .SelectAsync(4, Task.FromResult)
                     .RunWith(Sink.FromSubscriber(c), Materializer);
-                var sub = c.ExpectSubscription();
+                var sub = await c.ExpectSubscriptionAsync();
 
                 sub.Request(2);
-                c.ExpectNext(1)
+                await c.ExpectNext(1)
                     .ExpectNext(2)
-                    .ExpectNoMsg(TimeSpan.FromMilliseconds(200));
+                    .ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200));
                 sub.Request(2);
 
-                c.ExpectNext(3)
-                    .ExpectComplete();
+                await c.ExpectNext(3)
+                    .ExpectCompleteAsync();
             }, Materializer);
         }
 
         [Fact]
-        public void A_Flow_with_SelectAsync_must_produce_task_elements_in_order()
+        public async Task A_Flow_with_SelectAsync_must_produce_task_elements_in_order()
         {
             var c = this.CreateManualSubscriberProbe<int>();
             Source.From(Enumerable.Range(1, 50))
@@ -78,69 +84,103 @@ namespace Akka.Streams.Tests.Dsl
                     });
                 })
                 .RunWith(Sink.FromSubscriber(c), Materializer);
-            var sub = c.ExpectSubscription();
+            var sub = await c.ExpectSubscriptionAsync();
             sub.Request(1000);
-            Enumerable.Range(1, 50).ForEach(n => c.ExpectNext(n));
-            c.ExpectComplete();
+            foreach (var n in Enumerable.Range(1, 50))
+                await c.ExpectNextAsync(n);
+           
+            await c.ExpectCompleteAsync();
         }
 
-        [Fact(Skip = "Racy on Azure DevOps")]
-        public void A_Flow_with_SelectAsync_must_not_run_more_futures_than_requested_parallelism()
+        // Turning this on in CI/CD for now
+        [Fact]
+        public async Task A_Flow_with_SelectAsync_must_not_run_more_futures_than_requested_parallelism()
         {
-            var probe = CreateTestProbe();
-            var c = this.CreateManualSubscriberProbe<int>();
-            Source.From(Enumerable.Range(1, 20))
-                .SelectAsync(8, n => Task.Run(() => 
-                {
-                    probe.Ref.Tell(n);
-                    return n;
-                }))
-                .RunWith(Sink.FromSubscriber(c), Materializer);
-            var sub = c.ExpectSubscription();
-            probe.ExpectNoMsg(TimeSpan.FromMilliseconds(500));
-            sub.Request(1);
-            probe.ReceiveN(9).ShouldAllBeEquivalentTo(Enumerable.Range(1, 9));
-            probe.ExpectNoMsg(TimeSpan.FromMilliseconds(500));
-            sub.Request(2);
-            probe.ReceiveN(2).ShouldAllBeEquivalentTo(Enumerable.Range(10, 2));
-            probe.ExpectNoMsg(TimeSpan.FromMilliseconds(500));
-            sub.Request(10);
-            probe.ReceiveN(9).ShouldAllBeEquivalentTo(Enumerable.Range(12, 9));
-            probe.ExpectNoMsg(TimeSpan.FromMilliseconds(200));
-
-            Enumerable.Range(1, 13).ForEach(n => c.ExpectNext(n));
-            c.ExpectNoMsg(TimeSpan.FromMilliseconds(200));
-        }
-
-        [Fact(Skip = "Racy on Azure DevOps")]
-        public void A_Flow_with_SelectAsync_must_signal_task_failure()
-        {
-            this.AssertAllStagesStopped(() =>
+            await this.AssertAllStagesStoppedAsync(async () =>
             {
-                var latch = new TestLatch(1);
+                var probe = CreateTestProbe();
                 var c = this.CreateManualSubscriberProbe<int>();
-                Source.From(Enumerable.Range(1, 5))
-                    .SelectAsync(4, n => Task.Run(() =>
+                
+                Source.From(Enumerable.Range(1, 20))
+                    .SelectAsync(8, async n =>  
                     {
-                        if (n == 3)
-                            throw new TestException("err1");
-
-                        latch.Ready(TimeSpan.FromSeconds(10));
+                        await Task.Yield();
+                        probe.Ref.Tell(n);
                         return n;
-                    }))
-                    .To(Sink.FromSubscriber(c)).Run(Materializer);
-                var sub = c.ExpectSubscription();
+                    })
+                    .RunWith(Sink.FromSubscriber(c), Materializer);
+                var sub = await c.ExpectSubscriptionAsync();
+                await probe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200));
+                sub.Request(1);
+                (await probe.ReceiveNAsync(9).ToListAsync()).Should().BeEquivalentTo(Enumerable.Range(1, 9));
+                await probe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200));
+                sub.Request(2);
+                (await probe.ReceiveNAsync(2).ToListAsync()).Should().BeEquivalentTo(Enumerable.Range(10, 2));
+                await probe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200));
                 sub.Request(10);
-                c.ExpectError().InnerException.Message.Should().Be("err1");
-                latch.CountDown();
-            }, Materializer);
+                (await probe.ReceiveNAsync(9).ToListAsync()).Should().BeEquivalentTo(Enumerable.Range(12, 9));
+                await probe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200));
+
+                await c.ExpectNextNAsync(Enumerable.Range(1, 13));
+            
+                await c.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200));
+            }, Materializer).ShouldCompleteWithin(RemainingOrDefault);
+        }
+
+        // Turning this on in CI/CD for now
+        [Fact]
+        public async Task A_Flow_with_parallel_execution_SelectAsync_must_signal_task_failure()
+        {
+            await this.AssertAllStagesStoppedAsync(async() => {
+                var c = this.CreateManualSubscriberProbe<int>();
+                
+                Source.From(Enumerable.Range(1, 5))
+                    .SelectAsync(4, async n =>
+                    {
+                        if (n == 4)
+                            throw new TestException("err1");
+                        await Task.Delay(10.Seconds());
+
+                        return n;
+                    })
+                    .To(Sink.FromSubscriber(c)).Run(Materializer);
+                
+                var sub = await c.ExpectSubscriptionAsync();
+                sub.Request(10);
+
+                var exception = await c.ExpectErrorAsync();
+                exception.InnerException!.Message.Should().Be("err1");
+            }, Materializer).ShouldCompleteWithin(RemainingOrDefault);
         }
 
         [Fact]
-        public void A_Flow_with_SelectAsync_must_signal_task_failure_asap()
+        public async Task A_Flow_with_SelectAsync_must_signal_task_failure()
         {
-            this.AssertAllStagesStopped(() =>
-            {
+            await this.AssertAllStagesStoppedAsync(async() => {
+                var probe = Source.From(Enumerable.Range(1, 5))
+                    .SelectAsync(1, async n =>
+                    {
+                        await Task.Delay(10);
+                        if (n == 3)
+                            throw new TestException("err1");
+
+                        return n;
+                    })
+                    .RunWith(this.SinkProbe<int>(), Materializer);
+                
+                var exception = await probe.AsyncBuilder()
+                    .Request(10)
+                    .ExpectNextN([1, 2])
+                    .ExpectErrorAsync()
+                    .ShouldCompleteWithin(RemainingOrDefault);
+                exception.Message.Should().Be("err1");
+            }, Materializer);
+        }
+        
+        [Fact]
+        public async Task A_Flow_with_SelectAsync_must_signal_task_failure_asap()
+        {
+            await this.AssertAllStagesStoppedAsync(async () => {
                 var latch = CreateTestLatch();
                 var done = Source.From(Enumerable.Range(1, 5))
                     .Select(n =>
@@ -153,7 +193,7 @@ namespace Akka.Streams.Tests.Dsl
                     })
                     .SelectAsync(4, n =>
                     {
-                        if (n == 1) 
+                        if (n == 1)
                         {
                             var c = new TaskCompletionSource<int>();
                             c.SetException(new Exception("err1"));
@@ -162,17 +202,120 @@ namespace Akka.Streams.Tests.Dsl
                         return Task.FromResult(n);
                     }).RunWith(Sink.Ignore<int>(), Materializer);
 
-                done.Invoking(d => d.Wait(RemainingOrDefault)).ShouldThrow<Exception>().WithMessage("err1");
+                await Awaiting(async () => await done).Should()
+                    .ThrowAsync<Exception>()
+                    .WithMessage("err1")
+                    .ShouldCompleteWithin(RemainingOrDefault);
+                
                 latch.CountDown();
+            }, Materializer);
+        }
+        
+         [Fact(DisplayName = "A Flow with SelectAsync that failed mid-stream MUST cause a failure ASAP (stopping strategy)")]
+        public async Task A_Flow_with_SelectAsync_must_signal_error_from_SelectAsync_MidStream_Stop()
+        {
+            var tsa = new TaskCompletionSource<string>();
+            var tsb = new TaskCompletionSource<string>();
+            var tsc = new TaskCompletionSource<string>();
+            var tsd = new TaskCompletionSource<string>();
+            var tse = new TaskCompletionSource<string>();
+            var tsf = new TaskCompletionSource<string>();
+
+            var input = new []{ tsa, tsb, tsc, tsd, tse , tsf };
+
+            await this.AssertAllStagesStoppedAsync(async () =>
+            {
+                var probe = Source.From(input)
+                    .SelectAsync(5, n => n.Task)
+                    .RunWith(this.SinkProbe<string>(), Materializer);
+
+                probe.Request(100);
+
+                // placing the future completion signals here is important
+                // the ordering is meant to expose a race between the failure at C and subsequent elements
+                tsa.SetResult("A");
+                tsb.SetResult("B");
+                tsc.SetException(new TestException("Boom at C"));
+                tsd.SetResult("D");
+                tse.SetResult("E");
+                tsf.SetResult("F");
+
+                switch (await probe.ExpectNextOrErrorAsync())
+                {
+                    case Exception ex:
+                        ex.Should().BeOfType<AggregateException>()
+                            .Which.InnerException.Should().BeOfType<TestException>()
+                            .Which.Message.Should().Be("Boom at C");  // fine, error can over-take elements
+                        return;
+                    case "A":
+                        switch (await probe.ExpectNextOrErrorAsync())
+                        {
+                            case Exception ex:
+                                ex.Should().BeOfType<AggregateException>()
+                                    .Which.InnerException.Should().BeOfType<TestException>()
+                                    .Which.Message.Should().Be("Boom at C");  // fine, error can over-take elements
+                                return;
+                            case "B":
+                                switch (await probe.ExpectNextOrErrorAsync())
+                                {
+                                    case Exception ex:
+                                        ex.Should().BeOfType<AggregateException>()
+                                            .Which.InnerException.Should().BeOfType<TestException>()
+                                            .Which.Message.Should().Be("Boom at C");  // fine
+                                        return;
+                                    case string s:
+                                        Assert.Fail($"Got [{s}] yet it caused an exception, should not have happened!");
+                                        return;
+                                }
+                                return;
+                            case var unexpected:
+                                Assert.Fail($"Unexpected {unexpected}");
+                                return;
+                        }
+                    case var unexpected:
+                        Assert.Fail($"Unexpected {unexpected}");
+                        return;
+                }
+            }, Materializer);
+        }
+
+        [Fact(DisplayName = "A Flow with SelectAsync that failed mid-stream MUST skip element (resume strategy)")]
+        public async Task A_Flow_with_SelectAsync_must_signal_error_from_SelectAsync_MidStream_Result()
+        {
+            var tsa = new TaskCompletionSource<string>();
+            var tsb = new TaskCompletionSource<string>();
+            var tsc = new TaskCompletionSource<string>();
+            var tsd = new TaskCompletionSource<string>();
+            var tse = new TaskCompletionSource<string>();
+            var tsf = new TaskCompletionSource<string>();
+
+            var input = new[] { tsa, tsb, tsc, tsd, tse, tsf };
+
+            await this.AssertAllStagesStoppedAsync(async () =>
+            {
+                var task = Source.From(input)
+                    .SelectAsync(5, n => n.Task)
+                    .WithAttributes(ActorAttributes.CreateSupervisionStrategy(Deciders.ResumingDecider))
+                    .RunWith(Sink.Seq<string>(), Materializer);
+
+                // the problematic ordering:
+                tsa.SetResult("A");
+                tsb.SetResult("B");
+                tsd.SetResult("D");
+                tse.SetResult("E");
+                tsf.SetResult("F");
+                tsc.SetException(new TestException("Boom at C"));
+
+                var elements = await task;
+                elements.Should().BeEquivalentTo(new[] { "A", "B", "D", "E", "F" },
+                    options => options.WithStrictOrdering());
             }, Materializer);
         }
 
         [Fact]
-        public void A_Flow_with_SelectAsync_must_signal_error_from_SelectAsync()
+        public async Task A_Flow_with_SelectAsync_must_signal_error_from_SelectAsync()
         {
-            this.AssertAllStagesStopped(() =>
-            {
-                var latch = new TestLatch(1);
+            await this.AssertAllStagesStoppedAsync(async () => {
                 var c = this.CreateManualSubscriberProbe<int>();
                 Source.From(Enumerable.Range(1, 5))
                     .SelectAsync(4, n =>
@@ -180,50 +323,99 @@ namespace Akka.Streams.Tests.Dsl
                         if (n == 3)
                             throw new TestException("err2");
 
-                        return Task.Run(() =>
+                        return Task.Run(async () =>
                         {
-                            latch.Ready(TimeSpan.FromSeconds(10));
+                            await Task.Delay(10.Seconds());
                             return n;
                         });
                     })
                     .RunWith(Sink.FromSubscriber(c), Materializer);
-                var sub = c.ExpectSubscription();
+                var sub = await c.ExpectSubscriptionAsync();
                 sub.Request(10);
-                c.ExpectError().Message.Should().Be("err2");
-                latch.CountDown();
+                (await c.ExpectErrorAsync()).Message.Should().Be("err2");
             }, Materializer);
         }
 
         [Fact]
-        public void A_Flow_with_SelectAsync_must_resume_after_task_failure()
+        public async Task A_Flow_with_SelectAsync_must_invoke_supervision_strategy_on_task_failure()
         {
-            this.AssertAllStagesStopped(() =>
+            await this.AssertAllStagesStoppedAsync(async () =>
             {
-                this.AssertAllStagesStopped(() =>
-                {
-                    var c = this.CreateManualSubscriberProbe<int>();
-                    Source.From(Enumerable.Range(1, 5))
-                        .SelectAsync(4, n => Task.Run(() =>
-                        {
-                            if (n == 3)
-                                throw new TestException("err3");
-                            return n;
-                        }))
-                        .WithAttributes(ActorAttributes.CreateSupervisionStrategy(Deciders.ResumingDecider))
-                        .RunWith(Sink.FromSubscriber(c), Materializer);
-                    var sub = c.ExpectSubscription();
-                    sub.Request(10);
-                    new[] {1, 2, 4, 5}.ForEach(i => c.ExpectNext(i));
-                    c.ExpectComplete();
-                }, Materializer);
+                var invoked = false;
+                var probe = Source.From(Enumerable.Range(1, 5))
+                    .SelectAsync(1, n => Task.Run(() =>
+                    {
+                        if (n == 3)
+                            throw new TestException("err3");
+                        return n;
+                    }))
+                    .WithAttributes(ActorAttributes.CreateSupervisionStrategy(_ =>
+                    {
+                        invoked = true;
+                        return Directive.Stop;
+                    }))
+                    .RunWith(this.SinkProbe<int>(), Materializer);
+
+                await probe.AsyncBuilder()
+                    .Request(10)
+                    .ExpectNextN([1, 2])
+                    .ExpectErrorAsync();
+
+                invoked.Should().BeTrue();
             }, Materializer);
         }
 
         [Fact]
-        public void A_Flow_with_SelectAsync_must_resume_after_multiple_failures()
+        public async Task A_Flow_with_SelectAsync_must_resume_after_task_failure()
         {
-            this.AssertAllStagesStopped(() =>
-            {
+            await this.AssertAllStagesStoppedAsync(async () => {
+                var c = this.CreateManualSubscriberProbe<int>();
+                Source.From(Enumerable.Range(1, 5))
+                    .SelectAsync(4, n => Task.Run(() =>
+                    {
+                        if (n == 3)
+                            throw new TestException("err3");
+                        return n;
+                    }))
+                    .WithAttributes(ActorAttributes.CreateSupervisionStrategy(Deciders.ResumingDecider))
+                    .RunWith(Sink.FromSubscriber(c), Materializer);
+                var sub = await c.ExpectSubscriptionAsync();
+                sub.Request(10);
+                foreach (var i in new[] { 1, 2, 4, 5 })
+                    await c.ExpectNextAsync(i);
+                await c.ExpectCompleteAsync();
+            }, Materializer);
+        }
+        
+        [Fact]
+        public async Task A_Flow_with_SelectAsync_must_resume_when_task_already_failed()
+        {
+            await this.AssertAllStagesStoppedAsync(async () => {
+                var c = this.CreateManualSubscriberProbe<int>();
+                Source.From(Enumerable.Range(1, 5))
+                    .SelectAsync(4, n => 
+                    {
+                        var tcs = new TaskCompletionSource<int>();
+                        if (n == 3)
+                            tcs.TrySetException(new TestException("err3"));
+                        else
+                            tcs.TrySetResult(n);
+                        return tcs.Task;
+                    })
+                    .WithAttributes(ActorAttributes.CreateSupervisionStrategy(Deciders.ResumingDecider))
+                    .RunWith(Sink.FromSubscriber(c), Materializer);
+                var sub = await c.ExpectSubscriptionAsync();
+                sub.Request(10);
+                foreach (var i in new[] { 1, 2, 4, 5 })
+                    await c.ExpectNextAsync(i);
+                await c.ExpectCompleteAsync();
+            }, Materializer);
+        }
+
+        [Fact]
+        public async Task A_Flow_with_SelectAsync_must_resume_after_multiple_failures()
+        {
+            await this.AssertAllStagesStoppedAsync(() => {
                 var futures = new[]
                 {
                     Task.Run(() => { throw new TestException("failure1"); return "";}),
@@ -241,13 +433,70 @@ namespace Akka.Streams.Tests.Dsl
 
                 t.Wait(TimeSpan.FromSeconds(3)).Should().BeTrue();
                 t.Result.Should().Be("happy");
+                return Task.FromResult(Task.CompletedTask);
             }, Materializer);
         }
 
-        [Fact]
-        public void A_Flow_with_SelectAsync_must_finish_after_task_failure()
+        [Fact(DisplayName = "A Flow with SelectAsync must complete without requiring further demand (parallelism = 1)")]
+        public async Task CompleteWithoutDemand()
         {
-            this.AssertAllStagesStopped(() =>
+            var probe = Source.Single(1)
+                .SelectAsync(1, v => Task.Run(async () =>
+                {
+                    await Task.Delay(20);
+                    return v;
+                }))
+                .RunWith(this.SinkProbe<int>(), Materializer);
+
+            probe.Request(1);
+            await probe.ExpectNextAsync(1);
+            await probe.ExpectCompleteAsync();
+        }
+
+        [Fact(DisplayName = "A Flow with SelectAsync must complete without requiring further demand with completed task (parallelism = 1)")]
+        public async Task CompleteWithoutDemandCompletedTask()
+        {
+            var probe = Source.Single(1)
+                .SelectAsync(1, Task.FromResult)
+                .RunWith(this.SinkProbe<int>(), Materializer);
+
+            probe.Request(1);
+            await probe.ExpectNextAsync(1);
+            await probe.ExpectCompleteAsync();
+        }
+
+        [Fact(DisplayName = "A Flow with SelectAsync must complete without requiring further demand (parallelism = 2)")]
+        public async Task CompleteWithoutDemandP2()
+        {
+            var probe = Source.From(new[] { 1, 2 })
+                .SelectAsync(2, v => Task.Run(async () =>
+                {
+                    await Task.Delay(20);
+                    return v;
+                }))
+                .RunWith(this.SinkProbe<int>(), Materializer);
+
+            probe.Request(2);
+            await probe.ExpectNextNAsync(2).ToListAsync();
+            await probe.ExpectCompleteAsync();
+        }
+
+        [Fact(DisplayName = "A Flow with SelectAsync must complete without requiring further demand with completed task (parallelism = 2)")]
+        public async Task CompleteWithoutDemandCompletedTaskP2()
+        {
+            var probe = Source.From(new[] { 1, 2 })
+                .SelectAsync(2, Task.FromResult)
+                .RunWith(this.SinkProbe<int>(), Materializer);
+
+            probe.Request(2);
+            await probe.ExpectNextNAsync(2).ToListAsync();
+            await probe.ExpectCompleteAsync();
+        }
+        
+        [Fact]
+        public async Task A_Flow_with_SelectAsync_must_finish_after_task_failure()
+        {
+            await this.AssertAllStagesStoppedAsync(async() =>
             {
                 var t = Source.From(Enumerable.Range(1, 3))
                     .SelectAsync(1, n => Task.Run(() =>
@@ -260,12 +509,35 @@ namespace Akka.Streams.Tests.Dsl
                     .Grouped(10)
                     .RunWith(Sink.First<IEnumerable<int>>(), Materializer);
                 
-                t.AwaitResult().ShouldAllBeEquivalentTo(new[] {1, 2});
+                var complete = await t.ShouldCompleteWithin(3.Seconds());
+                complete.Should().BeEquivalentTo(new[] { 1, 2 });
             }, Materializer);
         }
 
         [Fact]
-        public void A_Flow_with_SelectAsync_must_resume_when_SelectAsync_throws()
+        public async Task A_Flow_with_SelectAsync_must_resume_after_task_cancels()
+        {
+            var c = this.CreateManualSubscriberProbe<int>();
+            await this.AssertAllStagesStoppedAsync(async () =>
+            {
+                Source.From(Enumerable.Range(1, 5))
+                    .SelectAsync(4, async n =>
+                    {
+                        await MaybeCancels(n);
+                        return n;
+                    })
+                    .WithAttributes(ActorAttributes.CreateSupervisionStrategy(Deciders.ResumingDecider))
+                    .RunWith(Sink.FromSubscriber(c), Materializer);
+                var sub = await c.ExpectSubscriptionAsync();
+                sub.Request(10);
+                foreach (var i in new[] { 1, 2, 4, 5 })
+                    await c.ExpectNextAsync(i);
+                await c.ExpectCompleteAsync();
+            }, Materializer);
+        }
+        
+        [Fact]
+        public async Task A_Flow_with_SelectAsync_must_resume_when_SelectAsync_throws()
         {
             var c = this.CreateManualSubscriberProbe<int>();
             Source.From(Enumerable.Range(1, 5))
@@ -277,46 +549,153 @@ namespace Akka.Streams.Tests.Dsl
                 })
                 .WithAttributes(ActorAttributes.CreateSupervisionStrategy(Deciders.ResumingDecider))
                 .RunWith(Sink.FromSubscriber(c), Materializer);
-            var sub = c.ExpectSubscription();
+            var sub = await c.ExpectSubscriptionAsync();
             sub.Request(10);
-            new[] {1, 2, 4, 5}.ForEach(i => c.ExpectNext(i));
-            c.ExpectComplete();
+            foreach (var i in new[] { 1, 2, 4, 5 })
+                await c.ExpectNextAsync(i);
+            await c.ExpectCompleteAsync();
         }
 
         [Fact]
-        public void A_Flow_with_SelectAsync_must_signal_NPE_when_task_is_completed_with_null()
+        public async Task A_Flow_with_SelectAsync_must_restart_after_task_throws()
+        {
+            var c = this.CreateManualSubscriberProbe<int>();
+            Source.From(Enumerable.Range(1, 5))
+                .Select(n => n)
+                .SelectAsync(4, n => Task.Run(async () =>
+                {
+                    await Task.Yield();
+                    if(n == 3)
+                        throw new TestException("err3");
+                    return n;
+                }))
+                .WithAttributes(ActorAttributes.CreateSupervisionStrategy(Deciders.RestartingDecider))
+                .RunWith(Sink.FromSubscriber(c), Materializer);
+            var sub = await c.ExpectSubscriptionAsync();
+            sub.Request(10);
+            foreach (var i in new[] { 1, 2, 4, 5})
+                await c.ExpectNextAsync(i);
+        }
+
+        [Fact]
+        public async Task A_Flow_with_SelectAsync_must_restart_when_SelectAsync_task_cancelled()
+        {
+            var c = this.CreateManualSubscriberProbe<int>();
+            Source.From(Enumerable.Range(1, 5))
+                .Select(n => n)
+                .SelectAsync(4, async n =>
+                {
+                    await MaybeCancels(n);
+                    return n;
+                })
+                .WithAttributes(ActorAttributes.CreateSupervisionStrategy(Deciders.RestartingDecider))
+                .RunWith(Sink.FromSubscriber(c), Materializer);
+            var sub = await c.ExpectSubscriptionAsync();
+            sub.Request(10);
+            foreach (var i in new[] { 1, 2, 4, 5})
+                await c.ExpectNextAsync(i);
+        }
+
+        private static Task<int> MaybeCancels(int n)
+        {
+            var tcs = new TaskCompletionSource<int>();
+            Task.Run(async () =>
+            {
+                await Task.Yield();
+                if (n == 3)
+                    tcs.TrySetCanceled();
+                else
+                    tcs.TrySetResult(n);
+            });
+            return tcs.Task;
+        }
+        
+        [Fact]
+        public async Task A_Flow_with_SelectAsync_must_signal_NPE_when_task_is_completed_with_null()
         {
             var c = this.CreateManualSubscriberProbe<string>();
 
-            Source.From(new[] {"a", "b"})
-                .SelectAsync(4, _ => Task.FromResult(null as string))
+            Source.From(["a", "b"])
+                .SelectAsync(4, _ => Task.FromResult<string>(null))
                 .To(Sink.FromSubscriber(c)).Run(Materializer);
 
-            var sub = c.ExpectSubscription();
+            var sub = await c.ExpectSubscriptionAsync();
             sub.Request(10);
-            c.ExpectError().Message.Should().StartWith(ReactiveStreamsCompliance.ElementMustNotBeNullMsg);
+            (await c.ExpectErrorAsync()).Message.Should().StartWith(ReactiveStreamsCompliance.ElementMustNotBeNullMsg);
         }
 
         [Fact]
-        public void A_Flow_with_SelectAsync_must_resume_when_task_is_completed_with_null()
+        public async Task A_Flow_with_SelectAsync_must_resume_when_task_is_completed_with_null()
         {
             var c = this.CreateManualSubscriberProbe<string>();
-            Source.From(new[] { "a", "b", "c" })
-                .SelectAsync(4, s => s.Equals("b") ? Task.FromResult(null as string) : Task.FromResult(s))
+            Source.From(["a", "b", "c"])
+                .SelectAsync(4, s => s.Equals("b") ? Task.FromResult<string>(null) : Task.FromResult(s))
                 .WithAttributes(ActorAttributes.CreateSupervisionStrategy(Deciders.ResumingDecider))
                 .To(Sink.FromSubscriber(c)).Run(Materializer);
-            var sub = c.ExpectSubscription();
+            var sub = await c.ExpectSubscriptionAsync();
             sub.Request(10);
-            c.ExpectNext("a");
-            c.ExpectNext("c");
-            c.ExpectComplete();
+            await c.ExpectNextAsync("a");
+            await c.ExpectNextAsync("c");
+            await c.ExpectCompleteAsync();
         }
 
-        [Fact]
-        public void A_Flow_with_SelectAsync_must_handle_cancel_properly()
+        [Fact(DisplayName = "A Flow with SelectAsync must continue emitting after a sequence of nulls")]
+        public async Task SelectAsyncNullSequence()
         {
-            this.AssertAllStagesStopped(() =>
-            {
+            var flow = Flow.Create<int>()
+                .SelectAsync(3, v => v is 0 or >= 100 
+                    ? Task.FromResult(v.ToString()) 
+                    : Task.FromResult<string>(null));
+
+            var task = Source.From(Enumerable.Range(0, 103))
+                .Via(flow)
+                .WithAttributes(ActorAttributes.CreateSupervisionStrategy(Deciders.ResumingDecider))
+                .RunWith(Sink.Seq<string>(), Materializer);
+
+            var result = await task;
+            result.Should().BeEquivalentTo(new[]{"0", "100", "101", "102"}, o => o.WithStrictOrdering());
+        }
+
+        [Fact(DisplayName = "A Flow with SelectAsync must complete without emitting any elements after a sequence of nulls only")]
+        public async Task SelectAsyncAllNullSequence()
+        {
+            var flow = Flow.Create<int>()
+                .SelectAsync(3, _ => Task.FromResult<string>(null));
+
+            var task = Source.From(Enumerable.Range(0, 10))
+                .Via(flow)
+                .WithAttributes(ActorAttributes.CreateSupervisionStrategy(Deciders.ResumingDecider))
+                .RunWith(Sink.Seq<string>(), Materializer);
+
+            var result = await task;
+            result.Should().BeEmpty();
+        }
+
+        [Fact(DisplayName = "A Flow with SelectAsync must complete if future task returning null completed last")]
+        public async Task SelectAsyncNullLast()
+        {
+            var ts1 = new TaskCompletionSource<string>();
+            var ts2 = new TaskCompletionSource<string>();
+            var ts3 = new TaskCompletionSource<string>();
+            var taskSources = new[] { ts1, ts2, ts3 };
+
+            var task = Source.From(taskSources)
+                .SelectAsync(2, t => t.Task)
+                .WithAttributes(ActorAttributes.CreateSupervisionStrategy(Deciders.ResumingDecider))
+                .RunWith(Sink.Seq<string>(), Materializer);
+
+            ts1.TrySetResult("1");
+            ts3.TrySetResult("3");
+            ts2.TrySetResult(null);
+
+            var result = await task;
+            result.Should().BeEquivalentTo(new[]{"1", "3"}, o => o.WithStrictOrdering());
+        }
+        
+        [Fact]
+        public async Task A_Flow_with_SelectAsync_must_handle_cancel_properly()
+        {
+            await this.AssertAllStagesStoppedAsync(async() => {
                 var pub = this.CreateManualPublisherProbe<int>();
                 var sub = this.CreateManualSubscriberProbe<int>();
 
@@ -324,74 +703,99 @@ namespace Akka.Streams.Tests.Dsl
                     .SelectAsync(4, _ => Task.FromResult(0))
                     .RunWith(Sink.FromSubscriber(sub), Materializer);
 
-                var upstream = pub.ExpectSubscription();
-                upstream.ExpectRequest();
+                var upstream = await pub.ExpectSubscriptionAsync();
+                await upstream.ExpectRequestAsync();
 
-                sub.ExpectSubscription().Cancel();
+                (await sub.ExpectSubscriptionAsync()).Cancel();
 
-                upstream.ExpectCancellation();
+                await upstream.ExpectCancellationAsync();
             }, Materializer);
         }
 
-        [Fact(Skip = "Racy on AzureDevOps")]
-        public void A_Flow_with_SelectAsync_must_not_run_more_futures_than_configured()
+        [Fact]
+        public async Task A_Flow_with_SelectAsync_must_not_run_more_futures_than_configured()
         {
-            this.AssertAllStagesStopped(() =>
+            await this.AssertAllStagesStoppedAsync(async () =>
             {
                 const int parallelism = 8;
+                const int n = 10000;
                 var counter = new AtomicCounter();
-                var queue = new BlockingQueue<(TaskCompletionSource<int>, long)>();
-                var cancellation = new CancellationTokenSource();
-                Task.Run(() =>
-                {
-                    var delay = 500; // 50000 nanoseconds
-                    var count = 0;
-                    var cont = true;
-                    while (cont)
+
+                var result = await Source.From(Enumerable.Range(1, n))
+                    .SelectAsync(parallelism, async _ =>
                     {
-                        try
-                        {
-                            var t = queue.Take(cancellation.Token);
-                            var promise = t.Item1;
-                            var enqueued = t.Item2;
-                            var wakeup = enqueued + delay;
-                            while (DateTime.Now.Ticks < wakeup) { }
-                            counter.Decrement();
-                            promise.SetResult(count);
-                            count++;
-                        }
-                        catch
-                        {
-                            cont = false;
-                        }
-                    }
-                }, cancellation.Token);
+                        if (counter.IncrementAndGet() > parallelism)
+                            throw new Exception("Parallelism exceeded");
 
-                Func<Task<int>> deferred = () =>
-                {
-                    var promise = new TaskCompletionSource<int>();
-                    if (counter.IncrementAndGet() > parallelism)
-                        promise.SetException(new Exception("parallelism exceeded"));
-                    else
+                        await Task.Delay(50_000.Nanoseconds());
+                        counter.Decrement();
+                        return 1;
+                    })
+                    .RunAggregate(0, (acc, i) => acc + i, Materializer)
+                    .ShouldCompleteWithin(3.Seconds());
 
-                        queue.Enqueue((promise, DateTime.Now.Ticks));
-                    return promise.Task;
-                };
-
-                try
-                {
-                    const int n = 10000;
-                    var task = Source.From(Enumerable.Range(1, n))
-                        .SelectAsync(parallelism, _ => deferred())
-                        .RunAggregate(0, (c, _) => c + 1, Materializer);
-
-                    task.AwaitResult().Should().Be(n);
-                }
-                finally
-                {
-                    cancellation.Cancel(false);
-                }
+                result.Should().Be(n);
             }, Materializer);
+        }
+
+        [Fact(DisplayName = "A Flow with SelectAsync must not invoke the decider twice when SelectAsync throws")]
+        public async Task SelectAsyncDeciderFailingSelectAsync()
+        {
+            var failCount = new AtomicCounter(0);
+            var result = await Source.From(new[]{true, false})
+                .SelectAsync(1, elem => 
+                {
+                    if (elem)
+                        throw new TestException("this has gone too far");
+                    return Task.FromResult(elem);
+                })
+                .AddAttributes(ActorAttributes.CreateSupervisionStrategy(cause =>
+                {
+                    switch (cause)
+                    {
+                        case TestException:
+                            failCount.IncrementAndGet();
+                            return Directive.Resume;
+                        default:
+                            return Directive.Stop;
+                    }
+                }))
+                .RunWith(Sink.Seq<bool>(), Materializer);
+
+            result.Count.Should().Be(1);
+            result[0].Should().BeFalse();
+            failCount.Current.Should().Be(1);
+        }
+        
+        [Theory(DisplayName = "SelectAsync with restart decider should restart")]
+        [ClassData(typeof(FailingTaskData<ImmutableList<int>>))]
+        public async Task SelectAsyncFailingTaskTest(Func<ImmutableList<int>, Task<NotUsed>> mapFunc)
+        {
+            var materializer = ActorMaterializer.Create(Sys);
+        
+            var queue = Source
+                .Queue<int>(bufferSize: 5000, overflowStrategy: OverflowStrategy.DropNew)
+                .BatchWeighted(
+                    max: 100,
+                    costFunction: i => i,
+                    seed: r => ImmutableList.Create([r]),
+                    aggregate: (oldRows, i) => oldRows.Add(i))
+                .SelectAsync(
+                    parallelism: 3,
+                    asyncMapper: mapFunc)
+                .AddAttributes(ActorAttributes.CreateSupervisionStrategy(Deciders.RestartingDecider))
+                .ToMaterialized(Sink.Ignore<NotUsed>(), Keep.Left)
+                .Run(materializer);
+
+            Assert.IsType<QueueOfferResult.Enqueued>(await queue.OfferAsync(1));
+
+            await Task.Delay(500.Milliseconds());
+            
+            // Materializer should stay alive
+            Assert.False(materializer.IsShutdown);
+        
+            // Stream should still work, it should not throw a `StreamDetachedException` 
+            Assert.IsType<QueueOfferResult.Enqueued>(await queue.OfferAsync(1));
         }
     }
 }

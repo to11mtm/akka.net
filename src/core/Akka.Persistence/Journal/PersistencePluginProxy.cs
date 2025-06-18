@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="PersistencePluginProxy.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -18,8 +18,10 @@ namespace Akka.Persistence.Journal
     /// <summary>
     /// TBD
     /// </summary>
-    public class PersistencePluginProxy : ActorBase, IWithUnboundedStash
+    public class PersistencePluginProxy : ActorBase, IWithUnboundedStash, IWithTimers
     {
+        private const string InitTimeoutTimerKey = nameof(InitTimeoutTimerKey);
+        
         /// <summary>
         /// TBD
         /// </summary>
@@ -42,7 +44,7 @@ namespace Akka.Persistence.Journal
 
         private sealed class InitTimeout
         {
-            public static readonly InitTimeout Instance = new InitTimeout();
+            public static readonly InitTimeout Instance = new();
             private InitTimeout() { }
         }
 
@@ -125,7 +127,9 @@ namespace Akka.Persistence.Journal
         /// <summary>
         /// TBD
         /// </summary>
-        public IStash Stash { get; set; }
+        public IStash Stash { get; set; } = null!;
+
+        public ITimerScheduler Timers { get; set; } = null!;
 
         /// <summary>
         /// TBD
@@ -168,7 +172,7 @@ namespace Akka.Persistence.Journal
                                 targetAddress);
                     }
                 }
-                Context.System.Scheduler.ScheduleTellOnce(_initTimeout, Self, InitTimeout.Instance, Self);
+                Timers.StartSingleTimer(InitTimeoutTimerKey, InitTimeout.Instance, _initTimeout, Self);
             }
             base.PreStart();
         }
@@ -192,10 +196,10 @@ namespace Akka.Persistence.Journal
 
         private bool Init(object message)
         {
-            if (message is TargetLocation)
+            if (message is TargetLocation location)
             {
                 Context.SetReceiveTimeout(TimeSpan.FromSeconds(1)); // for retries
-                Context.Become(Identifying(((TargetLocation)message).Address));
+                Context.Become(Identifying(location.Address));
             }
             else if (message is InitTimeout)
             {
@@ -233,9 +237,8 @@ namespace Akka.Persistence.Journal
         {
             return message =>
             {
-                if (message is ActorIdentity)
+                if (message is ActorIdentity ai)
                 {
-                    var ai = (ActorIdentity)message;
                     if (_targetPluginId.Equals(ai.MessageId))
                     {
                         var target = ai.Subject;
@@ -265,16 +268,15 @@ namespace Akka.Persistence.Journal
         {
             return message =>
             {
-                if (message is TargetLocation)
+                if (message is TargetLocation location)
                 {
-                    var address = ((TargetLocation)message).Address;
+                    var address = location.Address;
                     if (targetAtThisNode && !address.Equals(_selfAddress))
                         BecomeIdentifying(address);
                 }
-                else if (message is Terminated)
+                else if (message is Terminated terminated)
                 {
-                    var t = (Terminated)message;
-                    if (t.ActorRef.Equals(targetJournal))
+                    if (terminated.ActorRef.Equals(targetJournal))
                     {
                         Context.Unwatch(targetJournal);
                         Context.Become(InitTimedOut());
@@ -316,44 +318,38 @@ namespace Akka.Persistence.Journal
                             }
                         }
                     }
-                    else if (message is ReplayMessages)
+                    else if (message is ReplayMessages messages)
                     {
-                        var r = (ReplayMessages)message;
-                        r.PersistentActor.Tell(new ReplayMessagesFailure(TimeoutException()));
+                        messages.PersistentActor.Tell(new ReplayMessagesFailure(TimeoutException()));
                     }
-                    else if (message is DeleteMessagesTo)
+                    else if (message is DeleteMessagesTo to)
                     {
-                        var d = (DeleteMessagesTo)message;
-                        d.PersistentActor.Tell(new DeleteMessagesFailure(TimeoutException(), d.ToSequenceNr));
+                        to.PersistentActor.Tell(new DeleteMessagesFailure(TimeoutException(), to.ToSequenceNr));
                     }
                 }
                 else if (message is ISnapshotRequest)
                 {
                     // exhaustive match
-                    if (message is LoadSnapshot)
+                    if (message is LoadSnapshot snapshot)
                     {
-                        var l = (LoadSnapshot)message;
                         Sender.Tell(new LoadSnapshotFailed(TimeoutException()));
                     }
-                    else if (message is SaveSnapshot)
+                    else if (message is SaveSnapshot saveSnapshot)
                     {
-                        var s = (SaveSnapshot)message;
-                        Sender.Tell(new SaveSnapshotFailure(s.Metadata, TimeoutException()));
+                        Sender.Tell(new SaveSnapshotFailure(saveSnapshot.Metadata, TimeoutException()));
                     }
-                    else if (message is DeleteSnapshot)
+                    else if (message is DeleteSnapshot deleteSnapshot)
                     {
-                        var d = (DeleteSnapshot)message;
-                        Sender.Tell(new DeleteSnapshotFailure(d.Metadata, TimeoutException()));
+                        Sender.Tell(new DeleteSnapshotFailure(deleteSnapshot.Metadata, TimeoutException()));
                     }
-                    else if (message is DeleteSnapshots)
+                    else if (message is DeleteSnapshots snapshots)
                     {
-                        var d = (DeleteSnapshots)message;
-                        Sender.Tell(new DeleteSnapshotsFailure(d.Criteria, TimeoutException()));
+                        Sender.Tell(new DeleteSnapshotsFailure(snapshots.Criteria, TimeoutException()));
                     }
                 }
-                else if (message is TargetLocation)
+                else if (message is TargetLocation location)
                 {
-                    BecomeIdentifying(((TargetLocation)message).Address);
+                    BecomeIdentifying(location.Address);
                 }
                 else if (message is Terminated)
                 {

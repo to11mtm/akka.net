@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="DistributedPubSubMessageSerializer.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -79,6 +79,8 @@ namespace Akka.Cluster.Tools.PublishSubscribe.Serialization
                     return SendToAllToProto(all);
                 case Publish publish:
                     return PublishToProto(publish);
+                case PublishWithAck:
+                    throw new SerializationException("ClusterClient does not support PublishWithAck");
                 case SendToOneSubscriber subscriber:
                     return SendToOneSubscriberToProto(subscriber);
                 default:
@@ -153,14 +155,14 @@ namespace Akka.Cluster.Tools.PublishSubscribe.Serialization
         private Internal.Status StatusFrom(byte[] bytes)
         {
             var statusProto = Proto.Msg.Status.Parser.ParseFrom(bytes);
-            var versions = new Dictionary<Address, long>();
+            var versions = ImmutableDictionary.CreateBuilder<Address, long>();
 
             foreach (var protoVersion in statusProto.Versions)
             {
                 versions.Add(AddressFrom(protoVersion.Address), protoVersion.Timestamp);
             }
 
-            return new Internal.Status(versions, statusProto.ReplyToStatus);
+            return new Internal.Status(versions.ToImmutable(), statusProto.ReplyToStatus);
         }
 
         private static byte[] DeltaToProto(Delta delta)
@@ -189,7 +191,7 @@ namespace Akka.Cluster.Tools.PublishSubscribe.Serialization
         private Delta DeltaFrom(byte[] bytes)
         {
             var deltaProto = Proto.Msg.Delta.Parser.ParseFrom(bytes);
-            var buckets = new List<Bucket>();
+            var buckets = ImmutableList.CreateBuilder<Bucket>();
             foreach (var protoBuckets in deltaProto.Buckets)
             {
                 var content = new Dictionary<string, ValueHolder>();
@@ -204,7 +206,7 @@ namespace Akka.Cluster.Tools.PublishSubscribe.Serialization
                 buckets.Add(bucket);
             }
 
-            return new Delta(buckets.ToArray());
+            return new Delta(buckets.ToImmutable());
         }
 
         private byte[] SendToProto(Send send)
@@ -242,13 +244,14 @@ namespace Akka.Cluster.Tools.PublishSubscribe.Serialization
             var protoMessage = new Proto.Msg.Publish();
             protoMessage.Topic = publish.Topic;
             protoMessage.Payload = _payloadSupport.PayloadToProto(publish.Message);
+            protoMessage.SendOneMessageToEachGroup = publish.SendOneMessageToEachGroup;
             return protoMessage.ToByteArray();
         }
 
         private Publish PublishFrom(byte[] bytes)
         {
             var publishProto = Proto.Msg.Publish.Parser.ParseFrom(bytes);
-            return new Publish(publishProto.Topic, _payloadSupport.PayloadFrom(publishProto.Payload));
+            return new Publish(publishProto.Topic, _payloadSupport.PayloadFrom(publishProto.Payload), publishProto.SendOneMessageToEachGroup);
         }
 
         private byte[] SendToOneSubscriberToProto(SendToOneSubscriber sendToOneSubscriber)

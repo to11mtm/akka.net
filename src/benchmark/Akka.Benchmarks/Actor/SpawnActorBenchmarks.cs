@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="SpawnActorBenchmarks.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -10,66 +10,82 @@ using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Benchmarks.Configurations;
 using BenchmarkDotNet.Attributes;
-using BenchmarkDotNet.Engines;
+using static Akka.Benchmarks.Configurations.BenchmarkCategories;
 
 namespace Akka.Benchmarks.Actor
 {
-    [Config(typeof(MicroBenchmarkConfig))]
-    [SimpleJob(RunStrategy.Throughput, targetCount:10, warmupCount:5, invocationCount: ActorCount)]
+    [Config(typeof(MacroBenchmarkConfig))]
     public class SpawnActorBenchmarks
     {
-        public const int ActorCount = 100_000;
-        private TimeSpan timeout;
-        private ActorSystem system;
+        [Params(100_000)]
+        public int ActorCount { get;set; }
+        
+        [Params(true, false)]
+        public bool EnableTelemetry { get; set; }
+        
+        private ActorSystem _system;
 
-        [GlobalSetup]
+        [IterationSetup]
         public void Setup()
         {
-            timeout = TimeSpan.FromMinutes(1);
-            system = ActorSystem.Create("system");
+            if(EnableTelemetry) // need to measure the impact of publishing actor start / stop events
+                _system = ActorSystem.Create("system", "akka.actor.telemetry.enabled = true");
+            else
+                _system = ActorSystem.Create("system");
         }
 
-        [GlobalCleanup]
+        [IterationCleanup]
         public void Cleanup()
         {
-            system.Dispose();
+           _system.Terminate().Wait();
         }
 
         [Benchmark]
-        public void Actor_spawn()
+        [BenchmarkCategory(MacroBenchmark, ActorSpawningBenchmark)]
+        public async Task Actor_spawn()
         {
-            var parent = system.ActorOf(Parent.Props);
+            var parent = _system.ActorOf(Parent.Props);
+            
+            // spawn a bunch of actors
+            await parent.Ask<TestDone>(new StartTest(ActorCount), TimeSpan.FromMinutes(2)).ConfigureAwait(false);
+            
+            // terminate the hierarchy
+            await parent.GracefulStop(TimeSpan.FromMinutes(1)).ConfigureAwait(false);
         }
 
         #region actors
 
         sealed class StartTest
         {
-            public static readonly StartTest Instance = new StartTest();
-            private StartTest() { }
+            public StartTest(int actorCount) {
+                ActorCount = actorCount;
+            }
+
+            public int ActorCount { get; }
         }
 
         sealed class ChildReady
         {
-            public static readonly ChildReady Instance = new ChildReady();
+            public static readonly ChildReady Instance = new();
             private ChildReady() { }
         }
 
         sealed class TestDone
         {
-            public static readonly TestDone Instance = new TestDone();
+            public static readonly TestDone Instance = new();
             private TestDone() { }
         }
 
         sealed class Parent : ReceiveActor
         {
             public static readonly Props Props = Props.Create<Parent>();
-            private int count = ActorCount - 1; // -1 because we also create the parent
+            private int count;
             private IActorRef replyTo;
             public Parent()
             {
                 Receive<StartTest>(_ =>
                 {
+                    count = _.ActorCount - 1; // -1 because we also create the parent
                     replyTo = Sender;
                     for (int i = 0; i < count; i++)
                     {

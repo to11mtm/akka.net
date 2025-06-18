@@ -1,12 +1,13 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="MessageContainerSerializer.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using System.Linq;
+using System.Runtime.Serialization;
 using Akka.Actor;
 using Akka.Serialization;
 using Akka.Util;
@@ -71,7 +72,6 @@ namespace Akka.Remote.Serialization
         public override object FromBinary(byte[] bytes, Type type)
         {
             var selectionEnvelope = Proto.Msg.SelectionEnvelope.Parser.ParseFrom(bytes);
-            var message = _payloadSupport.PayloadFrom(selectionEnvelope.Payload);
 
             var elements = new SelectionPathElement[selectionEnvelope.Pattern.Count];
             for (var i = 0; i < selectionEnvelope.Pattern.Count; i++)
@@ -85,10 +85,29 @@ namespace Akka.Remote.Serialization
                     elements[i] = new SelectParent();
             }
 
+            object message;
+            try
+            {
+                message = _payloadSupport.PayloadFrom(selectionEnvelope.Payload);
+            }
+            catch (Exception ex)
+            {
+                var payload = selectionEnvelope.Payload;
+                
+                var manifest = !payload.MessageManifest.IsEmpty
+                    ? payload.MessageManifest.ToStringUtf8()
+                    : string.Empty;
+                
+                throw new SerializationException(
+                    $"Failed to deserialize payload object when deserializing {nameof(ActorSelectionMessage)} with " +
+                    $"payload [SerializerId={payload.SerializerId}, Manifest={manifest}] addressed to [" +
+                    $"{string.Join(",", elements.Select(e => e.ToString()))}]. {GetErrorForSerializerId(payload.SerializerId)}", ex);
+            }
+
             return new ActorSelectionMessage(message, elements);
         }
 
-        private Proto.Msg.Selection BuildPattern(string matcher, Proto.Msg.Selection.Types.PatternType tpe)
+        private static Proto.Msg.Selection BuildPattern(string matcher, Proto.Msg.Selection.Types.PatternType tpe)
         {
             var selection = new Proto.Msg.Selection { Type = tpe };
             if (matcher != null)

@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="DistributedData.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -12,7 +12,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Configuration;
+using Akka.Dispatch.SysMsg;
 using Akka.Event;
+using Akka.Pattern;
 
 namespace Akka.DistributedData
 {
@@ -83,9 +85,24 @@ namespace Akka.DistributedData
             else
             {
                 var name = config.GetString("name", null);
-                Replicator = system.ActorOf(Akka.DistributedData.Replicator.Props(_settings), name);
+                Replicator = _settings.RestartReplicatorOnFailure 
+                    ? system.ActorOf(GetSupervisedReplicator(_settings, name), name+"Supervisor")
+                    : system.ActorOf(Akka.DistributedData.Replicator.Props(_settings), name);
             }
         }
+
+        private static Props GetSupervisedReplicator(ReplicatorSettings settings, string name) => BackoffSupervisor.Props(
+                        Backoff.OnStop(
+                                childProps: Akka.DistributedData.Replicator.Props(settings),
+                                childName: name,
+                                minBackoff: TimeSpan.FromSeconds(3),
+                                maxBackoff: TimeSpan.FromSeconds(300),
+                                randomFactor: 0.2,
+                                maxNrOfRetries: -1)
+                            .WithFinalStopMessage(m => m is Terminate))
+                    .WithDeploy(Deploy.Local).WithDispatcher(settings.Dispatcher);
+
+        
 
         /// <summary>
         /// TBD
@@ -232,7 +249,7 @@ namespace Akka.DistributedData
         /// </summary>
         /// <param name="system">TBD</param>
         /// <returns>TBD</returns>
-        public override DistributedData CreateExtension(ExtendedActorSystem system) => new DistributedData(system);
+        public override DistributedData CreateExtension(ExtendedActorSystem system) => new(system);
     }
 
     public static class DistributedDataExtensions

@@ -1,30 +1,35 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
-  <Import Project="..\..\common.props" />
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <AssemblyTitle>Akka</AssemblyTitle>
-    <Description>Akka.NET is a port of the popular Java/Scala framework Akka to .NET</Description>
-    <TargetFrameworks>$(NetStandardLibVersion)</TargetFrameworks>
+    <TargetFrameworks>$(NetStandardLibVersion);$(NetLibVersion)</TargetFrameworks>
+    <Description>Canonical actor model implementation for .NET with local + distributed actors in C# and F#.</Description>
     <PackageTags>$(AkkaPackageTags)</PackageTags>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
-    <LangVersion>7.2</LangVersion>
   </PropertyGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="Configuration\Pigeon.conf" />
+    <EmbeddedResource Include="Configuration\akka.conf" />
   </ItemGroup>
 
+  <!-- Common packages for all target frameworks -->
   <ItemGroup>
-      <PackageReference Include="Newtonsoft.Json" Version="$(NewtonsoftJsonVersion)" />
-    <PackageReference Include="System.Collections.Immutable" Version="1.7.1" />
+    <PackageReference Include="Microsoft.Extensions.ObjectPool" Version="$(MsExtVersion)" />
+    <PackageReference Include="Newtonsoft.Json" Version="$(NewtonsoftJsonVersion)" />
+    <PackageReference Include="System.Collections.Immutable" Version="$(MicrosoftLibVersion)" />
+    <PackageReference Include="System.Configuration.ConfigurationManager" Version="$(ConfigurationManagerVersion)"/>
   </ItemGroup>
 
+  <!-- Packages only for NetStandard -->
   <ItemGroup Condition="'$(TargetFramework)' == '$(NetStandardLibVersion)'">
-      <PackageReference Include="System.Configuration.ConfigurationManager">
-          <Version>4.7.0</Version>
-      </PackageReference>
+    <PackageReference Include="Polyfill" Version="1.28.0" PrivateAssets="all" />
+    <PackageReference Include="System.Reflection.Emit" Version="4.7.0" />
+    <PackageReference Include="System.Threading.Channels" Version="$(MicrosoftLibVersion)" />
   </ItemGroup>
-
+  
+  <ItemGroup Label="PublicAnalyzers">
+    <PackageReference Include="Akka.Analyzers" Version="$(AkkaAnalyzerVersion)" />
+  </ItemGroup>
+  
   <ItemGroup>
     <None Update="Util\MatchHandler\PartialHandlerArgumentsCapture.tt">
       <Generator>TextTemplatingFileGenerator</Generator>
@@ -36,13 +41,5 @@
       <DependentUpon>PartialHandlerArgumentsCapture.tt</DependentUpon>
     </Compile>
   </ItemGroup>
-
-  <PropertyGroup Condition=" '$(TargetFramework)' == '$(NetStandardLibVersion)' ">
-    <DefineConstants>$(DefineConstants);CORECLR;CONFIGURATION;</DefineConstants>
-  </PropertyGroup>
-
-  <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
-    <DefineConstants>$(DefineConstants);RELEASE</DefineConstants>
-  </PropertyGroup>
 
 </Project>

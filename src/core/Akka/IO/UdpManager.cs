@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="UdpManager.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -61,23 +61,25 @@ namespace Akka.IO
 
         protected override bool Receive(object message)
         {
-            var b = message as Udp.Bind;
-            if (b != null)
+            switch (message)
             {
-                var commander = Sender;
-                Context.ActorOf(Props.Create(() => new UdpListener(_udp, commander, b)));
-                return true;
+                case Udp.Bind b:
+                {
+                    var commander = Sender;
+                    Context.ActorOf(Props.Create(() => new UdpListener(_udp, commander, b)).WithDeploy(Deploy.Local));
+                    return true;
+                }
+                case Udp.SimpleSender s:
+                {
+                    var commander = Sender;
+                    Context.ActorOf(Props.Create(() => new UdpSender(_udp, commander, s.Options)).WithDeploy(Deploy.Local));
+                    return true;
+                }
+                default:
+                    throw new ArgumentException($"The supplied message of type {message.GetType().Name} is invalid. Only Connect and Bind messages are supported. " +
+                                                $"If you are going to manage your connection state, you need to communicate with Tcp.Connected sender actor. " +
+                                                $"See more here: https://getakka.net/articles/networking/io.html");
             }
-            var s = message as Udp.SimpleSender;
-            if (s != null)
-            {
-                var commander = Sender;
-                Context.ActorOf(Props.Create(() => new UdpSender(_udp, commander, s.Options)));
-                return true;
-            }
-            throw new ArgumentException($"The supplied message of type {message.GetType().Name} is invalid. Only Connect and Bind messages are supported. " +
-                                        $"If you are going to manage your connection state, you need to communicate with Tcp.Connected sender actor. " +
-                                        $"See more here: https://getakka.net/articles/networking/io.html");
         }
     }
 }

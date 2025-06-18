@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ListenerSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -41,19 +41,16 @@ namespace Akka.Tests.Routing
             broadcast.Tell("foo");
 
             //assert
-            barLatch.Ready(TestLatch.DefaultTimeout);
+            barLatch.Ready(RemainingOrDefault);
             Assert.Equal(2, barCount.Current);
 
-            fooLatch.Ready(TestLatch.DefaultTimeout);
+            fooLatch.Ready(RemainingOrDefault);
             foreach (var actor in new[] {a1, a2, a3, broadcast})
             {
                 Sys.Stop(actor);
             }
         }
-
-
-        #region Test Actors
-
+        
         public class BroadcastActor : UntypedActor, IListeners
         {
             public BroadcastActor()
@@ -63,13 +60,16 @@ namespace Akka.Tests.Routing
 
             protected override void OnReceive(object message)
             {
-                PatternMatch.Match(message)
-                    .With<ListenerMessage>(l => Listeners.ListenerReceive(l))
-                    .With<string>(s =>
-                    {
+                switch (message)
+                {
+                    case ListenerMessage l:
+                        Listeners.ListenerReceive(l);
+                        break;
+                    case string s:
                         if (s.Equals("foo"))
                             Listeners.Gossip("bar");
-                    });
+                        break;
+                }
             }
 
             public ListenerSupport Listeners { get; private set; }
@@ -77,9 +77,9 @@ namespace Akka.Tests.Routing
 
         public class ListenerActor : UntypedActor, IListeners
         {
-            private TestLatch _fooLatch;
-            private TestLatch _barLatch;
-            private AtomicCounter _barCount;
+            private readonly TestLatch _fooLatch;
+            private readonly TestLatch _barLatch;
+            private readonly AtomicCounter _barCount;
 
             public ListenerActor(TestLatch fooLatch, TestLatch barLatch, AtomicCounter barCount)
             {
@@ -91,27 +91,21 @@ namespace Akka.Tests.Routing
 
             protected override void OnReceive(object message)
             {
-                PatternMatch.Match(message)
-                    .With<string>(str =>
-                    {
-                        if (str.Equals("bar"))
-                        {
-                            _barCount.GetAndIncrement();
-                            _barLatch.CountDown();
-                        }
-
-                        if (str.Equals("foo"))
-                        {
-                            _fooLatch.CountDown();
-                        }
-                    });
+                if (message is not string str) return;
+                switch (str)
+                {
+                    case "bar":
+                        _barCount.GetAndIncrement();
+                        _barLatch.CountDown();
+                        break;
+                    case "foo":
+                        _fooLatch.CountDown();
+                        break;
+                }
             }
 
-            public ListenerSupport Listeners { get; private set; }
+            public ListenerSupport Listeners { get; }
         }
-
-
-        #endregion
     }
 }
 

@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ManyRecoveriesSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -60,7 +60,7 @@ namespace Akka.Persistence.Tests
         public ManyRecoveriesSpec() : base(ConfigurationFactory.ParseString(@"
             akka.actor.default-dispatcher.Type = ForkJoinDispatcher
             akka.actor.default-dispatcher.dedicated-thread-pool.thread-count = 5
-            akka.persistence.max-concurrent-recoveries = 3
+            akka.persistence.max-concurrent-recoveries = 1
             akka.persistence.journal.plugin = ""akka.persistence.journal.inmem""
 
             # snapshot store plugin is NOT defined, things should still work
@@ -93,7 +93,7 @@ namespace Akka.Persistence.Tests
             });
 
             latch.CountDown();
-            ReceiveN(100).ShouldAllBeEquivalentTo(Enumerable.Range(1, 100).Select(n => $"a{n}-B-2"));
+            ReceiveN(100).Should().BeEquivalentTo(Enumerable.Range(1, 100).Select(n => $"a{n}-B-2"));
         }
     }
 }

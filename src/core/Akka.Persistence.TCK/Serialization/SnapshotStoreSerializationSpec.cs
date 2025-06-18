@@ -1,37 +1,62 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="SnapshotStoreSerializationSpec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using System.Text;
 using Akka.Actor;
+using Akka.Actor.Setup;
 using Akka.Configuration;
 using Akka.Persistence.Fsm;
 using Akka.Serialization;
 using Xunit;
 using Xunit.Abstractions;
 using Akka.Util.Internal;
+using FluentAssertions;
 
+#nullable enable
 namespace Akka.Persistence.TCK.Serialization
 {
     public abstract class SnapshotStoreSerializationSpec : PluginSpec
     {
+        private static readonly Config BaseConfig = ConfigurationFactory.ParseString(@"
+akka.actor {
+    serializers {
+        my-snapshot = ""Akka.Persistence.TCK.Serialization.Test+MySnapshotSerializer, Akka.Persistence.TCK""
+        my-snapshot2 = ""Akka.Persistence.TCK.Serialization.Test+MySnapshotSerializer2, Akka.Persistence.TCK""
+    }
+    serialization-bindings {
+        ""Akka.Persistence.TCK.Serialization.Test+MySnapshot, Akka.Persistence.TCK"" = my-snapshot
+        ""Akka.Persistence.TCK.Serialization.Test+MySnapshot2, Akka.Persistence.TCK"" = my-snapshot2
+    }
+}");
+        
+        private static ActorSystemSetup WithConfig(Config? config = null)
+        {
+            return ActorSystemSetup.Empty
+                .And(BootstrapSetup.Create().WithConfig(BaseConfig.WithFallback(FromConfig(config))));
+        }
+        
+        protected static ActorSystemSetup FromActorSystemSetup(ActorSystemSetup setup)
+        {
+            var bootstrapOption = setup.Get<BootstrapSetup>();
+            var bootstrap = bootstrapOption.HasValue ? bootstrapOption.Value : BootstrapSetup.Create();
+            var config = bootstrap.Config.HasValue
+                ? FromConfig(BaseConfig.WithFallback(bootstrap.Config.Value))
+                : FromConfig(BaseConfig);
+            return setup.And(bootstrap.WithConfig(config));
+        }
+        
         protected SnapshotStoreSerializationSpec(Config config, string actorSystem, ITestOutputHelper output) 
-            : base(ConfigurationFactory.ParseString(@"
-                akka.actor {
-                  serializers {
-                    my-snapshot = ""Akka.Persistence.TCK.Serialization.Test+MySnapshotSerializer, Akka.Persistence.TCK""
-                    my-snapshot2 = ""Akka.Persistence.TCK.Serialization.Test+MySnapshotSerializer2, Akka.Persistence.TCK""
-                  }
-                  serialization-bindings {
-                    ""Akka.Persistence.TCK.Serialization.Test+MySnapshot, Akka.Persistence.TCK"" = my-snapshot
-                    ""Akka.Persistence.TCK.Serialization.Test+MySnapshot2, Akka.Persistence.TCK"" = my-snapshot2
-                  }
-                }
-            ").WithFallback(config), actorSystem, output)
+            : this(WithConfig(config), actorSystem, output)
+        {
+        }
+        
+        protected SnapshotStoreSerializationSpec(ActorSystemSetup setup, string actorSystem, ITestOutputHelper output)
+            :base(FromActorSystemSetup(setup), actorSystem, output)
         {
         }
 
@@ -44,7 +69,7 @@ namespace Akka.Persistence.TCK.Serialization
 
             var snapshot = new Test.MySnapshot("a");
 
-            var metadata = new SnapshotMetadata(Pid, 1);
+            var metadata = new SnapshotMetadata(Pid, 1, Sys.Scheduler.Now.UtcDateTime);
             SnapshotStore.Tell(new SaveSnapshot(metadata, snapshot), probe.Ref);
             probe.ExpectMsg<SaveSnapshotSuccess>();
 
@@ -60,7 +85,7 @@ namespace Akka.Persistence.TCK.Serialization
 
             var snapshot = new Test.MySnapshot2("a");
 
-            var metadata = new SnapshotMetadata(Pid, 1);
+            var metadata = new SnapshotMetadata(Pid, 1, Sys.Scheduler.Now.UtcDateTime);
             SnapshotStore.Tell(new SaveSnapshot(metadata, snapshot), probe.Ref);
             probe.ExpectMsg<SaveSnapshotSuccess>();
 
@@ -76,13 +101,13 @@ namespace Akka.Persistence.TCK.Serialization
 
             var unconfirmed = new UnconfirmedDelivery[]
             {
-                new UnconfirmedDelivery(1, TestActor.Path, "a"),
-                new UnconfirmedDelivery(2, TestActor.Path, "b"),
-                new UnconfirmedDelivery(3, TestActor.Path, 42)
+                new(1, TestActor.Path, "a"),
+                new(2, TestActor.Path, "b"),
+                new(3, TestActor.Path, 42)
             };
             var atLeastOnceDeliverySnapshot = new AtLeastOnceDeliverySnapshot(17, unconfirmed);
 
-            var metadata = new SnapshotMetadata(Pid, 2);
+            var metadata = new SnapshotMetadata(Pid, 2, Sys.Scheduler.Now.UtcDateTime);
             SnapshotStore.Tell(new SaveSnapshot(metadata, atLeastOnceDeliverySnapshot), probe.Ref);
             probe.ExpectMsg<SaveSnapshotSuccess>();
 
@@ -95,10 +120,10 @@ namespace Akka.Persistence.TCK.Serialization
         {
             var probe = CreateTestProbe();
 
-            var unconfirmed = new UnconfirmedDelivery[0];
+            var unconfirmed = Array.Empty<UnconfirmedDelivery>();
             var atLeastOnceDeliverySnapshot = new AtLeastOnceDeliverySnapshot(13, unconfirmed);
 
-            var metadata = new SnapshotMetadata(Pid, 2);
+            var metadata = new SnapshotMetadata(Pid, 2, Sys.Scheduler.Now.UtcDateTime);
             SnapshotStore.Tell(new SaveSnapshot(metadata, atLeastOnceDeliverySnapshot), probe.Ref);
             probe.ExpectMsg<SaveSnapshotSuccess>();
 
@@ -113,7 +138,7 @@ namespace Akka.Persistence.TCK.Serialization
 
             var persistentFSMSnapshot = new PersistentFSM.PersistentFSMSnapshot<string>("mystate", "mydata", TimeSpan.FromDays(4));
 
-            var metadata = new SnapshotMetadata(Pid, 2);
+            var metadata = new SnapshotMetadata(Pid, 2, Sys.Scheduler.Now.UtcDateTime);
             SnapshotStore.Tell(new SaveSnapshot(metadata, persistentFSMSnapshot), probe.Ref);
             probe.ExpectMsg<SaveSnapshotSuccess>();
 

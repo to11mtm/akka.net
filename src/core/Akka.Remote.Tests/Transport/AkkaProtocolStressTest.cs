@@ -1,21 +1,25 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="AkkaProtocolStressTest.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
 using System;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Configuration;
 using Akka.Remote.Transport;
 using Akka.TestKit;
+using Akka.TestKit.Extensions;
 using Akka.TestKit.Internal;
 using Akka.TestKit.Internal.StringMatcher;
 using Akka.TestKit.TestEvent;
 using Akka.Util.Internal;
+using FluentAssertions.Extensions;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace Akka.Remote.Tests.Transport
 {
@@ -26,7 +30,7 @@ namespace Akka.Remote.Tests.Transport
     {
         #region Setup / Config
 
-        public static Config AkkaProtocolStressTestConfig
+        private static Config AkkaProtocolStressTestConfig
         {
             get
             {
@@ -53,26 +57,25 @@ namespace Akka.Remote.Tests.Transport
             }
         }
 
-        sealed class ResendFinal
+        private sealed class ResendFinal
         {
             private ResendFinal() { }
-            private static readonly ResendFinal _instance = new ResendFinal(); 
 
-            public static ResendFinal Instance
-            {
-                get { return _instance; }
-            }
+            public static ResendFinal Instance { get; } = new();
         }
 
-        class SequenceVerifier : UntypedActor
+        private class SequenceVerifier : UntypedActor, IWithTimers
         {
-            private int Limit = 100000;
-            private int NextSeq = 0;
-            private int MaxSeq = -1;
-            private int Losses = 0;
+            private const string SendNextTimerKey = nameof(SendNextTimerKey);
+            private const string SendFinalTimerKey = nameof(SendFinalTimerKey);
+            
+            private const int Limit = 100000;
+            private int _nextSeq = 0;
+            private int _maxSeq = -1;
+            private int _losses = 0;
 
-            private IActorRef _remote;
-            private IActorRef _controller;
+            private readonly IActorRef _remote;
+            private readonly IActorRef _controller;
 
             public SequenceVerifier(IActorRef remote, IActorRef controller)
             {
@@ -80,28 +83,30 @@ namespace Akka.Remote.Tests.Transport
                 _controller = controller;
             }
 
+            public ITimerScheduler Timers { get; set; } = null!;
+
             protected override void OnReceive(object message)
             {
                 if (message.Equals("start"))
                 {
                     Self.Tell("sendNext");
                 }
-                else if (message.Equals("sendNext") && NextSeq < Limit)
+                else if (message.Equals("sendNext") && _nextSeq < Limit)
                 {
-                    _remote.Tell(NextSeq);
-                    NextSeq++;
-                    if (NextSeq%2000 == 0)
-                        Context.System.Scheduler.ScheduleTellOnce(TimeSpan.FromMilliseconds(500), Self, "sendNext", Self);
+                    _remote.Tell(_nextSeq);
+                    _nextSeq++;
+                    if (_nextSeq%2000 == 0)
+                        Timers.StartSingleTimer(SendNextTimerKey, "sendNext", TimeSpan.FromMilliseconds(500), Self);
                     else
                         Self.Tell("sendNext");
                 }
-                else if (message is int || message is long)
+                else if (message is int or long)
                 {
                     var seq = Convert.ToInt32(message);
-                    if (seq > MaxSeq)
+                    if (seq > _maxSeq)
                     {
-                        Losses += seq - MaxSeq - 1;
-                        MaxSeq = seq;
+                        _losses += seq - _maxSeq - 1;
+                        _maxSeq = seq;
 
                         // Due to the (bursty) lossyness of gate, we are happy with receiving at least one message from the upper
                         // half (> 50000). Since messages are sent in bursts of 2000 0.5 seconds apart, this is reasonable.
@@ -110,15 +115,14 @@ namespace Akka.Remote.Tests.Transport
 
                         if (seq > Limit*0.5)
                         {
-                            _controller.Tell((MaxSeq, Losses));
-                            Context.System.Scheduler.ScheduleTellRepeatedly(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1), Self,
-                                ResendFinal.Instance, Self);
+                            _controller.Tell((_maxSeq, _losses));
+                            Timers.StartPeriodicTimer(SendFinalTimerKey, ResendFinal.Instance, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1), Self);
                             Context.Become(Done);
                         }
                     }
                     else
                     {
-                        _controller.Tell(string.Format("Received out of order message. Previous {0} Received: {1}", MaxSeq, seq));
+                        _controller.Tell($"Received out of order message. Previous {_maxSeq} Received: {seq}");
                     }
                 }
             }
@@ -128,29 +132,29 @@ namespace Akka.Remote.Tests.Transport
             {
                 if (message is ResendFinal)
                 {
-                    _controller.Tell((MaxSeq, Losses));
+                    _controller.Tell((_maxSeq, _losses));
                 }
             }
         }
 
-        class Echo : UntypedActor
+        private class Echo : UntypedActor
         {
             protected override void OnReceive(object message)
             {
                 //BUG: looks like the serializer will by default convert plain numerics sent over the wire into long integers
-                if (message is int || message is long)
+                if (message is int or long)
                 {
                     Sender.Tell(message);
                 }
             }
         }
 
-        private ActorSystem systemB;
-        private IActorRef remote;
+        private readonly ActorSystem _systemB;
+        private IActorRef _remote;
 
         private Address AddressB
         {
-            get { return systemB.AsInstanceOf<ExtendedActorSystem>().Provider.DefaultAddress; }
+            get { return _systemB.AsInstanceOf<ExtendedActorSystem>().Provider.DefaultAddress; }
         }
 
         private RootActorPath RootB
@@ -158,44 +162,45 @@ namespace Akka.Remote.Tests.Transport
             get { return new RootActorPath(AddressB); }
         }
 
-        private IActorRef Here
+        private async Task<IActorRef> Here()
         {
-            get
-            {
-                Sys.ActorSelection(RootB / "user" / "echo").Tell(new Identify(null), TestActor);
-                return ExpectMsg<ActorIdentity>(TimeSpan.FromSeconds(300)).Subject;
-            }
+            Sys.ActorSelection(RootB / "user" / "echo").Tell(new Identify(null), TestActor);
+            return (await ExpectMsgAsync<ActorIdentity>(TimeSpan.FromSeconds(3))).Subject;
         }
 
 
         #endregion
 
-        public AkkaProtocolStressTest() : base(AkkaProtocolStressTestConfig)
+        public AkkaProtocolStressTest(ITestOutputHelper output) : base(AkkaProtocolStressTestConfig, output)
         {
-            systemB = ActorSystem.Create("systemB", Sys.Settings.Config);
-            remote = systemB.ActorOf(Props.Create<Echo>(), "echo");
+            _systemB = ActorSystem.Create("systemB", Sys.Settings.Config);
+            _remote = _systemB.ActorOf(Props.Create<Echo>(), "echo");
         }
 
         #region Tests
 
-        [Fact(Skip = "Extremely racy")]
-        public void AkkaProtocolTransport_must_guarantee_at_most_once_delivery_and_message_ordering_despite_packet_loss()
+        [Fact]
+        public async Task AkkaProtocolTransport_must_guarantee_at_most_once_delivery_and_message_ordering_despite_packet_loss()
         {
             //todo mute both systems for deadletters for any type of message
             EventFilter.DeadLetter().Mute();
-            CreateEventFilter(systemB).DeadLetter().Mute();
-            var mc =
-                RARP.For(Sys)
-                    .Provider.Transport.ManagementCommand(new FailureInjectorTransportAdapter.One(AddressB,
-                        new FailureInjectorTransportAdapter.Drop(0.1, 0.1)));
-            AwaitCondition(() => mc.IsCompleted && mc.Result, TimeSpan.FromSeconds(3));
+            CreateEventFilter(_systemB).DeadLetter().Mute();
+            Assert.True(await RARP.For(Sys)
+                .Provider.Transport.ManagementCommand(new FailureInjectorTransportAdapter.One(AddressB,
+                    new FailureInjectorTransportAdapter.Drop(0.1, 0.1)))
+                .AwaitWithTimeout(3.Seconds()));
 
-            var here = Here;
+            IActorRef here = null;
+            await AwaitConditionAsync(async () =>
+            {
+                here = await Here();
+                return here != null && !here.Equals(ActorRefs.Nobody);
+            }, TimeSpan.FromSeconds(3));
 
             var tester = Sys.ActorOf(Props.Create(() => new SequenceVerifier(here, TestActor)));
             tester.Tell("start");
 
-            ExpectMsg<(int,int)>(TimeSpan.FromSeconds(60));
+            await ExpectMsgAsync<(int,int)>(TimeSpan.FromSeconds(60));
         }
 
         #endregion
@@ -206,16 +211,17 @@ namespace Akka.Remote.Tests.Transport
         {
             EventFilter.Warning(start: "received dead letter").Mute();
             EventFilter.Warning(new Regex("received dead letter.*(InboundPayload|Disassociate)")).Mute();
-            systemB.EventStream.Publish(new Mute(new WarningFilter(new RegexMatcher(new Regex("received dead letter.*(InboundPayload|Disassociate)"))),
+            _systemB.EventStream.Publish(new Mute(new WarningFilter(new RegexMatcher(new Regex("received dead letter.*(InboundPayload|Disassociate)"))),
                 new ErrorFilter(typeof(EndpointException)),
                 new ErrorFilter(new StartsWithString("AssociationError"))));
+
             base.BeforeTermination();
         }
 
-        protected override void AfterTermination()
+        protected override void AfterAll()
         {
-            Shutdown(systemB);
-            base.AfterTermination();
+            Shutdown(_systemB);
+            base.AfterAll();
         }
 
         #endregion

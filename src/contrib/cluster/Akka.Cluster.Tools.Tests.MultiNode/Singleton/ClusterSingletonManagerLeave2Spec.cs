@@ -1,7 +1,7 @@
 ﻿//-----------------------------------------------------------------------
 // <copyright file="ClusterSingletonManagerLeave2Spec.cs" company="Akka.NET Project">
-//     Copyright (C) 2009-2020 Lightbend Inc. <http://www.lightbend.com>
-//     Copyright (C) 2013-2020 .NET Foundation <https://github.com/akkadotnet/akka.net>
+//     Copyright (C) 2009-2022 Lightbend Inc. <http://www.lightbend.com>
+//     Copyright (C) 2013-2025 .NET Foundation <https://github.com/akkadotnet/akka.net>
 // </copyright>
 //-----------------------------------------------------------------------
 
@@ -13,10 +13,12 @@ using Akka.Cluster.TestKit;
 using Akka.Cluster.Tools.Singleton;
 using Akka.Configuration;
 using Akka.Event;
+using Akka.MultiNode.TestAdapter;
 using Akka.Remote.TestKit;
 using Akka.TestKit;
 using Akka.Util.Internal;
 using FluentAssertions;
+using FluentAssertions.Extensions;
 
 namespace Akka.Cluster.Tools.Tests.MultiNode.Singleton
 {
@@ -42,14 +44,14 @@ namespace Akka.Cluster.Tools.Tests.MultiNode.Singleton
                 akka.remote.log-remote-lifecycle-events = off
                 akka.cluster.auto-down-unreachable-after = off
             ")
-                .WithFallback(ClusterSingletonManager.DefaultConfig())
+                .WithFallback(ClusterSingleton.DefaultConfig())
                 .WithFallback(ClusterSingletonProxy.DefaultConfig())
                 .WithFallback(MultiNodeClusterSpec.ClusterConfig());
         }
 
         public class EchoStared
         {
-            public static EchoStared Instance { get; } = new EchoStared();
+            public static EchoStared Instance { get; } = new();
             private EchoStared() { }
         }
 
