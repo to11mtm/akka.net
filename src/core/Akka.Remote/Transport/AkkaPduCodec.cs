@@ -218,6 +218,8 @@ namespace Akka.Remote.Transport
         /// <returns>Class representation of a PDU.</returns>
         public abstract IAkkaPdu DecodePdu(ByteString raw);
 
+        public abstract IAkkaPdu DecodePdu(ArraySegment<byte> raw);
+        
         /// <summary>
         /// Takes an <see cref="IAkkaPdu"/> representation of an Akka PDU and returns its encoded form
         /// as a <see cref="ByteString"/>.
@@ -248,6 +250,9 @@ namespace Akka.Remote.Transport
         /// <returns>TBD</returns>
         public abstract ByteString ConstructPayload(ByteString payload);
 
+        
+        public abstract IO.ByteString ConstructByteString(ByteString payload);
+        
         /// <summary>
         /// TBD
         /// </summary>
@@ -330,6 +335,22 @@ namespace Akka.Remote.Transport
                 throw new PduCodecException("Decoding PDU failed", ex);
             }
         }
+        
+        public override IAkkaPdu DecodePdu(ArraySegment<byte> raw)
+        {
+            try
+            {
+                var pdu = AkkaProtocolMessage.Parser.ParseFrom(raw.Array,raw.Offset,raw.Count);
+                if (pdu.Instruction != null) return DecodeControlPdu(pdu.Instruction);
+                else if (!pdu.Payload.IsEmpty) return new Payload(pdu.Payload); // TODO HasPayload
+                else throw new PduCodecException("Error decoding Akka PDU: Neither message nor control message were contained");
+            }
+            catch (InvalidProtocolBufferException ex)
+            {
+                throw new PduCodecException("Decoding PDU failed", ex);
+            }
+        }
+
 
         /// <summary>
         /// TBD
@@ -340,7 +361,15 @@ namespace Akka.Remote.Transport
         {
             return new AkkaProtocolMessage() { Payload = payload }.ToByteString();
         }
-
+        public override IO.ByteString ConstructByteString(ByteString payload)
+        {
+            return IO.ByteString.FromBytes(
+                new AkkaProtocolMessage() { Payload = payload }.ToByteArray());
+            //var payloadBytes =
+            //    ByteStringConverters._getByteArrayUnsafeFunc(payload);
+            //return IO.ByteString.FromBytes(protoLengthDelimitedHeader(1, payloadBytes.Length))
+            //    .Concat(IO.ByteString.FromBytes(payloadBytes));
+        }
         /// <summary>
         /// TBD
         /// </summary>

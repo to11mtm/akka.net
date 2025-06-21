@@ -7,6 +7,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
@@ -34,14 +35,13 @@ namespace Akka.IO
                 tcp.Settings.OutgoingSocketForceIpv4
                     ? new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp) { Blocking = false }
                     : new Socket(SocketType.Stream, ProtocolType.Tcp) { Blocking = false },
-                ((Inet.SO.TlsConnectionOption)connect.Options.FirstOrDefault(r=>r is Inet.SO.TlsConnectionOption)),
-                connect.PullMode,
-                tcp.Settings.WriteCommandsQueueMaxSize >= 0 ? tcp.Settings.WriteCommandsQueueMaxSize : Option<int>.None)
+                //TODO: FIXME
+                null,
+                //((Inet.SO.TlsConnectionOption)connect.Options.FirstOrDefault(r=>r is Inet.SO.TlsConnectionOption)),
+                connect.PullMode)
         {
             _commander = commander;
             _connect = connect;
-
-            SignDeathPact(commander);
 
             foreach (var option in connect.Options)
             {
@@ -59,7 +59,20 @@ namespace Akka.IO
         {
             if (_connectArgs != null)
             {
-                ReleaseSocketEventArgs(_connectArgs);
+                _connectArgs.UserToken = null;
+                _connectArgs.AcceptSocket = null;
+
+                try
+                {
+                    _connectArgs.SetBuffer(null, 0, 0);
+                    _connectArgs.BufferList = null;
+                }
+                // it can be that for some reason socket is in use and haven't closed yet
+                catch (InvalidOperationException)
+                {
+                }
+
+                _connectArgs.Dispose();
                 _connectArgs = null;
             }
         }
@@ -68,7 +81,7 @@ namespace Akka.IO
         {
             ReleaseConnectionSocketArgs();
 
-            StopWith(new CloseInformation(new HashSet<IActorRef>(new[] {_commander}), _connect.FailureMessage));
+            StopWith(new CloseInformation( ImmutableHashSet.Create(_commander), _connect.FailureMessage));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -117,11 +130,6 @@ namespace Akka.IO
             base.PostStop();
         }
 
-        protected override bool Receive(object message)
-        {
-            throw new NotSupportedException();
-        }
-
         private Receive Resolving(DnsEndPoint remoteAddress)
         {
             return message =>
@@ -147,10 +155,10 @@ namespace Akka.IO
             };
         }
 
-        protected override void Authenticate()
-        {
-            SslStream.AuthenticateAsServer(this.Certificate);
-        }
+        //protected override void Authenticate()
+        //{
+        //    SslStream.AuthenticateAsServer(this.Certificate);
+        //}
 
         private void Register(IPEndPoint address, IPEndPoint fallbackAddress)
         {
@@ -173,7 +181,31 @@ namespace Akka.IO
             });
         }
 
-        private Receive Connecting(int remainingFinishConnectRetries, SendReceiveArgsFake args, IPEndPoint fallbackAddress)
+        internal static SendReceiveArgsFake CreateSocketEventArgs(IActorRef onCompleteNotificationsReceiver)
+        {
+            var args = new SendReceiveArgsFake();
+            args.UserToken = onCompleteNotificationsReceiver;
+            args.Completed += (_, e) =>
+            {
+                var actorRef = e.UserToken as IActorRef;
+                var completeMsg = ResolveMessage(e);
+                actorRef?.Tell(completeMsg);
+            };
+
+            return args;
+
+            Tcp.SocketCompleted ResolveMessage(SendReceiveArgsFake e)
+            {
+                return e.LastOperation switch
+                {
+                    SocketAsyncOperation.Connect => IO.Tcp.SocketConnected.Instance,
+                    _ => throw new NotSupportedException($"Socket operation {e.LastOperation} is not supported")
+                };
+            }
+        }
+
+        private Receive Connecting(int remainingFinishConnectRetries, SendReceiveArgsFake args,
+            IPEndPoint fallbackAddress)
         {
             return message =>
             {
@@ -185,7 +217,6 @@ namespace Akka.IO
                         Log.Debug("Connection established to [{0}]", _connect.RemoteAddress);
 
                         ReleaseConnectionSocketArgs();
-                        AcquireSocketAsyncEventArgs();
 
                         CompleteConnect(_commander, _connect.Options);
                     }

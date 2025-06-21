@@ -151,7 +151,7 @@ namespace Akka.IO
             });
         }
 
-        private static SocketAsyncEventArgs CreateSocketEventArgs(IActorRef onCompleteNotificationsReceiver)
+        internal static SocketAsyncEventArgs CreateSocketEventArgs(IActorRef onCompleteNotificationsReceiver)
         {
             var args = new SocketAsyncEventArgs();
             args.UserToken = onCompleteNotificationsReceiver;

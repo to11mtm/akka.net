@@ -8,6 +8,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
 using Akka.Actor;
@@ -18,6 +19,37 @@ namespace Akka.IO
     /// <summary>
     /// An actor handling the connection state machine for an incoming, already connected SocketChannel.
     /// </summary>
+    
+    internal sealed class TlsIncomingConnection : TlsConnection
+    {
+        private readonly IActorRef _bindHandler;
+        private readonly IEnumerable<Inet.SocketOption> _options;
+
+        public TlsIncomingConnection(
+            TcpExt tcp,
+            Socket socket,
+            SslStream sslStream,
+            IActorRef bindHandler,
+            IEnumerable<Inet.SocketOption> options,
+            bool pullMode)
+            : base(tcp, socket, sslStream, pullMode)
+        {
+            _bindHandler = bindHandler;
+            _options = options;
+            Context.Watch(bindHandler);
+        }
+
+        protected override void PreStart()
+        {
+            CompleteConnect(_bindHandler, _options);
+        }
+
+        protected void Authenticate()
+        {
+            // Implement SSL authentication if needed.
+        }
+    }
+    /*
     internal sealed class TlsIncomingConnection : TlsConnection
     {
         private readonly IActorRef _bindHandler;
@@ -65,5 +97,5 @@ namespace Akka.IO
         {
             throw new NotSupportedException();
         }
-    }
+    }*/
 }

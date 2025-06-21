@@ -26,7 +26,7 @@ using Akka.Util;
 
 namespace Akka.IO
 {
-    internal class SendReceiveArgsFake
+    internal class SendReceiveArgsFake : IDisposable
     {
         public byte[] Buffer { get; protected set; }
         public int Offset { get; protected set; }
@@ -36,50 +36,73 @@ namespace Akka.IO
         public object UserToken { get; set; }
         public IPEndPoint RemoteEndPoint { get; set; }
 
+        public Socket AcceptSocket { get; set; }
+
+        public IList<ArraySegment<byte>>? BufferList { get; set; }
+        public SocketAsyncOperation LastOperation { get; set; }
+
+        public event EventHandler<SendReceiveArgsFake>? Completed;
+
         public void SetBuffer(byte[] bufferArray, int bufferOffset, int bufferCount)
         {
             Buffer = bufferArray;
             Offset = bufferOffset;
             Count = bufferCount;
         }
+
+        public void Dispose()
+        {
+            AcceptSocket?.Dispose();
+        }
     }
+    internal sealed class AckSocketAsyncEventArgsFake : SendReceiveArgsFake, INoSerializationVerificationNeeded,
+        IDeadLetterSuppression
+    {
+        public readonly List<(IActorRef Commander, object Ack)> PendingAcks = new(8);
+        public void ClearAcks() => PendingAcks.Clear();
+    }
+    
+    internal sealed class ReadSocketAsyncEventArgsFake : SendReceiveArgsFake, INoSerializationVerificationNeeded,
+        IDeadLetterSuppression;
+
+/*
     /// <summary>
     /// INTERNAL API: Base class for TcpIncomingConnection and TcpOutgoingConnection.
-    /// 
-    /// TcpConnection is an actor abstraction over single connection between TCP server and client. 
-    /// Since actors are processing messages in synchronous fashion, they are way to provide thread 
+    ///
+    /// TcpConnection is an actor abstraction over single connection between TCP server and client.
+    /// Since actors are processing messages in synchronous fashion, they are way to provide thread
     /// safety over sockets and <see cref="SocketAsyncEventArgs"/>.
-    /// 
+    ///
     /// Every TcpConnection gets assigned a single socket fields and pair of <see cref="SocketAsyncEventArgs"/>,
     /// allocated once per lifetime of the connection actor:
-    /// 
-    /// - <see cref="ReceiveArgs"/> used only for receiving data. It has assigned buffer, rent from 
-    ///   <see cref="TcpExt"/> once and recycled back upon actor termination. Once data has been received, it's 
+    ///
+    /// - <see cref="ReceiveArgs"/> used only for receiving data. It has assigned buffer, rent from
+    ///   <see cref="TcpExt"/> once and recycled back upon actor termination. Once data has been received, it's
     ///   copied to a separate <see cref="ByteString"/> object (so it's NOT a zero-copy operation).
-    /// - <see cref="SendArgs"/> used only for sending data. Unlike receive args, it doesn't have any buffer 
+    /// - <see cref="SendArgs"/> used only for sending data. Unlike receive args, it doesn't have any buffer
     ///   assigned. Instead it uses treats incoming data as a buffer (it's safe due to immutable nature of
     ///   <see cref="ByteString"/> object). Therefore writes don't allocate any byte buffers.
-    /// 
+    ///
     /// Similar approach can be found on other networking libraries (i.e. System.IO.Pipelines and EventStore).
     /// Both buffers and <see cref="SocketAsyncEventArgs"/> are pooled to reduce GC pressure.
     /// </summary>
-    internal abstract class TlsConnection : ActorBase, IRequiresMessageQueue<IUnboundedMessageQueueSemantics>
+    internal abstract class TlsConnectionV1 : ActorBase, IRequiresMessageQueue<IUnboundedMessageQueueSemantics>
     {
         [Flags]
         enum ConnectionStatus
         {
             /// <summary>
-            /// Marks that connection has invoked <see cref="Socket.ReceiveAsync"/> and that 
+            /// Marks that connection has invoked <see cref="Socket.ReceiveAsync"/> and that
             /// <see cref="TcpConnection.ReceiveArgs"/> are currently trying to receive data.
             /// </summary>
             Receiving = 1,
 
             /// <summary>
-            /// Marks that connection has invoked <see cref="Socket.SendAsync"/> and that 
-            /// <see cref="TcpConnection.SendArgs"/> are currently sending data. It's important as 
+            /// Marks that connection has invoked <see cref="Socket.SendAsync"/> and that
+            /// <see cref="TcpConnection.SendArgs"/> are currently sending data. It's important as
             /// <see cref="SocketAsyncEventArgs"/> will throw exception if another socket operations will
             /// be called over it as it's performing send request. For that reason we cannot release send args
-            /// back to pool if it's sending (another connection actor could aquire that buffer and try to 
+            /// back to pool if it's sending (another connection actor could aquire that buffer and try to
             /// use it while it's sending the data).
             /// </summary>
             Sending = 1 << 1,
@@ -122,9 +145,9 @@ namespace Akka.IO
         protected X509Certificate2 Certificate;
         private IActorRef _watchedActor = Context.System.DeadLetters;
 
-        protected TlsConnection(TcpExt tcp, Socket socket,Inet.SO.TlsConnectionOption opt, bool pullMode, Option<int> writeCommandsBufferMaxSize)
+        protected TlsConnectionV1(TcpExt tcp, Socket socket,Inet.SO.TlsConnectionOption opt, bool pullMode, Option<int> writeCommandsBufferMaxSize)
         {
-            
+
             if (socket == null) throw new ArgumentNullException(nameof(socket));
             TlsOptions = opt;
             Certificate = opt.Certificate;
@@ -137,10 +160,10 @@ namespace Akka.IO
             _pullMode = pullMode;
             _writeCommandsQueue = new PendingSimpleWritesQueue(Log, writeCommandsBufferMaxSize);
             _traceLogging = tcp.Settings.TraceLogging;
-            
+
             Tcp = tcp;
             Socket = socket;
-            
+
             if (pullMode) SetStatus(ConnectionStatus.ReadingSuspended);
         }
 
@@ -204,8 +227,8 @@ namespace Akka.IO
                         {
                             SetStatus(ConnectionStatus.Sending);
                             DoWrite(registerInfo, bufferedWrite.Value);
-                        } 
-                        
+                        }
+
                         return true;
                     case Tcp.ResumeReading _: ClearStatus(ConnectionStatus.ReadingSuspended); return true;
                     case Tcp.SuspendReading _: SetStatus(ConnectionStatus.ReadingSuspended); return true;
@@ -232,7 +255,7 @@ namespace Akka.IO
                             Log.Warning("Received Write command before Register command. " +
                                         "It will be buffered until Register will be received (buffered write size is {0} bytes)", commandSize);
                         }
-                        
+
                         return true;
                     default: return false;
                 }
@@ -260,7 +283,7 @@ namespace Akka.IO
         }
 
         /// <summary>
-        /// The peer sent EOF first, but we may still want to send 
+        /// The peer sent EOF first, but we may still want to send
         /// </summary>
         private Receive PeerSentEOF(ConnectionInfo info)
         {
@@ -295,7 +318,7 @@ namespace Akka.IO
                         AcknowledgeSent();
                         if (IsWritePending)
                             DoWrite(info, GetAllowedPendingWrite());
-                        else 
+                        else
                             HandleClose(info, closeCommander, closedEvent);
                         return true;
                     case UpdatePendingWriteAndThen updatePendingWrite:
@@ -304,7 +327,7 @@ namespace Akka.IO
 
                         if (nextWrite.HasValue)
                             DoWrite(info, nextWrite);
-                        else 
+                        else
                             HandleClose(info, closeCommander, closedEvent);
                         return true;
                     case WriteFileFailed fail: HandleError(info.Handler, fail.Cause); return true;
@@ -315,7 +338,7 @@ namespace Akka.IO
         }
 
         /** connection is closed on our side and we're waiting from confirmation from the other side */
-        private Receive Closing(ConnectionInfo info, IActorRef closeCommander)
+/*        private Receive Closing(ConnectionInfo info, IActorRef closeCommander)
         {
             return message =>
             {
@@ -339,7 +362,7 @@ namespace Akka.IO
                     case Tcp.SocketSent _:
                         // Send ack to sender
                         AcknowledgeSent();
-                        
+
                         // If there is something to send - send it
                         var pendingWrite = GetAllowedPendingWrite();
                         if (pendingWrite.HasValue)
@@ -347,14 +370,14 @@ namespace Akka.IO
                             SetStatus(ConnectionStatus.Sending);
                             DoWrite(info, pendingWrite);
                         }
-                        
+
                         // If message is fully sent, notify sender who sent ResumeWriting command
                         if (!IsWritePending && _interestedInResume != null)
                         {
                             _interestedInResume.Tell(IO.Tcp.WritingResumed.Instance);
                             _interestedInResume = null;
                         }
-                        
+
                         return true;
                     case Tcp.WriteCommand write:
                         if (HasStatus(ConnectionStatus.WritingSuspended))
@@ -383,7 +406,7 @@ namespace Akka.IO
                                     DropWrite(info, write);
                                     return true;
                                 }
-                                
+
                                 nextWrite = GetNextWrite(headCommands: new []{ (simpleWriteCommand, Sender) });
                             }
                             else
@@ -391,15 +414,15 @@ namespace Akka.IO
                                 _writeCommandsQueue.EnqueueSimpleWrites(write, Sender);
                                 nextWrite = GetNextWrite();
                             }
-                            
+
                             // If there is something to send and we are allowed to, lets put the next command on the wire
                             if (nextWrite.HasValue)
                             {
                                 SetStatus(ConnectionStatus.Sending);
                                 DoWrite(info, nextWrite.Value);
-                            } 
+                            }
                         }
-                        
+
                         return true;
                     case Tcp.ResumeWriting _:
                         /*
@@ -412,7 +435,7 @@ namespace Akka.IO
                          * Thus it is documented that useResumeWriting is incompatible with
                          * multiple writers. But we fail as gracefully as we can.
                          */
-                        ClearStatus(ConnectionStatus.WritingSuspended);
+/*                        ClearStatus(ConnectionStatus.WritingSuspended);
                         if (IsWritePending)
                         {
                             if (_interestedInResume == null) _interestedInResume = Sender;
@@ -423,7 +446,7 @@ namespace Akka.IO
                     case UpdatePendingWriteAndThen updatePendingWrite:
                         var updatedWrite = updatePendingWrite.RemainingWrite;
                         updatePendingWrite.Work();
-                        if (updatedWrite.HasValue) 
+                        if (updatedWrite.HasValue)
                             DoWrite(info, updatedWrite.Value);
                         return true;
                     case WriteFileFailed fail:
@@ -490,7 +513,7 @@ namespace Akka.IO
             {
                 ackInfo.Commander.Tell(ackInfo.Ack);
             }
-           
+
             ClearStatus(ConnectionStatus.Sending);
         }
 
@@ -567,7 +590,7 @@ namespace Akka.IO
             {
                 _pendingAcks.Enqueue(pendingAck);
             }
-            
+
             write.Value.DoWrite(info);
         }
 
@@ -719,7 +742,7 @@ namespace Akka.IO
             //};
             return  new SendReceiveArgsFake();
         }
-        
+
         protected void ReleaseSocketEventArgs(SendReceiveArgsFake e)
         {
             e.UserToken = null;
@@ -732,7 +755,7 @@ namespace Akka.IO
             // it can be that for some reason socket is in use and haven't closed yet
             catch (InvalidOperationException) { }
 
-            
+
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -802,7 +825,7 @@ namespace Akka.IO
             if (Socket.Connected) Abort();
             else CloseSocket();
 
-            // We do never store pending writes between messages anymore, so nothing is acquired and nothing to release 
+            // We do never store pending writes between messages anymore, so nothing is acquired and nothing to release
 
             // always try to release SocketAsyncEventArgs to avoid memory leaks
             ReleaseSocketAsyncEventArgs();
@@ -851,7 +874,7 @@ namespace Akka.IO
             {
                 return CreatePendingBufferWrite(writeCommands);
             }
-            
+
             // No more writes out there
             return Option<PendingWrite>.None;
         }
@@ -1050,7 +1073,7 @@ namespace Akka.IO
             {
                 return EnqueueSimpleWrites(command, sender, out _);
             }
-            
+
             /// <summary>
             /// Adds all <see cref="Tcp.SimpleWriteCommand"/> subcommands stored in provided command.
             /// Performs buffer size checks
@@ -1061,7 +1084,7 @@ namespace Akka.IO
             public bool EnqueueSimpleWrites(Tcp.WriteCommand command, IActorRef sender, out int bufferedSize)
             {
                 bufferedSize = 0;
-                
+
                 foreach (var writeInfo in ExtractFromCommand(command))
                 {
                     var sizeAfterAppending = _totalSizeInBytes + writeInfo.DataSize;
@@ -1077,10 +1100,10 @@ namespace Akka.IO
                     _queue.Enqueue((writeInfo.Command, sender, writeInfo.DataSize));
                     bufferedSize += writeInfo.DataSize;
                 }
-                
+
                 return true;
             }
-            
+
             /// <summary>
             /// Adds all <see cref="Tcp.SimpleWriteCommand"/> subcommands stored in provided command.
             /// Performs buffer size checks for all, except first one, that is not buffered
@@ -1101,7 +1124,7 @@ namespace Akka.IO
                         first = writeInfo.Command;
                         continue;
                     }
-                    
+
                     var sizeAfterAppending = _totalSizeInBytes + writeInfo.DataSize;
                     if (_maxQueueSizeInBytes.HasValue && _maxQueueSizeInBytes.Value < sizeAfterAppending)
                     {
@@ -1125,7 +1148,7 @@ namespace Akka.IO
             {
                 if (_queue.Count == 0)
                     throw new InvalidOperationException("Write commands queue is empty");
-                
+
                 var (command, sender, size) = _queue.Dequeue();
                 _totalSizeInBytes -= size;
                 return (command, sender);
@@ -1140,7 +1163,7 @@ namespace Akka.IO
                 while (TryGetNext(out var command))
                     yield return command;
             }
-            
+
             /// <summary>
             /// Gets next command from the queue, if any
             /// </summary>
@@ -1180,4 +1203,5 @@ namespace Akka.IO
             }
         }
     }
+}*/
 }
