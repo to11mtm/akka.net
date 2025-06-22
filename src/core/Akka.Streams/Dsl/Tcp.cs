@@ -290,6 +290,27 @@ namespace Akka.Streams.Dsl
                 ? (EndPoint) new IPEndPoint(address, port)
                 : new DnsEndPoint(host, port);
         }
+
+        public async Task<Source<Tcp.IncomingConnection, Task<Tcp.ServerBinding>>> BindAsync(string host, int port, int backlog = 100,
+            IImmutableList<Inet.SocketOption> options = null, bool halfClose = false, TimeSpan? idleTimeout = null)
+        {
+            // DnsEndpoint isn't allowed
+            IPAddress[] ipAddresses = [];
+            if (IPAddress.TryParse(host,out var ipAddress))
+            {
+                ipAddresses = new[] { ipAddress };
+            }
+            else
+            {
+                ipAddresses = await System.Net.Dns.GetHostAddressesAsync(host).ConfigureAwait(false);
+
+            }
+            if (ipAddresses.Length == 0)
+                throw new ArgumentException($"Couldn't resolve IpAddress for host {host}", nameof(host));
+
+            return Source.FromGraph(new ConnectionSourceStage(_system.Tcp(), new IPEndPoint(ipAddresses[0], port), backlog,
+                options, halfClose, idleTimeout, BindShutdownTimeout));
+        }
     }
 
     /// <summary>

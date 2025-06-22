@@ -34,6 +34,18 @@ namespace Akka.Remote.Transport.Streaming
 
     public static class DnsHelpers
     {
+        public static async Task<IPEndPoint> ResolveNameAsync2(DnsEndPoint address, AddressFamily addressFamily)
+        {
+            var resolved = await Dns.GetHostEntryAsync(address.Host).ConfigureAwait(false);
+            var found = resolved.AddressList.LastOrDefault(a => a.AddressFamily == addressFamily);
+            if (found == null)
+            {
+                throw new KeyNotFoundException($"Couldn't resolve IP endpoint from provided DNS name '{address}' with address family of '{addressFamily}'");
+            }
+
+            return new IPEndPoint(found, address.Port);
+        }
+        
         public static async Task<IPEndPoint> ResolveNameAsync(
             DnsEndPoint address, AddressFamily addressFamily)
         {
@@ -258,7 +270,7 @@ namespace Akka.Remote.Transport.Streaming
 
 
             _connectionSource =
-                System.TcpStream().Bind(TransportSettings.Hostname,
+                await System.TcpStream().BindAsync(TransportSettings.Hostname,
                     TransportSettings.Port,
                     options: SocketOptions,
                     backlog: TransportSettings.ConnectionBacklog);
@@ -362,7 +374,7 @@ namespace Akka.Remote.Transport.Streaming
             var addressFamily = TransportSettings.DnsUseIpv6
                 ? AddressFamily.InterNetworkV6
                 : AddressFamily.InterNetwork;
-            endpoint = await DnsHelpers.ResolveNameAsync(dns, addressFamily)
+            endpoint = await DnsHelpers.ResolveNameAsync2(dns, addressFamily)
                 .ConfigureAwait(false);
 
             return endpoint;
