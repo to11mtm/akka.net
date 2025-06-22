@@ -185,7 +185,15 @@ namespace Akka.Streams.Dsl
             IImmutableList<Inet.SocketOption> options = null, bool halfClose = false, TimeSpan? idleTimeout = null)
         {
             // DnsEndpoint isn't allowed
-            var ipAddresses = System.Net.Dns.GetHostAddressesAsync(host).Result;
+            IPAddress[] ipAddresses = [];
+            if (IPAddress.TryParse(host,out var ipAddress))
+            {
+                ipAddresses = new[] { ipAddress };
+            }
+            else
+            {
+                ipAddresses = System.Net.Dns.GetHostAddressesAsync(host).Result;
+            }
             if (ipAddresses.Length == 0)
                 throw new ArgumentException($"Couldn't resolve IpAddress for host {host}", nameof(host));
 

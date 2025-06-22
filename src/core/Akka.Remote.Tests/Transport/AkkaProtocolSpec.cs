@@ -487,6 +487,7 @@ namespace Akka.Remote.Tests.Transport
             collaborators.Transport.AssociateBehavior.PushConstant(collaborators.Handle);
 
             var conf2 = ConfigurationFactory.ParseString("akka.remote.dot-netty.tcp.connection-timeout = 500 ms")
+                .WithFallback(ConfigurationFactory.ParseString("akka.remote.streaming.tcp.connection-timeout = 500 ms"))
                 .WithFallback(_config);
 
             var reader = Sys.ActorOf(ProtocolStateActor.InboundProps(

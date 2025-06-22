@@ -46,7 +46,7 @@ namespace RemotePingPong
             var baseConfig = ConfigurationFactory.ParseString(@"
             akka {
               actor.provider = remote
-              loglevel = ERROR
+              loglevel = WARNING
               suppress-json-serializer-warning = on
               log-dead-letters = off
 
@@ -57,14 +57,22 @@ namespace RemotePingPong
                     port = 0
                     hostname = ""localhost""
                 }
+
+                streaming.tcp {
+                    port = 0
+                    hostname = ""localhost""
+                }
+
                 
               }
             }");
 
+           // var bindingConfig =
+           //     ConfigurationFactory.ParseString(@"akka.remote.dot-netty.tcp.hostname = """ + ipOrHostname + @"""")
+           //         .WithFallback(ConfigurationFactory.ParseString(@"akka.remote.dot-netty.tcp.port = " + port));
             var bindingConfig =
-                ConfigurationFactory.ParseString(@"akka.remote.dot-netty.tcp.hostname = """ + ipOrHostname + @"""")
-                    .WithFallback(ConfigurationFactory.ParseString(@"akka.remote.dot-netty.tcp.port = " + port));
-
+                ConfigurationFactory.ParseString(@"akka.remote.streaming.tcp.hostname = """ + ipOrHostname + @"""")
+                    .WithFallback(ConfigurationFactory.ParseString(@"akka.remote.streaming.tcp.port = " + port));
             return bindingConfig.WithFallback(baseConfig);
         }
 

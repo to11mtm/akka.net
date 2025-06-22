@@ -152,7 +152,7 @@ namespace Akka.Remote.Transport.DotNetty
         /// </summary>
         /// <param name="hoconTcpReuseAddr">The HOCON string for the akka.remote.dot-netty.tcp.reuse-addr option</param>
         /// <returns><c>true</c> if we should enable REUSE_ADDR for tcp. <c>false</c> otherwise.</returns>
-        private static bool ResolveTcpReuseAddrOption(string hoconTcpReuseAddr)
+        internal static bool ResolveTcpReuseAddrOption(string hoconTcpReuseAddr)
         {
             return hoconTcpReuseAddr.ToLowerInvariant() switch
             {
@@ -247,7 +247,7 @@ namespace Akka.Remote.Transport.DotNetty
         Udp
     }
 
-    internal sealed class SslSettings
+    public sealed class SslSettings
     {
         public static readonly SslSettings Empty = new();
 
@@ -264,7 +264,7 @@ namespace Akka.Remote.Transport.DotNetty
             }
         }
 
-        private static SslSettings Create(Config config)
+        internal static SslSettings Create(Config config)
         {
             if (config.IsNullOrEmpty())
                 throw new ConfigurationException($"Failed to create {typeof(DotNettyTransportSettings)}: DotNetty SSL HOCON config was not found (default path: `akka.remote.dot-netty.tcp.ssl`)");
