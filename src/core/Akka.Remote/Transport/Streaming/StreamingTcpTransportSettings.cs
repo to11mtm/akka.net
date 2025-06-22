@@ -114,7 +114,7 @@ namespace Akka.Remote.Transport.Streaming
             return new StreamingTcpTransportSettings(
                 enableSsl: config.GetBoolean("enable-ssl", false),
                 connectTimeout: config.GetTimeSpan("connection-timeout",
-                    TimeSpan.FromSeconds(15)),
+                    TimeSpan.FromSeconds(0.5)),
                 hostName: host,
                 publicHostName: !string.IsNullOrEmpty(publicHost)
                     ? publicHost
@@ -123,9 +123,10 @@ namespace Akka.Remote.Transport.Streaming
                 publicPort: publicPort > 0 ? publicPort : (int?)null,
                 maxFrameSize: (int)(config.GetByteSize("maximum-frame-size",
                     null) ?? 128000),
-                sslSettings: config.HasPath("ssl")
-                    ? SslSettings.Create(config.GetConfig("ssl"))
-                    : SslSettings.Empty,
+                sslSettings: 
+                //config.HasPath("ssl")
+                //    ? SslSettings.Create(config.GetConfig("ssl")) :
+                    SslSettings.Empty,
                 dnsUseIpv6: config.GetBoolean("dns-use-ipv6", false),
                 tcpReuseAddr: DotNettyTransportSettings
                     .ResolveTcpReuseAddrOption(

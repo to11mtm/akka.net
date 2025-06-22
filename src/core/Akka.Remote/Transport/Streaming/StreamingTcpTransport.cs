@@ -15,6 +15,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Configuration;
@@ -34,11 +35,11 @@ namespace Akka.Remote.Transport.Streaming
     
     class StreamingTcpAssociationHandle : AssociationHandle
     {
-        private ISourceQueueWithComplete<IO.ByteString> _queue;
+        private ChannelWriter<IO.ByteString> _queue;
         private IHandleEventListener _listener;
         public StreamingTcpAssociationHandle(Address localAddress,
             Address remoteAddress,
-            ISourceQueueWithComplete<IO.ByteString> queue) : base(localAddress, remoteAddress)
+            ChannelWriter<IO.ByteString> queue) : base(localAddress, remoteAddress)
         {
             _queue = queue;
         }
@@ -47,12 +48,12 @@ namespace Akka.Remote.Transport.Streaming
         {
             _listener = listener;
         }
-        public StreamingTcpAssociationHandle(Address localAddress,
-            Address remoteAddress,
-            TaskCompletionSource<ISourceQueueWithComplete<IO.ByteString>> queueTask) : base(localAddress, remoteAddress)
-        {
-            queueTask.Task.ContinueWith(r => _queue = r.Result);
-        }
+        // public StreamingTcpAssociationHandle(Address localAddress,
+        //     Address remoteAddress,
+        //     TaskCompletionSource<ISourceQueueWithComplete<IO.ByteString>> queueTask) : base(localAddress, remoteAddress)
+        // {
+        //     queueTask.Task.ContinueWith(r => _queue = r.Result);
+        // }
 
         public sealed override bool Write(ByteString payload)
         {
@@ -64,9 +65,7 @@ namespace Akka.Remote.Transport.Streaming
 
         public sealed override bool Write(IO.ByteString payload)
         {
-            return _queue.OfferAsync(payload)
-                .Result is QueueOfferResult
-                .Enqueued;
+            return _queue.TryWrite(payload);
         }
         
 
@@ -75,7 +74,7 @@ namespace Akka.Remote.Transport.Streaming
 
         public override void Disassociate()
         {
-            _queue.Complete();
+            _queue.TryComplete();
         }
 
         public void Notify(IHandleEvent inboundPayload)
@@ -178,7 +177,7 @@ namespace Akka.Remote.Transport.Streaming
 
 
             _connectionSource =
-                System.TcpStream().Bind(TransportSettings.Hostname,
+                await System.TcpStream().BindAsync(TransportSettings.Hostname,
                     TransportSettings.Port,
                     options: SocketOptions,
                     backlog: TransportSettings.ConnectionBacklog);
@@ -202,9 +201,9 @@ namespace Akka.Remote.Transport.Streaming
                     
                     var handleAddr = _boundAddressSource.Task.Result;
                     var preMatSrc = Source
-                        .Queue<IO.ByteString>(
-                            TransportSettings.SendStreamQueueSize,
-                            OverflowStrategy.DropNew).Recover(
+                        .Channel<IO.ByteString>(
+                            TransportSettings.SendStreamQueueSize)
+                        .Recover(
                             ex =>
                             {
                                 //handle.Notify(
@@ -242,25 +241,25 @@ namespace Akka.Remote.Transport.Streaming
             return (_addr, AssociationListenerPromise);
         }
 
-        private static StreamingTcpAssociationHandle
-            CreateStreamingTcpAssociationHandleTCS(Address handleAddr,
-                Address remoteAddress, TaskCompletionSource<ISourceQueueWithComplete<IO.ByteString>> queuePromise)
-        {
-            StreamingTcpAssociationHandle handle;
-            handle = new StreamingTcpAssociationHandle(handleAddr
-                ,
-                remoteAddress,
-                queuePromise);
-            handle.ReadHandlerSource.Task.ContinueWith(s =>
-            {
-                var otherListener = s.Result;
-                handle.RegisterListener(otherListener);
-            }, TaskContinuationOptions.ExecuteSynchronously);
-            return handle;
-        }
+        // private static StreamingTcpAssociationHandle
+        //     CreateStreamingTcpAssociationHandleTCS(Address handleAddr,
+        //         Address remoteAddress, TaskCompletionSource<ISourceQueueWithComplete<IO.ByteString>> queuePromise)
+        // {
+        //     StreamingTcpAssociationHandle handle;
+        //     handle = new StreamingTcpAssociationHandle(handleAddr
+        //         ,
+        //         remoteAddress,
+        //         queuePromise);
+        //     handle.ReadHandlerSource.Task.ContinueWith(s =>
+        //     {
+        //         var otherListener = s.Result;
+        //         handle.RegisterListener(otherListener);
+        //     }, TaskContinuationOptions.ExecuteSynchronously);
+        //     return handle;
+        // }
         private static StreamingTcpAssociationHandle
             CreateStreamingTcpAssociationHandlePreMat(Address handleAddr,
-                Address remoteAddress, ISourceQueueWithComplete<IO.ByteString> queuePromise)
+                Address remoteAddress, ChannelWriter<IO.ByteString> queuePromise)
         {
             StreamingTcpAssociationHandle handle;
             handle = new StreamingTcpAssociationHandle(handleAddr
@@ -306,10 +305,9 @@ namespace Akka.Remote.Transport.Streaming
                 options: SocketOptions
             );
 
-
+            //var ch = Channel.CreateUnbounded<IO.ByteString>();
             var preMat = Source
-                .Queue<IO.ByteString>(TransportSettings.SendStreamQueueSize,
-                    OverflowStrategy.DropNew).Recover(
+                .Channel<IO.ByteString>(TransportSettings.SendStreamQueueSize).Recover(
                     ex =>
                     {
                         //handle.Notify(
