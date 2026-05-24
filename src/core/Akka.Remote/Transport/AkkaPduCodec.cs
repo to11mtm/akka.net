@@ -256,7 +256,7 @@ namespace Akka.Remote.Transport
             var frameSeg = ForDataFrame(frame);
             var bufferSeg = ForEnclosedDataInFrame(buffer);
             frameSeg.Next = bufferSeg;
-            return new ReadOnlySequence<byte>(frameSeg, 0, bufferSeg, 0);
+            return new ReadOnlySequence<byte>(frameSeg, 0, bufferSeg, buffer.Length);
         }
         private static ProtobufSequenceSegment ForEnclosedDataInFrame(ReadOnlyMemory<byte> buffer)
         {

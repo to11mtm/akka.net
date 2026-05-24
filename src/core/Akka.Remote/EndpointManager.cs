@@ -1074,10 +1074,14 @@ namespace Akka.Remote
                         //Apply AkkaProtocolTransport wrapper to the end of the chain
                         //The chain at this point:
                         // AkkaProtocolTransport <-- Adapter <-- .. <-- Adapter <-- Driver
-                        // CopilotNotes: CreateCodec checks whether the pipe transport is enabled
-                        // + configured for MessagePack, and returns the correct codec. Falls back
-                        // to AkkaPduProtobuffCodec for all other transports.
-                        var pduCodec = PipeTransportSettings.CreateCodec(_conf, Context.System);
+                        // CopilotNotes: CreateCodecForTransport selects the codec for THIS
+                        // specific transport driver, so a DotNetty transport and a PipeTransport
+                        // running side-by-side each get exactly the right codec — protobuf for
+                        // DotNetty (wire-compat), MessagePack for pipe.tcp when envelope=messagepack.
+                        var pduCodec = PipeTransportSettings.CreateCodecForTransport(
+                            transportSettings.TransportClass,
+                            transportSettings.Config,
+                            Context.System);
                         transports.Add(new AkkaProtocolTransport(wrappedTransport, Context.System, new AkkaProtocolSettings(_conf), pduCodec));
                     }
 
@@ -1153,7 +1157,11 @@ namespace Akka.Remote
                     Context.ActorOf(RARP.For(Context.System)
                     .ConfigureDispatcher(
                         ReliableDeliverySupervisor.ReliableDeliverySupervisorProps(handleOption, localAddress,
-                            remoteAddress, refuseUid, transport, endpointSettings, PipeTransportSettings.CreateCodec(_conf, Context.System),
+                            remoteAddress, refuseUid, transport, endpointSettings,
+                            // CopilotNotes: Use the codec already embedded in the transport rather than
+                            // re-deriving it from the global akka.remote config — this guarantees the
+                            // EndpointWriter/Reader use the same codec as the ProtocolStateActor. 🌸
+                            transport.Codec,
                             _receiveBuffers, endpointSettings.Dispatcher)
                             .WithDeploy(Deploy.Local)),
                         $"reliableEndpointWriter-{AddressUrlEncoder.Encode(remoteAddress)}-{_endpointId.Next()}");
@@ -1164,7 +1172,10 @@ namespace Akka.Remote
                     Context.ActorOf(RARP.For(Context.System)
                     .ConfigureDispatcher(
                         EndpointWriter.EndpointWriterProps(handleOption, localAddress, remoteAddress, refuseUid,
-                            transport, endpointSettings, PipeTransportSettings.CreateCodec(_conf, Context.System), _receiveBuffers,
+                            transport, endpointSettings,
+                            // CopilotNotes: Same as above — use transport.Codec directly. ✨
+                            transport.Codec,
+                            _receiveBuffers,
                             reliableDeliverySupervisor: null)
                             .WithDeploy(Deploy.Local)),
                         $"endpointWriter-{AddressUrlEncoder.Encode(remoteAddress)}-{_endpointId.Next()}");

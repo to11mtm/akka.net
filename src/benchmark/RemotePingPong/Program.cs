@@ -294,10 +294,10 @@ namespace RemotePingPong
             if (args.Length >= 4)
                 payloadMode = ParsePayloadMode(args[3]);
 
-            timesToRun = 1;
-            transportMode = TransportMode.PipeMsgPack;
-            serializerMode = SerializerMode.MsgPack;
-            payloadMode = PayloadMode.SerializedObject;
+            // timesToRun = 1;
+            // transportMode = TransportMode.PipeMsgPack;
+            // serializerMode = SerializerMode.MsgPack;
+            // payloadMode = PayloadMode.SerializedObject;
             
             Console.ForegroundColor = ConsoleColor.Cyan;
             Console.WriteLine($"Transport mode: {TransportLabel(transportMode)}");

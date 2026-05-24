@@ -205,9 +205,9 @@ namespace Akka.Remote.Transport.Pipelines
         /// <see cref="AkkaPduProtobuffCodec"/>.
         /// </para>
         ///
-        /// <!-- CopilotNotes: Called from EndpointManager and AkkaProtocolManager to
-        ///      ensure the same codec is used consistently for both the protocol-level
-        ///      (handshake/heartbeat/disassociate) and message-level (AckAndEnvelope) frames. -->
+        /// <!-- CopilotNotes: Kept for backwards-compat / test convenience; prefer the
+        ///      per-transport overload CreateCodecForTransport when iterating over multiple
+        ///      transport configs so each transport gets exactly the right codec. -->
         /// </summary>
         /// <param name="remoteConfig">The resolved <c>akka.remote</c> config block.</param>
         /// <param name="system">The hosting actor system.</param>
@@ -228,6 +228,61 @@ namespace Akka.Remote.Transport.Pipelines
                     if (string.Equals(envelope, "messagepack", StringComparison.OrdinalIgnoreCase))
                         return new AkkaPduMessagePackCodec(system);
                 }
+            }
+
+            return new AkkaPduProtobuffCodec(system);
+        }
+
+        /// <summary>
+        /// Creates the <see cref="AkkaPduCodec"/> appropriate for a <em>specific</em>
+        /// transport driver, identified by its fully-qualified class name and individual
+        /// transport config block.
+        ///
+        /// <para>
+        /// This is the preferred overload when iterating over multiple transports in
+        /// <c>EndpointManager.Listens</c> — each transport gets its own codec rather
+        /// than all transports sharing a single codec derived from the global
+        /// <c>akka.remote</c> config. 🌸
+        /// </para>
+        ///
+        /// <para>
+        /// Returns <see cref="AkkaPduMessagePackCodec"/> only when
+        /// <paramref name="transportClass"/> ends with <c>"TcpPipeTransport"</c>
+        /// (i.e. this is the <c>akka.remote.pipe.tcp</c> driver) <em>and</em>
+        /// <c>envelope = messagepack</c> is set in <paramref name="transportConfig"/>.
+        /// All other transports receive the wire-compatible
+        /// <see cref="AkkaPduProtobuffCodec"/>.
+        /// </para>
+        ///
+        /// <!-- CopilotNotes: Matching on the class name suffix avoids a hard reference from
+        ///      Akka.Remote back to TcpPipeTransport's assembly (which is the same assembly here,
+        ///      but this pattern keeps the coupling explicit). If a custom pipe-transport subclass
+        ///      is ever added the class name check will need updating or a capability interface. -->
+        /// </summary>
+        /// <param name="transportClass">
+        /// The fully-qualified transport driver class name from HOCON
+        /// (e.g. <c>"Akka.Remote.Transport.Pipelines.TcpPipeTransport, Akka.Remote"</c>).
+        /// </param>
+        /// <param name="transportConfig">
+        /// The individual transport config block (the value of the HOCON key that names this
+        /// transport, e.g. the contents of <c>akka.remote.pipe.tcp</c>).
+        /// </param>
+        /// <param name="system">The hosting actor system.</param>
+        /// <returns>The most appropriate <see cref="AkkaPduCodec"/> instance for this transport.</returns>
+        public static AkkaPduCodec CreateCodecForTransport(
+            string? transportClass,
+            Config transportConfig,
+            ActorSystem system)
+        {
+            // Only the PipeTransport supports MessagePack; all other drivers remain on protobuf
+            // for full wire-compatibility with DotNetty nodes. uwu ✨
+            if (!string.IsNullOrEmpty(transportClass)
+                && transportClass.Contains(nameof(TcpPipeTransport))
+                && !transportConfig.IsNullOrEmpty())
+            {
+                var envelope = transportConfig.GetString("envelope", "protobuf");
+                if (string.Equals(envelope, "messagepack", StringComparison.OrdinalIgnoreCase))
+                    return new AkkaPduMessagePackCodec(system);
             }
 
             return new AkkaPduProtobuffCodec(system);

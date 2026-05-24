@@ -103,9 +103,21 @@ namespace Akka.Remote.Transport
         public AkkaProtocolSettings Settings { get; private set; }
 
         /// <summary>
-        /// TBD
+        /// The PDU codec used for all <see cref="ProtocolStateActor"/> instances spawned by this transport.
+        ///
+        /// <para>
+        /// Exposed as <c>internal</c> so <see cref="EndpointManager"/> can pass the same
+        /// codec instance to <see cref="EndpointWriter"/> and <see cref="EndpointReader"/>
+        /// without re-deriving it from configuration on every endpoint creation. ✨
+        /// </para>
+        ///
+        /// <!-- CopilotNotes: Previously "protected" — widened to "internal" so EndpointManager,
+        ///      which lives in the same assembly, can use transport.Codec in CreateEndpoint instead
+        ///      of calling PipeTransportSettings.CreateCodec a second time with the global config.
+        ///      This ensures the codec in the endpoint actors always matches the codec used by the
+        ///      ProtocolStateActor for that specific transport. -->
         /// </summary>
-        protected AkkaPduCodec Codec { get; private set; }
+        internal AkkaPduCodec Codec { get; private set; }
 
         private readonly SchemeAugmenter _schemeAugmenter = new(RemoteSettings.AkkaScheme);
 

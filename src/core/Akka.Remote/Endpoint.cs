@@ -960,8 +960,13 @@ namespace Akka.Remote
             var writer =
                 Context.ActorOf(RARP.For(Context.System)
                     .ConfigureDispatcher(
+                        // CopilotNotes: Must use _codec (the injected codec) here — NOT a hardcoded
+                        // AkkaPduProtobuffCodec. This was the root cause of the MessagePack decode
+                        // failure: messages arrived as MessagePack bytes but the reader was trying
+                        // to parse them as protobuf because CreateWriter() silently discarded the
+                        // resolved codec and newed up a fresh protobuf instance. 🐛→🦋
                         EndpointWriter.EndpointWriterProps(_currentHandle, _localAddress, _remoteAddress, _refuseUid, _transport,
-                            _settings, new AkkaPduProtobuffCodec(Context.System), _receiveBuffers, Self)
+                            _settings, _codec, _receiveBuffers, Self)
                             .WithDeploy(Deploy.Local)),
                     "endpointWriter");
             Context.Watch(writer);
