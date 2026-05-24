@@ -95,7 +95,7 @@ namespace Akka.Remote.Transport.Pipelines
 
         /// <summary>
         /// Bounded capacity of the per-connection outbound write channel.
-        /// When full, <see cref="AssociationHandle.Write"/> returns <c>false</c>
+        /// When full, AssociationHandle.Write returns <c>false</c>
         /// (matching DotNetty water-mark semantics: write was dropped, no duplicate).
         /// </summary>
         public int WriteChannelCapacity { get; }

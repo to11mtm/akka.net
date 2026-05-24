@@ -43,6 +43,7 @@ namespace Akka.Remote.Transport.Pipelines.MessagePack
     {
         /// <summary>A raw payload frame; tail bytes are the inner <see cref="MpAckAndEnvelope"/> verbatim.</summary>
         public const byte Payload = 0;
+        public static ReadOnlyMemory<byte> PayloadTagBytes => new byte[] { Payload };
         /// <summary>Heartbeat — no tail.</summary>
         public const byte Heartbeat = 1;
         /// <summary>Associate handshake — tail is a serialized <see cref="MpHandshakeInfo"/>.</summary>

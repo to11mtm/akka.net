@@ -60,7 +60,7 @@ namespace Akka.Remote.Transport.Pipelines
         private readonly Socket _socket;
         private readonly Stream _stream; // NetworkStream or SslStream
         private readonly PipeReader _reader;
-        private readonly Channel<byte[]> _writeChannel;
+        private readonly Channel<ReadOnlySequence<byte>> _writeChannel;
         private readonly CancellationTokenSource _cts;
         private readonly ILoggingAdapter _log;
         private readonly TcpPipeTransport _transport;
@@ -103,7 +103,7 @@ namespace Akka.Remote.Transport.Pipelines
             _socket    = socket;
             _stream    = stream;
             _reader    = PipeReader.Create(stream, new StreamPipeReaderOptions(leaveOpen: true));
-            _writeChannel = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(writeChannelCapacity)
+            _writeChannel = Channel.CreateBounded<ReadOnlySequence<byte>>(new BoundedChannelOptions(writeChannelCapacity)
             {
                 SingleReader = true,
                 SingleWriter = false,
@@ -149,7 +149,15 @@ namespace Akka.Remote.Transport.Pipelines
                 return false;
 
             // ToByteArray() copies — Phase 2 can eliminate this via IBufferWriter writer.
-            return _writeChannel.Writer.TryWrite(payload.ToByteArray());
+            return _writeChannel.Writer.TryWrite(new ReadOnlySequence<byte>(payload.Memory));
+        }
+        
+        public bool TryEnqueueWrite(ReadOnlySequence<byte> payload)
+        {
+            if (Volatile.Read(ref _closed) == 1)
+                return false;
+
+            return _writeChannel.Writer.TryWrite(payload);
         }
 
         /// <summary>
@@ -208,7 +216,7 @@ namespace Akka.Remote.Transport.Pipelines
                         // teaching IHandleEventListener about ReadOnlySequence<byte> directly.
                         var bytes = frame.IsSingleSegment
                             ? ByteString.CopyFrom(frame.FirstSpan)
-                            : ByteString.CopyFrom(frame.ToArray());
+                            : UnsafeByteOperations.UnsafeWrap(frame.ToArray());
 
                         listener.Notify(new InboundPayload(bytes));
                     }
@@ -270,8 +278,8 @@ namespace Akka.Remote.Transport.Pipelines
             // Two buffers — one fills while the other is in-flight to the stream. ✨
             var buffers = new ArrayBufferWriter<byte>[]
             {
-                new(initialCapacity: 8192),
-                new(initialCapacity: 8192),
+                new(initialCapacity: 512),
+                new(initialCapacity: 512),
             };
             var activeIdx   = 0;
             Task? inflightWrite = null;
@@ -290,11 +298,11 @@ namespace Akka.Remote.Transport.Pipelines
                     {
                         // CopilotNotes: GetSpan returns at least 'count' bytes. We write the
                         // 4-byte LE length header then the payload bytes back-to-back.
-                        BinaryPrimitives.WriteInt32LittleEndian(active.GetSpan(FrameHeaderSize), payload.Length);
+                        BinaryPrimitives.WriteInt32LittleEndian(active.GetSpan(FrameHeaderSize), (int)payload.Length);
                         active.Advance(FrameHeaderSize);
-
-                        payload.AsSpan().CopyTo(active.GetSpan(payload.Length));
-                        active.Advance(payload.Length);
+                        payload.CopyTo(active.GetSpan((int)payload.Length));
+                        //payload.AsSpan().CopyTo(active.GetSpan(payload.Length));
+                        active.Advance((int)payload.Length);
                     }
 
                     if (active.WrittenCount > 0)

@@ -8,6 +8,7 @@
 #nullable enable
 
 using System;
+using System.Buffers;
 using System.Linq;
 using Akka.Actor;
 using Akka.Remote.Transport.Pipelines.MessagePack;
@@ -139,11 +140,14 @@ namespace Akka.Remote.Transport.Pipelines
         /// Single allocation, single buffer copy of <paramref name="payload"/>.
         /// </summary>
         public override ByteString ConstructPayload(ByteString payload) =>
-            PrependTag(ProtocolTag.Payload, payload.Span);
+            PrependTag(ProtocolTag.Payload, payload.Memory);
 
         /// <inheritdoc cref="ConstructPayload(ByteString)"/>
         public override ByteString ConstructPayload(ReadOnlyMemory<byte> payload) =>
-            PrependTag(ProtocolTag.Payload, payload.Span);
+            PrependTag(ProtocolTag.Payload, payload);
+        
+        public override ReadOnlySequence<byte> ConstructPayloadSequence(ByteString payload) =>
+          ProtobufSequenceSegment.ForFrame(ProtocolTag.PayloadTagBytes, payload.Memory);
 
         /// <inheritdoc/>
         public override ByteString ConstructAssociate(HandshakeInfo info)
@@ -309,11 +313,11 @@ namespace Akka.Remote.Transport.Pipelines
         /// at index 0, copies <paramref name="tail"/> after it, and returns a zero-copy
         /// <see cref="ByteString"/> wrapping the array via <see cref="UnsafeByteOperations.UnsafeWrap(System.ReadOnlyMemory{byte})"/>.
         /// </summary>
-        private static ByteString PrependTag(byte tag, ReadOnlySpan<byte> tail)
+        private static ByteString PrependTag(byte tag, ReadOnlyMemory<byte> tail)
         {
             var buf = new byte[1 + tail.Length];
             buf[0] = tag;
-            tail.CopyTo(buf.AsSpan(1));
+            tail.CopyTo(buf.AsMemory(1));
             return UnsafeByteOperations.UnsafeWrap(buf);
         }
 

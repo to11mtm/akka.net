@@ -628,7 +628,7 @@ namespace Akka.Remote.Transport
         /// <summary>
         ///     Returns the event handler corresponding to the remote endpoint of the given local handle. In other words
         ///     it returns the listener that will receive <see cref="InboundPayload" /> events when
-        ///     <seealso cref="AssociationHandle.Write" /> is called.
+        ///     AssociationHandle.Write is called.
         /// </summary>
         /// <param name="localHandle">The handle</param>
         /// <returns>The option that contains the listener if it exists.</returns>

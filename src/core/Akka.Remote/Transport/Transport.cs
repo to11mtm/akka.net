@@ -6,6 +6,7 @@
 //-----------------------------------------------------------------------
 
 using System;
+using System.Buffers;
 using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Configuration;
@@ -374,6 +375,18 @@ namespace Akka.Remote.Transport
         /// Bool indicating the availability of the association for subsequent writes.
         /// </returns>
         public abstract bool Write(ByteString payload);
+
+        public virtual bool Write(ReadOnlySequence<byte> payload)
+        {
+            if (payload.IsSingleSegment)
+            {
+                return Write(UnsafeByteOperations.UnsafeWrap(payload.First));
+            }
+            else
+            {
+                return Write(UnsafeByteOperations.UnsafeWrap(payload.ToArray()));
+            }
+        }
 
         /// <summary>
         /// Closes the underlying transport link, if needed. Some transports might not need an explicit teardown (UDP) and some

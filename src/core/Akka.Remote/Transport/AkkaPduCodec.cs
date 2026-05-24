@@ -6,10 +6,12 @@
 //-----------------------------------------------------------------------
 
 using System;
+using System.Buffers;
 using System.Linq;
 using Akka.Actor;
 using Google.Protobuf;
 using System.Runtime.Serialization;
+using Akka.Annotations;
 using Akka.Remote.Serialization;
 using Akka.Remote.Serialization.Proto.Msg;
 using SerializedMessage = Akka.Remote.Serialization.Proto.Msg.Payload;
@@ -241,6 +243,31 @@ namespace Akka.Remote.Transport
         public Message MessageOption { get; private set; }
     }
 
+    [InternalApi]
+    public sealed class ProtobufSequenceSegment : ReadOnlySequenceSegment<byte>
+    {
+        public ProtobufSequenceSegment(ReadOnlyMemory<byte> buffer, long index)
+        {
+            this.Memory = buffer;
+            this.RunningIndex = index;
+        }
+        public static ReadOnlySequence<byte> ForFrame(ReadOnlyMemory<byte> frame, ReadOnlyMemory<byte> buffer)
+        {
+            var frameSeg = ForDataFrame(frame);
+            var bufferSeg = ForEnclosedDataInFrame(buffer);
+            frameSeg.Next = bufferSeg;
+            return new ReadOnlySequence<byte>(frameSeg, 0, bufferSeg, 0);
+        }
+        private static ProtobufSequenceSegment ForEnclosedDataInFrame(ReadOnlyMemory<byte> buffer)
+        {
+            return new ProtobufSequenceSegment(buffer,4);
+        }
+        private static ProtobufSequenceSegment ForDataFrame(ReadOnlyMemory<byte> buffer)
+        {
+            return new ProtobufSequenceSegment(buffer,0);
+        }
+    }
+
     /// <summary>
     /// INTERNAL API
     /// 
@@ -294,6 +321,11 @@ namespace Akka.Remote.Transport
         /// <param name="payload">TBD</param>
         /// <returns>TBD</returns>
         public abstract ByteString ConstructPayload(ByteString payload);
+
+        public virtual ReadOnlySequence<byte> ConstructPayloadSequence(ByteString payload)
+        {
+            return new ReadOnlySequence<byte>(ConstructPayload(payload.Memory).Memory);
+        }
 
         public abstract ByteString ConstructPayload(ReadOnlyMemory<byte> payload);
 
@@ -392,7 +424,7 @@ namespace Akka.Remote.Transport
 
         public override ByteString ConstructPayload(ReadOnlyMemory<byte> payload)
         {
-            return new AkkaProtocolMessage() { Payload = ByteString.CopyFrom(payload.Span) }.ToByteString();
+            return new AkkaProtocolMessage() { Payload = UnsafeByteOperations.UnsafeWrap(payload) }.ToByteString();
         }
         
         public ByteString ConstructPayload2(ReadOnlyMemory<byte> payload)

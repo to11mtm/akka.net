@@ -6,6 +6,7 @@
 //-----------------------------------------------------------------------
 
 #nullable enable
+using System.Buffers;
 using System.Threading;
 using Akka.Actor;
 using Google.Protobuf;
@@ -18,7 +19,7 @@ namespace Akka.Remote.Transport.Pipelines
     /// <see cref="AssociationHandle"/> implementation for <see cref="TcpPipeTransport"/>.
     ///
     /// <para>
-    /// <see cref="Write"/> enqueues the payload onto the per-connection bounded
+    /// Write enqueues the payload onto the per-connection bounded
     /// <see cref="System.Threading.Channels.Channel{T}"/> write queue and returns
     /// <c>false</c> when the channel is at capacity (matching DotNetty water-mark semantics).
     /// </para>
@@ -58,6 +59,14 @@ namespace Akka.Remote.Transport.Pipelines
         /// (guaranteed-no-duplication semantics per the <see cref="AssociationHandle"/> contract).
         /// </remarks>
         public override bool Write(ByteString payload)
+        {
+            if (Connection is null || Volatile.Read(ref _disassociated) == 1)
+                return false;
+
+            return Connection.TryEnqueueWrite(payload);
+        }
+
+        public override bool Write(ReadOnlySequence<byte> payload)
         {
             if (Connection is null || Volatile.Read(ref _disassociated) == 1)
                 return false;
