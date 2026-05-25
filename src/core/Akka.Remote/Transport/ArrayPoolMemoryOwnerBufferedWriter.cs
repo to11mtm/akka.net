@@ -5,9 +5,9 @@ namespace Akka.Remote.Transport;
 
 public class ArrayPoolMemoryOwnerBufferedWriter
 {
-    public static ArrayPoolMemoryOwnerBufferedWriter<T> Create<T>()
+    public static ArrayPoolMemoryOwnerBufferedWriter<T> Create<T>(int initialSize = 256)
     {
-        return new ArrayPoolMemoryOwnerBufferedWriter<T>(ArrayPool<T>.Shared);
+        return new ArrayPoolMemoryOwnerBufferedWriter<T>(ArrayPool<T>.Shared, initialSize);
     }
 }
 
@@ -30,10 +30,15 @@ public sealed class ArrayPoolMemoryOwnerBufferedWriter<T> : IMemoryOwner<T>, IBu
     public ArrayPoolMemoryOwnerBufferedWriter(ArrayPool<T> pool, int initialSize = 256)
     {
         _pool = pool;
-        _array = _pool.Rent(256); // Start with a reasonable default size
+        _array = _pool.Rent(initialSize); // Start with a reasonable default size
     }
 
-    public Memory<T> Memory => new(_array, 0, _array.Length - _position);
+    /// <summary>
+    /// Gets a <see cref="Memory{T}"/> view of the **written portion** of the buffer
+    /// (from index 0 to the current write position).
+    /// </summary>
+    public Memory<T> Memory => new(_array, 0, _position);
+
     public void Advance(int count)
     {
         _position += count;

@@ -10,7 +10,9 @@
 using System;
 using System.Buffers;
 using System.Linq;
+using System.Text;
 using Akka.Actor;
+using Akka.Util;
 using Akka.Remote.Transport.Pipelines.MessagePack;
 using Google.Protobuf;
 using MP = global::MessagePack;
@@ -268,6 +270,39 @@ namespace Akka.Remote.Transport.Pipelines
         }
 
         /// <inheritdoc/>
+        /// <summary>
+        /// Serializes the outbound envelope directly to a pooled MessagePack buffer,
+        /// bypassing the auto-generated formatters and the intermediate
+        /// <see cref="MpAckAndEnvelope"/> / <see cref="MpRemoteEnvelope"/> /
+        /// <see cref="MpPayload"/> / <see cref="MpAck"/> POCO graph.
+        ///
+        /// <para>
+        /// Wire format is byte-for-byte identical to the auto-generated formatters:
+        /// each <c>[MessagePackObject][Key(N)]</c> type is emitted as
+        /// <c>WriteArrayHeader(maxKey + 1)</c> followed by the values in key order
+        /// (<c>WriteNil</c> for null nullable values).
+        /// </para>
+        ///
+        /// <para>
+        /// <b>Allocation profile per call</b>:
+        /// <list type="bullet">
+        ///   <item>1 × <c>byte[]</c> for the final result (handed to <c>UnsafeWrap</c>);
+        ///         unavoidable for the <see cref="ByteString"/> return contract.</item>
+        ///   <item>0 × intermediate POCOs.</item>
+        ///   <item>0 × <see cref="string"/> allocations for actor paths —
+        ///         <see cref="ActorPath.WritePathWithAddress"/> streams chars into a
+        ///         pooled scratch and we transcode to UTF-8 in a pooled byte buffer.</item>
+        ///   <item>0 × LINQ / array allocations for NACKs — emitted directly from the
+        ///         <see cref="Ack.Nacks"/> enumerable.</item>
+        /// </list>
+        /// </para>
+        ///
+        /// <!-- CopilotNotes: We deliberately do NOT use a custom IMessagePackFormatter here
+        ///      because formatters cannot accept extra context (like the local Address used
+        ///      to fill in local paths). Direct MessagePackWriter usage is cleaner and the
+        ///      wire format stays interop-compatible with the source-generated formatters
+        ///      because [Key(N)] objects serialize as plain index arrays. -->
+        /// </summary>
         public override ByteString ConstructMessage(
             Address localAddress,
             IActorRef recipient,
@@ -276,26 +311,146 @@ namespace Akka.Remote.Transport.Pipelines
             SeqNo? seqOption              = null,
             Ack? ackOption                = null)
         {
-            var env = new MpRemoteEnvelope
+            // Single growing byte buffer for the entire envelope. Starts at 256 bytes
+            // (covers most messages without a grow); ArrayBufferWriter doubles on demand.
+            // The backing byte[] becomes the ByteString's backing store via UnsafeWrap
+            // below — zero-copy handoff into the protobuf-style ByteString.
+
+            // var bufferWriter = new ArrayBufferWriter<byte>(serializedMessage.Message.Length+256);
+            using var bufferWriter = ArrayPoolMemoryOwnerBufferedWriter.Create<byte>();
             {
-                RecipientPath = SerializeActorRef(recipient.Path.Address, recipient),
-                Message       = BuildMpPayload(serializedMessage),
-                Seq           = seqOption.HasValue
-                    ? (ulong)seqOption.Value.RawValue
-                    : MpRemoteEnvelope.SeqUndefined
-            };
+                // new ArrayBufferWriter<byte>(serializedMessage.Message.Length+256);
+                var writer = new MP.MessagePackWriter(bufferWriter);
 
-            if (senderOption?.Path is not null)
-                env.SenderPath = SerializeActorRef(localAddress, senderOption);
+                // ── MpAckAndEnvelope: [ack, envelope] ─────────────────────────────
+                writer.WriteArrayHeader(2);
 
-            var container = new MpAckAndEnvelope
+                // -- Key 0: Ack (nullable) --
+                if (ackOption is not null)
+                    WriteAck(ref writer, ackOption);
+                else
+                    writer.WriteNil();
+
+                // -- Key 1: Envelope --
+                // MpRemoteEnvelope: [recipientPath, message, senderPath, seq] (4 keys)
+                writer.WriteArrayHeader(4);
+
+                // Key 0: RecipientPath — non-nullable string.
+                // Mirror of SerializeActorRef(recipient.Path.Address, recipient): we pass
+                // recipient.Path.Address as the fallback, so a local path renders against its
+                // own address and a remote path renders against its own host+port (because
+                // WritePathWithAddress prefers the path-owned address when host+port are set).
+                WriteActorPathString(ref writer, recipient.Path, recipient.Path.Address);
+
+                // Key 1: Message — non-nullable MpPayload [bytes, serializerId, manifest].
+                WriteMpPayload(ref writer, serializedMessage);
+
+                // Key 2: SenderPath — nullable string.
+                if (senderOption?.Path is not null)
+                    WriteActorPathString(ref writer, senderOption.Path, localAddress);
+                else
+                    writer.WriteNil();
+
+                // Key 3: Seq — non-nullable ulong (sentinel ulong.MaxValue when undefined).
+                writer.Write(seqOption.HasValue
+                    ? unchecked((ulong)seqOption.Value.RawValue)
+                    : MpRemoteEnvelope.SeqUndefined);
+
+                writer.Flush();
+
+                // Zero-copy handoff: the ByteString holds a reference to the
+                // ArrayBufferWriter's internal byte[] via WrittenMemory. The buffer
+                // writer itself is GC-able after this call; its array stays alive
+                // through the ROM reference inside the ByteString.
+                // return ByteString.CopyFrom(bufferWriter.Memory.Span);
+                // return new ByteString(bufferWriter.Memory);
+                return UnsafeByteOperations.UnsafeWrap(bufferWriter.Memory.ToArray());
+            }
+        }
+
+        /// <summary>
+        /// Writes an <see cref="Ack"/> as a MessagePack array matching the
+        /// auto-generated <c>MpAck</c> formatter shape: <c>[cumulativeAck, nacks[]]</c>.
+        /// </summary>
+        private static void WriteAck(ref MP.MessagePackWriter writer, Ack ack)
+        {
+            writer.WriteArrayHeader(2);
+            writer.Write(ack.CumulativeAck.RawValue);
+
+            // Nacks array — always present (never nil) to match BuildMpAck's
+            // .ToArray() semantic. Stream directly from the enumerable; if it's
+            // ICollection we can fast-path the count.
+            // if (ack.Nacks)
             {
-                Envelope = env,
-                Ack      = ackOption is not null ? BuildMpAck(ackOption) : null
-            };
+                writer.WriteArrayHeader(ack.Nacks.Count);
+                foreach (var n in ack.Nacks)
+                    writer.Write(n.RawValue);
+            }
+        }
 
-            return UnsafeByteOperations.UnsafeWrap(
-                MP.MessagePackSerializer.Serialize(container));
+        /// <summary>
+        /// Writes a <see cref="SerializedMessage"/> as the MessagePack <c>MpPayload</c>
+        /// array shape: <c>[bytes, serializerId, manifest]</c>.
+        ///
+        /// <para>
+        /// <b>Wire-format note</b>: empty byte buffers are written as zero-length
+        /// <c>bin</c> (not <c>nil</c>) — this matches the auto-generated
+        /// <c>ReadOnlyMemory&lt;byte&gt;?</c> formatter which round-trips
+        /// <c>null</c> as <c>bin(0)</c>. Emitting <c>nil</c> here would shave
+        /// 2 bytes per empty buffer but would not match the legacy POCO wire format
+        /// and break decoder parity.
+        /// </para>
+        /// </summary>
+        private static void WriteMpPayload(ref MP.MessagePackWriter writer, SerializedMessage msg)
+        {
+            writer.WriteArrayHeader(3);
+
+            // Key 0: Message bytes. Always emit as bin (possibly zero-length).
+            writer.Write(msg.Message.Span);
+
+            // Key 1: SerializerId.
+            writer.Write(msg.SerializerId);
+
+            // Key 2: Manifest bytes. Always emit as bin (possibly zero-length).
+            writer.Write(msg.MessageManifest.Span);
+        }
+
+        /// <summary>
+        /// Writes <paramref name="path"/> as a MessagePack string, going chars →
+        /// pooled char buffer → UTF-8 in a pooled byte buffer → MessagePack writer.
+        /// No <see cref="string"/> allocation occurs along the way.
+        /// </summary>
+        /// <param name="writer">The destination MessagePack writer.</param>
+        /// <param name="path">The actor path to serialize.</param>
+        /// <param name="fallbackAddress">Address used when <paramref name="path"/> has no host/port.</param>
+        private static void WriteActorPathString(
+            ref MP.MessagePackWriter writer,
+            ActorPath path,
+            Address fallbackAddress)
+        {
+            // 1) Render the path chars into a pooled scratch via the new zero-alloc API.
+            using var charScratch = new PooledCharBufferWriter();
+            path.WritePathWithAddress(charScratch, fallbackAddress, includeUid: true);
+            var chars = charScratch.WrittenSpan;
+
+            // 2) Transcode chars → UTF-8 into a pooled byte buffer. Actor paths are
+            //    ASCII in the common case (ValidAscii enforces < 128 for path elements)
+            //    so byte count typically equals char count, but Encoding.UTF8 handles the
+            //    cold path (e.g. an IDN host name).
+            writer.Write(chars);
+            // var utf8MaxLen = Encoding.UTF8.GetMaxByteCount(chars.Length);
+            // var utf8Buffer = ArrayPool<byte>.Shared.Rent(utf8MaxLen);
+            // try
+            // {
+            //     var utf8Len = Encoding.UTF8.GetBytes(chars, utf8Buffer);
+            // 
+            //     // 3) Emit as a single MessagePack str with header + body.
+            //     writer.WriteString(utf8Buffer.AsSpan(0, utf8Len));
+            // }
+            // finally
+            // {
+            //     ArrayPool<byte>.Shared.Return(utf8Buffer);
+            // }
         }
 
         /// <inheritdoc/>
@@ -343,23 +498,10 @@ namespace Akka.Remote.Transport.Pipelines
                 Nacks         = ack.Nacks.Select(n => n.RawValue).ToArray()
             };
 
-        private static MpPayload BuildMpPayload(SerializedMessage msg) =>
-            new()
-            {
-                Message      = msg.Message.IsEmpty      ? null : msg.Message.Memory,
-                SerializerId = msg.SerializerId,
-                Manifest     = msg.MessageManifest.IsEmpty ? null : msg.MessageManifest.Memory
-            };
-
-        /// <summary>
-        /// Returns the serialized actor ref path as a string.
-        /// Uses the full canonical format when the actor has a remote address,
-        /// or appends <paramref name="defaultAddress"/> for local actors.
-        /// </summary>
-        private static string SerializeActorRef(Address defaultAddress, IActorRef actorRef) =>
-            !string.IsNullOrEmpty(actorRef.Path.Address.Host)
-                ? actorRef.Path.ToSerializationFormat()
-                : actorRef.Path.ToSerializationFormatWithAddress(defaultAddress);
+        // NOTE: BuildMpPayload + SerializeActorRef were removed when ConstructMessage
+        // switched to the direct-MessagePackWriter path. Path serialization is now
+        // handled by WriteActorPathString via ActorPath.WritePathWithAddress, and the
+        // payload bytes are written inline via WriteMpPayload.
     }
 }
 

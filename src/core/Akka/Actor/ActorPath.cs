@@ -6,11 +6,13 @@
 //-----------------------------------------------------------------------
 
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Runtime.Serialization;
+using System.Text;
 using Akka.Util;
 using Newtonsoft.Json;
 
@@ -761,6 +763,98 @@ public abstract class ActorPath : IEquatable<ActorPath>, IComparable<ActorPath>,
     public string ToStringWithAddress(Address address)
     {
         return ToStringWithAddress(address, false);
+    }
+    
+    /// <summary>
+    /// Streams the same character sequence as
+    /// <see cref="ToStringWithAddress(Address, bool)"/> directly into
+    /// <paramref name="bufferWriter"/> without ever materialising the result
+    /// as a <see cref="string"/>.
+    ///
+    /// <para>
+    /// Honours the same special cases as the string overload:
+    /// <list type="bullet">
+    ///   <item>An <see cref="IgnoreActorRef"/> path always emits its own address
+    ///         and ignores <paramref name="address"/>.</item>
+    ///   <item>A path that already has a remote address (host + port) uses its
+    ///         own address; otherwise <paramref name="address"/> is used.</item>
+    ///   <item><paramref name="includeUid"/> appends <c>#&lt;uid&gt;</c> only when
+    ///         <see cref="Uid"/> != <see cref="ActorCell.UndefinedUid"/>.</item>
+    /// </list>
+    /// </para>
+    ///
+    /// <!-- CopilotNotes: Allocation profile is zero managed allocations beyond
+    ///      what the caller's IBufferWriter rents. The parent chain is walked
+    ///      twice (once to compute total segment length, once to copy names) so
+    ///      we can request a single GetSpan(total) for the segment block and
+    ///      fill it end-to-start — same trick used by Join() internally. -->
+    /// </summary>
+    /// <param name="bufferWriter">Destination writer. Must not be <c>null</c>.</param>
+    /// <param name="address">Address to use when this path is local (no host/port).</param>
+    /// <param name="includeUid">If <c>true</c>, appends <c>#&lt;uid&gt;</c> when assigned.</param>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="bufferWriter"/> is <c>null</c>.</exception>
+    public void WritePathWithAddress(IBufferWriter<char> bufferWriter, Address address, bool includeUid)
+    {
+        if (bufferWriter is null) throw new ArgumentNullException(nameof(bufferWriter));
+
+        // 1) Pick the effective address — IgnoreActorRef paths always emit their
+        //    own address (matches ToStringWithAddress / ToString behaviour).
+        var effective = IgnoreActorRef.IsIgnoreRefPath(this)
+            ? Address
+            : (Address is { Host: not null, Port: not null } ? Address : address);
+
+        // 2) Stream the address segment straight into the writer.
+        effective.WriteTo(bufferWriter);
+
+        // 3) Path segments.
+        if (_depth == 0)
+        {
+            // Root path renders as "<address>/" — mirrors Join's depth-0 branch.
+            // Note: Join() never appends a uid suffix at depth 0, and RootActorPath
+            // always has Uid == UndefinedUid, so we exit here unconditionally.
+            var slash = bufferWriter.GetSpan(1);
+            slash[0] = '/';
+            bufferWriter.Advance(1);
+            return;
+        }
+
+        // 3a) First pass — compute total segment-block size: one '/' per node
+        //     plus the sum of every Name.Length walking leaf → root.
+        var total = _depth; // one '/' per segment
+        var p = this;
+        while (p!._depth > 0)
+        {
+            total += p.Name.Length;
+            p = p.Parent;
+        }
+
+        // 3b) Second pass — request one span big enough for the entire segment
+        //     block, then fill it end-to-start so we don't need a forward-ordered
+        //     scratch list of string references (which stackalloc can't hold).
+        var dest = bufferWriter.GetSpan(total);
+        var pos = total;
+        p = this;
+        while (p!._depth > 0)
+        {
+            var name = p.Name.AsSpan();
+            pos -= name.Length;
+            name.CopyTo(dest.Slice(pos, name.Length));
+            pos -= 1;
+            dest[pos] = '/';
+            p = p.Parent;
+        }
+        bufferWriter.Advance(total);
+
+        // 4) Optional UID fragment, written via SpanHacks so no string is allocated.
+        if (includeUid && Uid != ActorCell.UndefinedUid)
+        {
+            var uidSize = SpanHacks.Int64SizeInCharacters(Uid);
+            var tailSize = 1 + uidSize; // '#' + digits
+            var tail = bufferWriter.GetSpan(tailSize);
+            tail[0] = '#';
+            SpanHacks.TryFormat(Uid, 1, ref tail, uidSize);
+            bufferWriter.Advance(tailSize);
+        }
     }
 
     private string ToStringWithAddress(Address address, bool includeUid)

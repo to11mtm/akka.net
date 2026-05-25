@@ -169,11 +169,15 @@ namespace Akka.Remote.Tests.Transport
                 .Should().BeEquivalentTo(new long[] { 3, 4 });
 
             // ── Message half ──────────────────────────────────────────────────────
+            // The MessagePack decode path populates MsgPackMessage (not SerializedMessage)
+            // so EndpointReader can dispatch via the zero-copy ReadOnlyMemory<byte> overload.
             result.MessageOption.Should().NotBeNull();
-            result.MessageOption!.SerializedMessage.Message.ToStringUtf8()
+            result.MessageOption!.HasMsgPackPayload.Should().BeTrue();
+            result.MessageOption.MsgPackMessage.Should().NotBeNull();
+            Encoding.UTF8.GetString(result.MessageOption.MsgPackMessage!.Bytes.Span)
                 .Should().Be("the-message");
-            result.MessageOption.SerializedMessage.SerializerId.Should().Be(42);
-            result.MessageOption.SerializedMessage.MessageManifest.ToStringUtf8()
+            result.MessageOption.MsgPackMessage!.SerializerId.Should().Be(42);
+            Encoding.UTF8.GetString(result.MessageOption.MsgPackMessage!.Manifest.Span)
                 .Should().Be("SomeCls");
             result.MessageOption.Seq.Should().NotBeNull();
             result.MessageOption.Seq!.Value.RawValue.Should().Be(7);
@@ -292,6 +296,121 @@ namespace Akka.Remote.Tests.Transport
             var garbage = ByteString.CopyFrom(new byte[] { 0xFF, 0x00, 0xAB, 0xCD });
             Action act  = () => _codec.DecodePdu(garbage);
             act.Should().Throw<PduCodecException>();
+        }
+
+        // ── Wire-format parity: new direct-write ConstructMessage vs. the old POCO path ──
+
+        [Fact(DisplayName = "MessagePack codec: ConstructMessage wire format matches POCO serialization (full envelope)")]
+        public void ConstructMessage_Bytes_Should_Match_PocoSerialization_FullEnvelope()
+        {
+            var serialized = new SerializedMessage
+            {
+                Message         = ByteString.CopyFromUtf8("the-message"),
+                SerializerId    = 17,
+                MessageManifest = ByteString.CopyFromUtf8("Manifest.Cls")
+            };
+
+            var recipient    = Sys.ActorOf(Props.Empty);
+            var localAddress = new Address("akka.tcp", Sys.Name, "127.0.0.1", 7355);
+            var seqNo        = new SeqNo(99);
+            var ack          = new Ack(new SeqNo(50), new[] { new SeqNo(7), new SeqNo(8), new SeqNo(9) });
+
+            // ── New path: direct MessagePackWriter ─────────────────────────────────
+            var actual = _codec.ConstructMessage(
+                localAddress, recipient, serialized,
+                senderOption: recipient,
+                seqOption:    seqNo,
+                ackOption:    ack);
+
+            // ── Reference path: rebuild the POCO graph and let the source-generated
+            //    formatter serialize it. Any drift in our manual array layout would
+            //    show up as a byte-level mismatch here. ──
+            var expected = BuildExpectedPocoBytes(localAddress, recipient, serialized, recipient, seqNo, ack);
+
+            actual.ToByteArray().Should().Equal(expected,
+                because: "the direct-write path must produce byte-for-byte identical output to the [MessagePackObject] formatter");
+
+            // Sanity: bytes also round-trip via DecodeMessage.
+            var provider = (IRemoteActorRefProvider)((ExtendedActorSystem)Sys).Provider;
+            var decoded  = _codec.DecodeMessage(actual, provider, localAddress);
+            decoded.MessageOption.Should().NotBeNull();
+            decoded.AckOption.Should().NotBeNull();
+        }
+
+        [Fact(DisplayName = "MessagePack codec: ConstructMessage wire format matches POCO serialization (minimal envelope)")]
+        public void ConstructMessage_Bytes_Should_Match_PocoSerialization_Minimal()
+        {
+            // No sender, no seq, no ack — exercises every nil-emit branch.
+            var serialized = new SerializedMessage
+            {
+                Message         = ByteString.Empty,
+                SerializerId    = 0,
+                MessageManifest = ByteString.Empty
+            };
+
+            var recipient    = Sys.ActorOf(Props.Empty);
+            var localAddress = new Address("akka.tcp", Sys.Name, "127.0.0.1", 7355);
+
+            var actual   = _codec.ConstructMessage(localAddress, recipient, serialized);
+            var expected = BuildExpectedPocoBytes(localAddress, recipient, serialized,
+                senderOption: null, seqOption: null, ackOption: null);
+
+            // Diff diagnostics for any mismatch.
+            var actualJson   = global::MessagePack.MessagePackSerializer.ConvertToJson(actual.ToByteArray());
+            var expectedJson = global::MessagePack.MessagePackSerializer.ConvertToJson(expected);
+            actualJson.Should().Be(expectedJson, because: "structural MessagePack JSON should match");
+
+            actual.ToByteArray().Should().Equal(expected,
+                because: "minimal-envelope direct-write must match the formatter byte-for-byte");
+        }
+
+        /// <summary>
+        /// Builds the expected MessagePack bytes by going through the same POCO graph
+        /// the old <see cref="AkkaPduMessagePackCodec.ConstructMessage"/> used to build.
+        /// Source-generated formatters take it from there. Used as the parity reference
+        /// for byte-equality assertions against the new direct-write path.
+        /// </summary>
+        private static byte[] BuildExpectedPocoBytes(
+            Address localAddress,
+            IActorRef recipient,
+            SerializedMessage serialized,
+            IActorRef? senderOption,
+            SeqNo? seqOption,
+            Ack? ackOption)
+        {
+            // Mirror of the legacy SerializeActorRef helper.
+            static string SerializeActorRef(Address defaultAddress, IActorRef actorRef) =>
+                !string.IsNullOrEmpty(actorRef.Path.Address.Host)
+                    ? actorRef.Path.ToSerializationFormat()
+                    : actorRef.Path.ToSerializationFormatWithAddress(defaultAddress);
+
+            var env = new MpRemoteEnvelope
+            {
+                RecipientPath = SerializeActorRef(recipient.Path.Address, recipient),
+                Message = new MpPayload
+                {
+                    Message      = serialized.Message.IsEmpty      ? null : serialized.Message.Memory,
+                    SerializerId = serialized.SerializerId,
+                    Manifest     = serialized.MessageManifest.IsEmpty ? null : serialized.MessageManifest.Memory
+                },
+                Seq = seqOption.HasValue
+                    ? unchecked((ulong)seqOption.Value.RawValue)
+                    : MpRemoteEnvelope.SeqUndefined,
+            };
+            if (senderOption?.Path is not null)
+                env.SenderPath = SerializeActorRef(localAddress, senderOption);
+
+            var container = new MpAckAndEnvelope
+            {
+                Envelope = env,
+                Ack = ackOption is null ? null : new MpAck
+                {
+                    CumulativeAck = ackOption.CumulativeAck.RawValue,
+                    Nacks         = ackOption.Nacks.Select(n => n.RawValue).ToArray()
+                }
+            };
+
+            return global::MessagePack.MessagePackSerializer.Serialize(container);
         }
     }
 }

@@ -6,6 +6,7 @@
 //-----------------------------------------------------------------------
 
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
@@ -135,6 +136,74 @@ public sealed class Address : IEquatable<Address>, IComparable<Address>, ICompar
         _toString ??= CreateLazyToString(this);
 
         return _toString;
+    }
+
+    /// <summary>
+    /// Streams the canonical string representation of this <see cref="Address"/> into
+    /// <paramref name="writer"/> without allocating an intermediate <see cref="string"/>.
+    ///
+    /// <para>
+    /// Produces the exact same character sequence as <see cref="ToString"/>:
+    /// <list type="bullet">
+    ///   <item><c>protocol://system@host:port</c> when host and port are set</item>
+    ///   <item><c>protocol://system@host</c> when only host is set (rare)</item>
+    ///   <item><c>protocol://system</c> when host is null/empty</item>
+    /// </list>
+    /// </para>
+    ///
+    /// <!-- CopilotNotes: Designed as the reusable building block for any allocation-free
+    ///      actor-ref serialisation path (e.g. ActorPath.WritePathWithAddress, the
+    ///      MessagePack codec's SerializeActorRef). Uses SpanHacks.TryFormat for the
+    ///      port digits so no boxing / no Int32.ToString() temporary is allocated. -->
+    /// </summary>
+    /// <param name="writer">The destination buffer writer. Must not be <c>null</c>.</param>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="writer"/> is <c>null</c>.</exception>
+    public void WriteTo(IBufferWriter<char> writer)
+    {
+        if (writer is null) throw new ArgumentNullException(nameof(writer));
+
+        // protocol "://" system
+        WriteChars(writer, Protocol.AsSpan());
+        WriteChars(writer, "://".AsSpan());
+        WriteChars(writer, System.AsSpan());
+
+        if (string.IsNullOrEmpty(Host))
+            return;
+
+        WriteChars(writer, "@".AsSpan());
+        WriteChars(writer, Host!.AsSpan());
+
+        if (!Port.HasValue)
+            return;
+
+        WriteChars(writer, ":".AsSpan());
+        WriteInt32(writer, Port.Value);
+    }
+
+    /// <summary>
+    /// Copies <paramref name="src"/> into <paramref name="writer"/> via a single
+    /// <see cref="IBufferWriter{T}.GetSpan(int)"/> / <see cref="IBufferWriter{T}.Advance(int)"/> pair.
+    /// </summary>
+    private static void WriteChars(IBufferWriter<char> writer, ReadOnlySpan<char> src)
+    {
+        if (src.IsEmpty) return;
+        var dest = writer.GetSpan(src.Length);
+        src.CopyTo(dest);
+        writer.Advance(src.Length);
+    }
+
+    /// <summary>
+    /// Writes <paramref name="value"/> as base-10 ASCII digits straight into
+    /// <paramref name="writer"/> with no <see cref="string"/> allocation.
+    /// </summary>
+    private static void WriteInt32(IBufferWriter<char> writer, int value)
+    {
+        // Int64SizeInCharacters handles the negative-sign accounting too;
+        // ports are realistically always non-negative but be defensive.
+        var size = SpanHacks.Int64SizeInCharacters(value);
+        var dest = writer.GetSpan(size);
+        SpanHacks.TryFormat(value, 0, ref dest, size);
+        writer.Advance(size);
     }
 
 
