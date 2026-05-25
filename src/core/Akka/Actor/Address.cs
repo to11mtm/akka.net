@@ -139,6 +139,132 @@ public sealed class Address : IEquatable<Address>, IComparable<Address>, ICompar
     }
 
     /// <summary>
+    /// Returns the total number of characters that <see cref="WriteTo(IBufferWriter{char})"/>
+    /// and <see cref="WriteTo(Span{char})"/> would emit for this address, without performing
+    /// any actual writes or allocations. ✨
+    ///
+    /// <para>
+    /// Mirrors the same format logic as <see cref="ToString"/>:
+    /// <list type="bullet">
+    ///   <item><c>protocol://system@host:port</c> when host and port are set</item>
+    ///   <item><c>protocol://system@host</c> when only host is set (rare)</item>
+    ///   <item><c>protocol://system</c> when host is null/empty</item>
+    /// </list>
+    /// </para>
+    ///
+    /// <!-- CopilotNotes: Delegates to cached ToString().Length when available to avoid
+    ///      recomputing. Falls back to inline arithmetic for hot-path callers that haven't
+    ///      yet triggered lazy ToString() (e.g. ActorPath.CalculatePathWithAddressLength). -->
+    /// </summary>
+    /// <returns>The number of characters in this address's canonical string representation.</returns>
+    public int GetCharCount()
+    {
+        // Fast path — reuse cached string length when already computed. 🐱
+        if (_toString is not null)
+            return _toString.Length;
+
+        // "protocol://" + system
+        var count = Protocol.Length + 3 + System.Length;
+
+        if (string.IsNullOrEmpty(Host))
+            return count;
+
+        // "@host"
+        count += 1 + Host!.Length;
+
+        if (!Port.HasValue)
+            return count;
+
+        // ":port"
+        count += 1 + SpanHacks.Int64SizeInCharacters(Port.Value);
+
+        return count;
+    }
+
+    /// <summary>
+    /// Writes the canonical string representation of this <see cref="Address"/> into
+    /// <paramref name="destination"/> and returns the number of characters written. ✨
+    ///
+    /// <para>The caller is responsible for pre-allocating a span of at least
+    /// <see cref="GetCharCount"/> characters.</para>
+    /// </summary>
+    /// <param name="destination">The destination span. Must be large enough to hold <see cref="GetCharCount"/> chars.</param>
+    /// <returns>The number of characters written.</returns>
+    public int WriteTo(Span<char> destination)
+    {
+        var pos = 0;
+
+        Protocol.AsSpan().CopyTo(destination.Slice(pos));
+        pos += Protocol.Length;
+        destination[pos++] = ':';
+        destination[pos++] = '/';
+        destination[pos++] = '/';
+        System.AsSpan().CopyTo(destination.Slice(pos));
+        pos += System.Length;
+
+        if (string.IsNullOrEmpty(Host))
+            return pos;
+
+        destination[pos++] = '@';
+        Host!.AsSpan().CopyTo(destination.Slice(pos));
+        pos += Host.Length;
+
+        if (!Port.HasValue)
+            return pos;
+
+        destination[pos++] = ':';
+        var portSize = SpanHacks.Int64SizeInCharacters(Port.Value);
+        var portSpan = destination.Slice(pos);
+        SpanHacks.TryFormat(Port.Value, 0, ref portSpan, portSize);
+        pos += portSize;
+
+        return pos;
+    }
+
+    /// <summary>
+    /// Writes the canonical string representation of this <see cref="Address"/> into
+    /// <paramref name="destination"/> as UTF-8 bytes and returns the number of bytes written. 🌸
+    ///
+    /// <para>
+    /// Because every character in an <see cref="Address"/> is pure ASCII (0–127), the
+    /// byte count is identical to the char count returned by <see cref="GetCharCount"/>, so
+    /// callers can use the same pre-computed length for both overloads.
+    /// </para>
+    ///
+    /// <!-- CopilotNotes: Cast-to-byte is safe here because Protocol, System, Host and
+    ///      port digits are exclusively ASCII. No Encoding.UTF8 overhead needed. uwu -->
+    /// </summary>
+    /// <param name="destination">Destination byte span. Must be at least <see cref="GetCharCount"/> bytes wide.</param>
+    /// <returns>Number of bytes written.</returns>
+    public int WriteTo(Span<byte> destination)
+    {
+        var pos = 0;
+
+        foreach (var c in Protocol) destination[pos++] = (byte)c;
+        destination[pos++] = (byte)':';
+        destination[pos++] = (byte)'/';
+        destination[pos++] = (byte)'/';
+        foreach (var c in System) destination[pos++] = (byte)c;
+
+        if (string.IsNullOrEmpty(Host))
+            return pos;
+
+        destination[pos++] = (byte)'@';
+        foreach (var c in Host!) destination[pos++] = (byte)c;
+
+        if (!Port.HasValue)
+            return pos;
+
+        destination[pos++] = (byte)':';
+        var portSize = SpanHacks.Int64SizeInCharacters(Port.Value);
+        var portSpan = destination.Slice(pos);
+        SpanHacks.TryFormatBytes(Port.Value, 0, ref portSpan, portSize);
+        pos += portSize;
+
+        return pos;
+    }
+
+    /// <summary>
     /// Streams the canonical string representation of this <see cref="Address"/> into
     /// <paramref name="writer"/> without allocating an intermediate <see cref="string"/>.
     ///

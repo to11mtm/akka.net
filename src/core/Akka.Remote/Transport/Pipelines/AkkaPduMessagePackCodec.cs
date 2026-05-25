@@ -9,6 +9,7 @@
 
 using System;
 using System.Buffers;
+using System.Buffers.Binary;
 using System.Linq;
 using System.Text;
 using Akka.Actor;
@@ -413,6 +414,21 @@ namespace Akka.Remote.Transport.Pipelines
 
             // Key 2: Manifest bytes. Always emit as bin (possibly zero-length).
             writer.Write(msg.MessageManifest.Span);
+        }
+
+        private static void WriteActorPathStringNew(
+            ref MP.MessagePackWriter writer, 
+            ActorPath path,
+            Address fallbackAddress)
+        {
+            var len = path.CalculatePathWithAddressLength(fallbackAddress, true);
+            var fullLen = Encoding.UTF8.GetMaxByteCount(len) + 5;
+            var sp = writer.GetSpan(fullLen);
+            
+            var advance = path.WritePathTo(sp.Slice(5), fallbackAddress, includeUid: true);
+            sp[0] = MP.MessagePackCode.Str32;
+            BinaryPrimitives.WriteInt32BigEndian(sp.Slice(1,4), advance);
+            writer.Advance(advance + 5);
         }
 
         /// <summary>

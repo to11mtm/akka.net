@@ -103,6 +103,52 @@ namespace Akka.Util
             return PositiveInt64SizeInCharacters(i, padding);
         }
         
+        /// <summary>
+        /// Formats <paramref name="i"/> as base-10 ASCII digits directly into a
+        /// <see cref="Span{T}"/> of <see cref="byte"/> so UTF-8 writers can emit
+        /// integer values without an intermediate <see cref="char"/> buffer. 🌸
+        ///
+        /// <!-- CopilotNotes: Byte twin of TryFormat(long,...,ref Span{char},...).
+        ///      Safe because all decimal digits and '-' are single-byte in UTF-8. -->
+        /// </summary>
+        /// <param name="i">The value to format.</param>
+        /// <param name="startPos">Offset inside <paramref name="span"/> to begin writing.</param>
+        /// <param name="span">Destination byte span.</param>
+        /// <param name="sizeHint">Pre-computed digit count; pass 0 to auto-compute.</param>
+        /// <returns>Number of bytes written.</returns>
+        public static int TryFormatBytes(long i, int startPos, ref Span<byte> span, int sizeHint = 0)
+        {
+            var index = 0;
+            if (i is < 10 and >= 0)
+            {
+                span[startPos] = (byte)(i + '0');
+                return 1;
+            }
+
+            var negative = 0;
+            if (i < 0)
+            {
+                negative = 1;
+                i = Math.Abs(i);
+            }
+
+            var targetLength = sizeHint > 0 ? sizeHint : PositiveInt64SizeInCharacters(i, negative);
+
+            while (i > 0)
+            {
+                i = Math.DivRem(i, 10, out var rem);
+                span[startPos + targetLength - index++ - 1] = (byte)(rem + '0');
+            }
+
+            if (negative == 1)
+            {
+                span[0] = (byte)'-';
+                index++;
+            }
+
+            return index;
+        }
+
         public static int PositiveInt64SizeInCharacters(long i, int padding)
         {
             switch (i)

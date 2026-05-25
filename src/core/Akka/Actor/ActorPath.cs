@@ -766,6 +766,228 @@ public abstract class ActorPath : IEquatable<ActorPath>, IComparable<ActorPath>,
     }
     
     /// <summary>
+    /// Calculates the total number of characters (and bytes — since all actor-path characters
+    /// are pure ASCII) that <see cref="WritePathWithAddress"/> or either <c>WritePathTo</c>
+    /// overload would emit for this path, without performing any writes or allocations. ✨
+    ///
+    /// <para>
+    /// Callers can use this to pre-allocate an exact-sized buffer (e.g. via
+    /// <c>stackalloc</c> or <c>ArrayPool</c>) and then pass it to the
+    /// <c>WritePathTo</c> overload of their choice (<see cref="Span{T}">Span&lt;char&gt;</see>
+    /// or <see cref="Span{T}">Span&lt;byte&gt;</see>) — both consume the same byte/char count
+    /// because all actor-path characters are pure ASCII.
+    /// </para>
+    ///
+    /// <!-- CopilotNotes: Mirrors the same address/segment/uid accounting as
+    ///      WritePathWithAddress so the two methods stay in sync.
+    ///      Uses Address.GetCharCount() to avoid calling ToString(). -->
+    /// </summary>
+    /// <param name="address">Address to use when this path is local (no host/port).</param>
+    /// <param name="includeUid">If <c>true</c>, includes the <c>#&lt;uid&gt;</c> suffix length when the uid is assigned.</param>
+    /// <returns>The exact number of characters that would be written.</returns>
+    public int CalculatePathWithAddressLength(Address address, bool includeUid)
+    {
+        // Choose the same effective address as WritePathWithAddress does. 🌸
+        var effective = IgnoreActorRef.IsIgnoreRefPath(this)
+            ? Address
+            : (Address is { Host: not null, Port: not null } ? Address : address);
+
+        var total = effective.GetCharCount();
+
+        if (_depth == 0)
+        {
+            // Root renders as "<address>/" — just one extra slash. 🌙
+            return total + 1;
+        }
+
+        // One '/' per segment plus each segment's name length.
+        var p = this;
+        while (p!._depth > 0)
+        {
+            total += 1 + p.Name.Length;
+            p = p.Parent;
+        }
+
+        // Optional '#uid' suffix. ✨
+        if (includeUid && Uid != ActorCell.UndefinedUid)
+            total += 1 + SpanHacks.Int64SizeInCharacters(Uid); // '#' + digits
+
+        return total;
+    }
+
+    /// <summary>
+    /// Writes the same character sequence as
+    /// <see cref="WritePathWithAddress"/> directly into
+    /// a caller-supplied <paramref name="destination"/> <see cref="Span{T}"/> and returns
+    /// the number of characters written. ✨
+    ///
+    /// <para>
+    /// Use <see cref="CalculatePathWithAddressLength"/> to compute the required buffer size
+    /// so you can <c>stackalloc</c> or rent an exact-sized array:
+    /// <code>
+    /// var len  = path.CalculatePathWithAddressLength(addr, includeUid: true);
+    /// Span&lt;char&gt; buf = len &lt;= 1024 ? stackalloc char[len] : new char[len];
+    /// int written = path.WritePathTo(buf, addr, includeUid: true);
+    /// var result  = buf.Slice(0, written).ToString();
+    /// </code>
+    /// </para>
+    ///
+    /// <!-- CopilotNotes: Span-based twin of WritePathWithAddress(IBufferWriter).
+    ///      Fills the segment block end-to-start (same trick as Join/WritePathWithAddress)
+    ///      so only a single contiguous slice is needed for all segments.
+    ///      Returns chars written so the caller can slice exactly. -->
+    /// </summary>
+    /// <param name="destination">
+    /// Destination span. Must be at least <see cref="CalculatePathWithAddressLength"/> chars wide.
+    /// </param>
+    /// <param name="address">Address to use when this path is local (no host/port).</param>
+    /// <param name="includeUid">If <c>true</c>, appends <c>#&lt;uid&gt;</c> when assigned.</param>
+    /// <returns>The number of characters written into <paramref name="destination"/>.</returns>
+    public int WritePathTo(Span<char> destination, Address address, bool includeUid)
+    {
+        // 1) Effective address — same logic as WritePathWithAddress. 🎀
+        var effective = IgnoreActorRef.IsIgnoreRefPath(this)
+            ? Address
+            : (Address is { Host: not null, Port: not null } ? Address : address);
+
+        // 2) Write address into the front of the span and advance cursor.
+        var pos = effective.WriteTo(destination);
+
+        // 3) Depth-0 root: just "/" and we are done. 🌸
+        if (_depth == 0)
+        {
+            destination[pos++] = '/';
+            return pos;
+        }
+
+        // 3a) Compute total segment block size (walk leaf → root). 🐾
+        var segmentTotal = _depth; // one '/' per segment
+        var p = this;
+        while (p!._depth > 0)
+        {
+            segmentTotal += p.Name.Length;
+            p = p.Parent;
+        }
+
+        // 3b) Fill segment block end-to-start so no extra scratch is needed. ✨
+        var segStart = pos;
+        var segPos = segStart + segmentTotal;
+        p = this;
+        while (p!._depth > 0)
+        {
+            var name = p.Name.AsSpan();
+            segPos -= name.Length;
+            name.CopyTo(destination.Slice(segPos, name.Length));
+            segPos -= 1;
+            destination[segPos] = '/';
+            p = p.Parent;
+        }
+        pos += segmentTotal;
+
+        // 4) Optional UID suffix '#<uid>'. 🌙
+        if (includeUid && Uid != ActorCell.UndefinedUid)
+        {
+            destination[pos++] = '#';
+            var uidSize = SpanHacks.Int64SizeInCharacters(Uid);
+            var uidSpan = destination.Slice(pos);
+            SpanHacks.TryFormat(Uid, 0, ref uidSpan, uidSize);
+            pos += uidSize;
+        }
+
+        return pos;
+    }
+
+    /// <summary>
+    /// Writes the same path as <see cref="WritePathTo(Span{char}, Address, bool)"/> into
+    /// <paramref name="destination"/> as UTF-8 bytes and returns the number of bytes written. 🌸
+    ///
+    /// <para>
+    /// Because every character in an actor path is pure ASCII (0–127), the byte count is equal
+    /// to the char count, so <see cref="CalculatePathWithAddressLength"/> gives the correct
+    /// pre-allocation size for both this method and the <see cref="Span{T}">Span&lt;char&gt;</see> overload.
+    /// </para>
+    ///
+    /// <para>
+    /// Example — zero-alloc encode to a rented byte buffer:
+    /// <code>
+    /// var len  = path.CalculatePathWithAddressLength(addr, includeUid: true);
+    /// var buf  = ArrayPool&lt;byte&gt;.Shared.Rent(len);
+    /// try
+    /// {
+    ///     int written = path.WritePathTo(buf.AsSpan(0, len), addr, includeUid: true);
+    ///     // use buf[0..written] ...
+    /// }
+    /// finally { ArrayPool&lt;byte&gt;.Shared.Return(buf); }
+    /// </code>
+    /// </para>
+    ///
+    /// <!-- CopilotNotes: Structurally identical to the Span{char} overload; the only
+    ///      differences are the element type (byte vs char), Address.WriteTo(Span{byte}),
+    ///      cast of '/' '#' to byte, and SpanHacks.TryFormatBytes for the UID. uwu ✨ -->
+    /// </summary>
+    /// <param name="destination">
+    /// Destination byte span. Must be at least <see cref="CalculatePathWithAddressLength"/> bytes wide.
+    /// </param>
+    /// <param name="address">Address to use when this path is local (no host/port).</param>
+    /// <param name="includeUid">If <c>true</c>, appends <c>#&lt;uid&gt;</c> when assigned.</param>
+    /// <returns>The number of bytes written into <paramref name="destination"/>.</returns>
+    public int WritePathTo(Span<byte> destination, Address address, bool includeUid)
+    {
+        // 1) Effective address — same logic as the char overload. 🎀
+        var effective = IgnoreActorRef.IsIgnoreRefPath(this)
+            ? Address
+            : (Address is { Host: not null, Port: not null } ? Address : address);
+
+        // 2) Write address as UTF-8 bytes and advance cursor.
+        var pos = effective.WriteTo(destination);
+
+        // 3) Depth-0 root: just '/' and done. 🌸
+        if (_depth == 0)
+        {
+            destination[pos++] = (byte)'/';
+            return pos;
+        }
+
+        // 3a) Compute total segment block size (walk leaf → root). 🐾
+        var segmentTotal = _depth; // one '/' per segment
+        var p = this;
+        while (p!._depth > 0)
+        {
+            segmentTotal += p.Name.Length;
+            p = p.Parent;
+        }
+
+        // 3b) Fill segment block end-to-start, casting each ASCII char to byte. ✨
+        var segStart = pos;
+        var segPos = segStart + segmentTotal;
+        p = this;
+        while (p!._depth > 0)
+        {
+            var name = p.Name.AsSpan();
+            segPos -= name.Length;
+            // All actor name chars are ASCII — safe single-byte cast. 🌙
+            for (var i = 0; i < name.Length; i++)
+                destination[segPos + i] = (byte)name[i];
+            segPos -= 1;
+            destination[segPos] = (byte)'/';
+            p = p.Parent;
+        }
+        pos += segmentTotal;
+
+        // 4) Optional UID suffix '#<uid>'. 🌙
+        if (includeUid && Uid != ActorCell.UndefinedUid)
+        {
+            destination[pos++] = (byte)'#';
+            var uidSize = SpanHacks.Int64SizeInCharacters(Uid);
+            var uidSpan = destination.Slice(pos);
+            SpanHacks.TryFormatBytes(Uid, 0, ref uidSpan, uidSize);
+            pos += uidSize;
+        }
+
+        return pos;
+    }
+
+    /// <summary>
     /// Streams the same character sequence as
     /// <see cref="ToStringWithAddress(Address, bool)"/> directly into
     /// <paramref name="bufferWriter"/> without ever materialising the result
