@@ -956,7 +956,6 @@ public abstract class ActorPath : IEquatable<ActorPath>, IComparable<ActorPath>,
             segmentTotal += p.Name.Length;
             p = p.Parent;
         }
-
         // 3b) Fill segment block end-to-start, casting each ASCII char to byte. ✨
         var segStart = pos;
         var segPos = segStart + segmentTotal;
@@ -965,10 +964,12 @@ public abstract class ActorPath : IEquatable<ActorPath>, IComparable<ActorPath>,
         {
             var name = p.Name.AsSpan();
             segPos -= name.Length;
+            var decr = Encoding.ASCII.GetBytes(name, destination.Slice(segPos, name.Length));
             // All actor name chars are ASCII — safe single-byte cast. 🌙
-            for (var i = 0; i < name.Length; i++)
-                destination[segPos + i] = (byte)name[i];
+            // for (var i = 0; i < name.Length; i++)
+            //     destination[segPos + i] = (byte)name[i];
             segPos -= 1;
+            
             destination[segPos] = (byte)'/';
             p = p.Parent;
         }

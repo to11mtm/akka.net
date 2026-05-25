@@ -10,6 +10,7 @@ using System.Buffers;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
+using System.Text;
 using Akka.Util;
 
 #nullable enable
@@ -240,17 +241,18 @@ public sealed class Address : IEquatable<Address>, IComparable<Address>, ICompar
     {
         var pos = 0;
 
-        foreach (var c in Protocol) destination[pos++] = (byte)c;
-        destination[pos++] = (byte)':';
-        destination[pos++] = (byte)'/';
-        destination[pos++] = (byte)'/';
-        foreach (var c in System) destination[pos++] = (byte)c;
+        CopyAscii(Protocol.AsSpan(), destination, ref pos);
+        pos += Encoding.UTF8.GetBytes("://", destination.Slice(pos));
+        // destination[pos++] = (byte)':';
+        // destination[pos++] = (byte)'/';
+        // destination[pos++] = (byte)'/';
+        CopyAscii(System.AsSpan(), destination, ref pos);
 
         if (string.IsNullOrEmpty(Host))
             return pos;
 
         destination[pos++] = (byte)'@';
-        foreach (var c in Host!) destination[pos++] = (byte)c;
+        CopyAscii(Host!.AsSpan(), destination, ref pos);
 
         if (!Port.HasValue)
             return pos;
@@ -262,6 +264,24 @@ public sealed class Address : IEquatable<Address>, IComparable<Address>, ICompar
         pos += portSize;
 
         return pos;
+    }
+
+    /// <summary>
+    /// Copies each character in <paramref name="src"/> (assumed pure ASCII) into
+    /// <paramref name="dest"/> as a single byte using direct span indexing.
+    /// Advances <paramref name="pos"/> by <c>src.Length</c>.
+    ///
+    /// <!-- CopilotNotes: Using an indexed for-loop over ReadOnlySpan{char} avoids the
+    ///      string enumerator state machine entirely; the JIT can auto-vectorise the
+    ///      narrow char→byte copy on platforms that support it. uwu ✨ -->
+    /// </summary>
+    private static void CopyAscii(ReadOnlySpan<char> src, Span<byte> dest, ref int pos)
+    {
+        pos += Encoding.ASCII.GetBytes(src, dest.Slice(pos));
+        
+        // for (var i = 0; i < src.Length; i++)
+        //     dest[pos + i] = (byte)src[i];
+        // pos += src.Length;
     }
 
     /// <summary>

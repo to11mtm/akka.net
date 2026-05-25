@@ -318,7 +318,7 @@ namespace Akka.Remote.Transport.Pipelines
             // below — zero-copy handoff into the protobuf-style ByteString.
 
             // var bufferWriter = new ArrayBufferWriter<byte>(serializedMessage.Message.Length+256);
-            using var bufferWriter = ArrayPoolMemoryOwnerBufferedWriter.Create<byte>();
+            using var bufferWriter = ArrayPoolMemoryOwnerBufferedWriter.Create<byte>(serializedMessage.Message.Length + 256);
             {
                 // new ArrayBufferWriter<byte>(serializedMessage.Message.Length+256);
                 var writer = new MP.MessagePackWriter(bufferWriter);
@@ -416,7 +416,7 @@ namespace Akka.Remote.Transport.Pipelines
             writer.Write(msg.MessageManifest.Span);
         }
 
-        private static void WriteActorPathStringNew(
+        private static void WriteActorPathString(
             ref MP.MessagePackWriter writer, 
             ActorPath path,
             Address fallbackAddress)
@@ -439,7 +439,7 @@ namespace Akka.Remote.Transport.Pipelines
         /// <param name="writer">The destination MessagePack writer.</param>
         /// <param name="path">The actor path to serialize.</param>
         /// <param name="fallbackAddress">Address used when <paramref name="path"/> has no host/port.</param>
-        private static void WriteActorPathString(
+        private static void WriteActorPathStringOld(
             ref MP.MessagePackWriter writer,
             ActorPath path,
             Address fallbackAddress)
