@@ -105,61 +105,105 @@ namespace Akka.Remote.Transport
         /// <param name="bytes">TBD</param>
         public Payload(ByteString bytes)
         {
-            Bytes = bytes;
+            Bytes = bytes.Memory;
         }
 
         /// <summary>
         /// TBD
         /// </summary>
-        public ByteString Bytes { get; private set; }
+        public ReadOnlyMemory<byte> Bytes { get; private set; }
     }
 
     /// <summary>
-    /// TBD
+    /// INTERNAL API.
+    ///
+    /// Represents a decoded inbound remote message carrying either:
+    /// <list type="bullet">
+    ///   <item>
+    ///     A protobuf <see cref="SerializedMessage"/> (<c>Payload</c>) — used by the DotNetty /
+    ///     Pipe+Protobuf codec paths; or
+    ///   </item>
+    ///   <item>
+    ///     A <see cref="MsgPackSerializedMessage"/> — used by the Pipe+MessagePack codec hot path,
+    ///     which avoids the <c>ByteString</c> allocations that the protobuf type would require.
+    ///   </item>
+    /// </list>
+    ///
+    /// Exactly one of <see cref="SerializedMessage"/> or <see cref="MsgPackMessage"/> is non-null.
+    /// Callers should test <see cref="HasMsgPackPayload"/> and dispatch to the appropriate
+    /// <c>IInboundMessageDispatcher.Dispatch</c> overload accordingly.
+    ///
+    /// <!-- CopilotNotes: The two-ctor design keeps backward compatibility with all existing
+    ///      protobuf-path code while allowing the MsgPack codec to skip every ByteString copy
+    ///      on the inbound hot path. -->
     /// </summary>
     internal sealed class Message : IAkkaPdu, IHasSequenceNumber
     {
         /// <summary>
-        /// TBD
+        /// Creates a <see cref="Message"/> backed by a protobuf <c>SerializedMessage</c>.
+        /// Used by the DotNetty and Pipe+Protobuf codecs.
         /// </summary>
-        /// <param name="recipient">TBD</param>
-        /// <param name="recipientAddress">TBD</param>
-        /// <param name="serializedMessage">TBD</param>
-        /// <param name="senderOptional">TBD</param>
-        /// <param name="seq">TBD</param>
-        public Message(IInternalActorRef recipient, Address recipientAddress, SerializedMessage serializedMessage, IActorRef senderOptional = null, SeqNo? seq = null)
+        public Message(IInternalActorRef recipient, Address recipientAddress, SerializedMessage serializedMessage,
+            IActorRef senderOptional = null, SeqNo? seq = null)
         {
             Seq = seq;
             SenderOptional = senderOptional;
             SerializedMessage = serializedMessage;
             RecipientAddress = recipientAddress;
             Recipient = recipient;
+            MsgPackMessage = null;
         }
 
         /// <summary>
-        /// TBD
+        /// Creates a <see cref="Message"/> backed by a <see cref="MsgPackSerializedMessage"/> —
+        /// the allocation-free payload type for the Pipe+MessagePack codec hot path.
         /// </summary>
+        /// <param name="recipient">The resolved local recipient ref.</param>
+        /// <param name="recipientAddress">The address component of the recipient.</param>
+        /// <param name="msgPackMessage">Zero-copy payload decoded directly from MpPayload fields.</param>
+        /// <param name="senderOptional">Optional sender ref.</param>
+        /// <param name="seq">Sequence number for reliable delivery; null when not used.</param>
+        public Message(IInternalActorRef recipient, Address recipientAddress,
+            MsgPackSerializedMessage msgPackMessage,
+            IActorRef senderOptional = null, SeqNo? seq = null)
+        {
+            Seq = seq;
+            SenderOptional = senderOptional;
+            SerializedMessage = null; // CopilotNotes: intentionally null — use MsgPackMessage for dispatch
+            RecipientAddress = recipientAddress;
+            Recipient = recipient;
+            MsgPackMessage = msgPackMessage;
+        }
+
+        /// <summary>The resolved local recipient actor ref.</summary>
         public IInternalActorRef Recipient { get; private set; }
 
-        /// <summary>
-        /// TBD
-        /// </summary>
+        /// <summary>The address component of the recipient actor path.</summary>
         public Address RecipientAddress { get; private set; }
 
         /// <summary>
-        /// TBD
+        /// Protobuf payload; non-null only when constructed via the protobuf-path constructor.
+        /// Callers should check <see cref="HasMsgPackPayload"/> before accessing this.
         /// </summary>
         public SerializedMessage SerializedMessage { get; private set; }
 
         /// <summary>
-        /// TBD
+        /// MessagePack-native payload; non-null only when constructed via the MsgPack-path constructor.
+        /// Prefer this over <see cref="SerializedMessage"/> when <see cref="HasMsgPackPayload"/> is true.
         /// </summary>
-        public IActorRef SenderOptional { get; private set; }
+        public MsgPackSerializedMessage? MsgPackMessage { get; private set; }
 
         /// <summary>
-        /// TBD
+        /// <c>true</c> when this message carries a <see cref="MsgPackSerializedMessage"/>
+        /// (the allocation-free hot path); <c>false</c> for the classic protobuf path.
         /// </summary>
-        public bool ReliableDeliveryEnabled { get { return Seq != null; } }
+        public bool HasMsgPackPayload => MsgPackMessage != null;
+
+        /// <summary>Optional sender ref; falls back to Dead Letters when null.</summary>
+        public IActorRef SenderOptional { get; private set; }
+
+        /// <summary>Whether this message uses reliable delivery sequencing.</summary>
+        public bool ReliableDeliveryEnabled => Seq != null;
 
         /// <summary>
         /// The optional sequence number for reliable delivery. Null when reliable delivery is not used.
@@ -250,6 +294,8 @@ namespace Akka.Remote.Transport
         /// <param name="payload">TBD</param>
         /// <returns>TBD</returns>
         public abstract ByteString ConstructPayload(ByteString payload);
+
+        public abstract ByteString ConstructPayload(ReadOnlyMemory<byte> payload);
 
         /// <summary>
         /// TBD
@@ -342,6 +388,31 @@ namespace Akka.Remote.Transport
         public override ByteString ConstructPayload(ByteString payload)
         {
             return new AkkaProtocolMessage() { Payload = payload }.ToByteString();
+        }
+
+        public override ByteString ConstructPayload(ReadOnlyMemory<byte> payload)
+        {
+            return new AkkaProtocolMessage() { Payload = ByteString.CopyFrom(payload.Span) }.ToByteString();
+        }
+        
+        public ByteString ConstructPayload2(ReadOnlyMemory<byte> payload)
+        {
+            // CopilotNotes: We calculate the exact size needed for the protobuf message upfront
+            // so we can allocate a single byte[] and write directly into it - no intermediate
+            // ByteString allocation for the payload field! Very efficient, much wow uwu ~✨
+            // AkkaProtocolMessage.Payload is field number 2, type LEN (wire type 2)
+            const int fieldTag = (2 << 3) | 2; // field 2, wire type 2 (length-delimited)
+            var payloadLength = payload.Length;
+            var tagSize = CodedOutputStream.ComputeRawVarint32Size(fieldTag);
+            var msgSize = tagSize + CodedOutputStream.ComputeLengthSize(payloadLength) + payloadLength;
+            var buffer = new byte[msgSize];
+            using var cos = new CodedOutputStream(buffer);
+            cos.WriteTag(2, WireFormat.WireType.LengthDelimited);
+            cos.WriteLength(payloadLength);
+            cos.Flush(); // flush tag+length before raw copy
+            var headerSize = (int)cos.Position;
+            payload.Span.CopyTo(buffer.AsSpan(headerSize));
+            return UnsafeByteOperations.UnsafeWrap(buffer);
         }
 
         /// <summary>
