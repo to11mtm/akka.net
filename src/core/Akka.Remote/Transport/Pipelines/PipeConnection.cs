@@ -102,14 +102,24 @@ namespace Akka.Remote.Transport.Pipelines
         {
             _socket    = socket;
             _stream    = stream;
-            _reader    = PipeReader.Create(stream, new StreamPipeReaderOptions(leaveOpen: true));
+            // CopilotNotes: Read-loop tuning 🌸
+            //  • bufferSize 64KB (vs 8KB): larger inbound bursts land in a single segment, so
+            //    TryParseFrame hits the fast single-span path far more often and we issue fewer
+            //    underlying stream reads (syscalls) per byte.
+            //  • useZeroByteReads: idle connections wait on a 0-byte read and only rent a real
+            //    buffer once data is actually available — big win when many connections are idle.
+            //  • leaveOpen: the connection owns _stream and disposes it explicitly in CloseSocket.
+            _reader    = PipeReader.Create(stream, new StreamPipeReaderOptions(
+                bufferSize: 64 * 1024,
+                leaveOpen: true,
+                useZeroByteReads: true));
             _writeChannel = Channel.CreateBounded<ByteString>(new BoundedChannelOptions(writeChannelCapacity)
             {
                 SingleReader = true,
                 SingleWriter = false,
-                // CopilotNotes: DropWrite means a full channel returns false from TryWrite,
-                // which maps to the AssociationHandle.Write contract: "false = dropped, no duplicate".
-                FullMode = BoundedChannelFullMode.DropWrite
+                AllowSynchronousContinuations = false,
+                // Only BoundedChannelFullMode.Wait returns false for TryWrite.
+                FullMode = BoundedChannelFullMode.Wait
             });
             _cts       = new CancellationTokenSource();
             _log       = log;
@@ -196,9 +206,21 @@ namespace Akka.Remote.Transport.Pipelines
                     .ConfigureAwait(false);
                 _listener = listener;
 
-                while (!ct.IsCancellationRequested)
+                // CopilotNotes: Register cancellation ONCE up-front and flip the pending
+                // ReadAsync into a canceled result via CancelPendingRead, instead of paying
+                // the per-ReadAsync CancellationToken registration allocation on every single
+                // hot-path iteration. The static lambda captures no closure. 🌸
+                // Result.IsCanceled (checked below) replaces the old ct-throws-OCE flow.
+                using var ctReg = ct.Register(
+                    static state => ((PipeReader)state!).CancelPendingRead(),
+                    _reader);
+
+                while (true)
                 {
-                    var result = await _reader.ReadAsync(ct).ConfigureAwait(false);
+                    var result = await _reader.ReadAsync().ConfigureAwait(false);
+                    if (result.IsCanceled)
+                        break;
+
                     var buffer = result.Buffer;
 
                     while (TryParseFrame(ref buffer, out var frame))
@@ -208,14 +230,14 @@ namespace Akka.Remote.Transport.Pipelines
                         // teaching IHandleEventListener about ReadOnlySequence<byte> directly.
                         var bytes = frame.IsSingleSegment
                             ? ByteString.CopyFrom(frame.FirstSpan)
-                            : ByteString.CopyFrom(frame.ToArray());
+                            : UnsafeByteOperations.UnsafeWrap(frame.ToArray());
 
                         listener.Notify(new InboundPayload(bytes));
                     }
 
                     _reader.AdvanceTo(buffer.Start, buffer.End);
 
-                    if (result.IsCompleted || result.IsCanceled)
+                    if (result.IsCompleted)
                         break;
                 }
             }
@@ -313,20 +335,6 @@ namespace Akka.Remote.Transport.Pipelines
             // Local helper: write a single length-prefixed frame into the given buffer.
             // CopilotNotes: Inlined as a static local function — no closure allocation,
             // and the JIT will happily inline it at the call sites. 💝
-            static void WriteFrame(ArrayBufferWriter<byte> dest, ByteString payload)
-            {
-                // GetSpan returns at least 'count' bytes. We write the 4-byte LE length
-                // header then the payload bytes back-to-back.
-                var sp = dest.GetSpan(FrameHeaderSize + payload.Length);
-                BinaryPrimitives.WriteInt32LittleEndian(
-                    //dest.GetSpan(FrameHeaderSize + payload.Length),
-                    sp,
-                    payload.Length);
-                //dest.Advance(FrameHeaderSize);
-
-                payload.Span.CopyTo(sp.Slice(FrameHeaderSize));
-                dest.Advance(FrameHeaderSize+payload.Length);
-            }
 
             try
             {
@@ -424,6 +432,21 @@ namespace Akka.Remote.Transport.Pipelines
             }
         }
 
+        private static void WriteFrame(ArrayBufferWriter<byte> dest, ByteString payload)
+        {
+            // GetSpan returns at least 'count' bytes. We write the 4-byte LE length
+            // header then the payload bytes back-to-back.
+            var sp = dest.GetSpan(FrameHeaderSize + payload.Length);
+            BinaryPrimitives.WriteInt32LittleEndian(
+                //dest.GetSpan(FrameHeaderSize + payload.Length),
+                sp,
+                payload.Length);
+            //dest.Advance(FrameHeaderSize);
+
+            payload.Span.CopyTo(sp.Slice(FrameHeaderSize));
+            dest.Advance(FrameHeaderSize+payload.Length);
+        }
+
         // ── Frame parsing ──────────────────────────────────────────────────────
 
         /// <summary>
@@ -438,21 +461,39 @@ namespace Akka.Remote.Transport.Pipelines
                 frame = default;
                 return false;
             }
-
-            Span<byte> header = stackalloc byte[FrameHeaderSize];
-            buffer.Slice(0, FrameHeaderSize).CopyTo(header);
-            var payloadLength = BinaryPrimitives.ReadInt32LittleEndian(header);
-
-            // Guard against corrupt / malicious frames.
-            if (payloadLength < 0 || buffer.Length < FrameHeaderSize + (long)payloadLength)
+            
+            if (buffer.FirstSpan.Length >= FrameHeaderSize)
             {
-                frame = default;
-                return false;
-            }
+                // Fast path: header is in the first segment, can read directly without copying.
+                var payloadLength = BinaryPrimitives.ReadInt32LittleEndian(buffer.FirstSpan);
+                if (payloadLength < 0 || buffer.Length < FrameHeaderSize + (long)payloadLength)
+                {
+                    frame = default;
+                    return false;
+                }
 
-            frame  = buffer.Slice(FrameHeaderSize, payloadLength);
-            buffer = buffer.Slice(FrameHeaderSize + payloadLength);
-            return true;
+                frame = buffer.Slice(FrameHeaderSize, payloadLength);
+                buffer = buffer.Slice(FrameHeaderSize + payloadLength);
+                return true;
+            }
+            else
+            {
+                Span<byte> header = stackalloc byte[FrameHeaderSize];
+                buffer.Slice(0, FrameHeaderSize).CopyTo(header);
+                var payloadLength = BinaryPrimitives.ReadInt32LittleEndian(header);
+
+                // Guard against corrupt / malicious frames.
+                if (payloadLength < 0 || buffer.Length < FrameHeaderSize + (long)payloadLength)
+                {
+                    frame = default;
+                    return false;
+                }
+
+                frame  = buffer.Slice(FrameHeaderSize, payloadLength);
+                buffer = buffer.Slice(FrameHeaderSize + payloadLength);
+                return true;
+            }
+            
         }
 
         // ── Helpers ────────────────────────────────────────────────────────────

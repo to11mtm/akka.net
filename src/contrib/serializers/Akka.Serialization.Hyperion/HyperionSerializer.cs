@@ -6,18 +6,170 @@
 //-----------------------------------------------------------------------
 
 using System;
+using System.Buffers;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Runtime.Serialization;
+using System.Threading;
+using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Configuration;
 using Akka.Serialization.Hyperion;
 using Akka.Util;
 using Hyperion;
 using HySerializer = Hyperion.Serializer;
+
+
+/// <summary>
+/// A read-only <see cref="Stream"/> backed by a <see cref="ReadOnlyMemory{T}"/> of bytes.
+/// This avoids unnecessary <c>byte[]</c> copies when wrapping existing memory regions.
+/// </summary>
+/// <remarks>
+/// CopilotNotes: Zero-copy stream wrapper — great for deserialization paths where we already
+/// have a ReadOnlyMemory slice and don't want to allocate a new byte[].
+/// </remarks>
+public sealed class ReadOnlyMemoryStream : Stream
+{
+    // 🎀 The underlying memory we're reading from
+    private readonly ReadOnlyMemory<byte> _memory;
+
+    // 📍 Current read position within _memory
+    private int _position;
+
+    /// <summary>
+    /// Creates a new <see cref="ReadOnlyMemoryStream"/> wrapping the provided <paramref name="memory"/>.
+    /// </summary>
+    public ReadOnlyMemoryStream(ReadOnlyMemory<byte> memory)
+    {
+        _memory = memory;
+        _position = 0;
+    }
+
+    /// <inheritdoc/>
+    public override bool CanRead => true;
+
+    /// <inheritdoc/>
+    public override bool CanSeek => true;
+
+    /// <inheritdoc/>
+    public override bool CanWrite => false;
+
+    /// <inheritdoc/>
+    public override long Length => _memory.Length;
+
+    /// <inheritdoc/>
+    public override long Position
+    {
+        get => _position;
+        set
+        {
+            if (value < 0 || value > _memory.Length)
+                throw new ArgumentOutOfRangeException(nameof(value),
+                    $"Position must be between 0 and {_memory.Length}, but got {value}. (╯°□°）╯");
+            _position = (int)value;
+        }
+    }
+
+    public ReadOnlyMemory<byte> RemainingMemory => _memory.Slice(_position);
+
+    /// <inheritdoc/>
+    public override int Read(byte[] buffer, int offset, int count)
+    {
+        if (buffer == null) throw new ArgumentNullException(nameof(buffer));
+        if (offset < 0) throw new ArgumentOutOfRangeException(nameof(offset));
+        if (count < 0) throw new ArgumentOutOfRangeException(nameof(count));
+        if (buffer.Length - offset < count) throw new ArgumentException("Buffer too small! (。>﹏<。)");
+
+        var available = _memory.Length - _position;
+        var toCopy = Math.Min(count, available);
+        if (toCopy <= 0) return 0;
+
+        _memory.Span.Slice(_position, toCopy).CopyTo(buffer.AsSpan(offset, toCopy));
+        _position += toCopy;
+        return toCopy;
+    }
+
+    /// <inheritdoc/>
+    public override int Read(Span<byte> buffer)
+    {
+        var available = _memory.Length - _position;
+        var toCopy = Math.Min(buffer.Length, available);
+        if (toCopy <= 0) return 0;
+
+        _memory.Span.Slice(_position, toCopy).CopyTo(buffer);
+        _position += toCopy;
+        return toCopy;
+    }
+
+    /// <inheritdoc/>
+    public override int ReadByte()
+    {
+        if (_position >= _memory.Length) return -1; // EOF uwu
+        return _memory.Span[_position++];
+    }
+
+    /// <inheritdoc/>
+    public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return new ValueTask<int>(Read(buffer.Span));
+    }
+
+    /// <inheritdoc/>
+    public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(Read(buffer, offset, count));
+    }
+
+    /// <inheritdoc/>
+    public override long Seek(long offset, SeekOrigin origin)
+    {
+        long newPos = origin switch
+        {
+            SeekOrigin.Begin   => offset,
+            SeekOrigin.Current => _position + offset,
+            SeekOrigin.End     => _memory.Length + offset,
+            _                  => throw new ArgumentOutOfRangeException(nameof(origin))
+        };
+
+        if (newPos < 0 || newPos > _memory.Length)
+            throw new IOException($"Seek position {newPos} is out of range [0, {_memory.Length}]. (╯°□°）╯");
+
+        _position = (int)newPos;
+        return _position;
+    }
+
+    /// <summary>
+    /// Not supported — this stream is read-only! (｡•́︿•̀｡)
+    /// </summary>
+    public override void SetLength(long value) =>
+        throw new NotSupportedException("ReadOnlyMemoryStream is read-only and does not support SetLength. uwu");
+
+    /// <summary>
+    /// Not supported — this stream is read-only! (｡•́︿•̀｡)
+    /// </summary>
+    public override void Write(byte[] buffer, int offset, int count) =>
+        throw new NotSupportedException("ReadOnlyMemoryStream is read-only and does not support Write. uwu");
+
+    /// <summary>
+    /// Not supported — this stream is read-only! (｡•́︿•̀｡)
+    /// </summary>
+    public override void Write(ReadOnlySpan<byte> buffer) =>
+        throw new NotSupportedException("ReadOnlyMemoryStream is read-only and does not support Write. uwu");
+
+    /// <summary>
+    /// No-op flush since this stream is read-only. ✨
+    /// </summary>
+    public override void Flush() { /* nothing to flush, we're read-only~ */ }
+
+    /// <inheritdoc/>
+    public override Task FlushAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    
+    public ReadOnlyMemory<byte> ToReadOnlyMemory() => _memory;
+}
 
 // ReSharper disable once CheckNamespace
 namespace Akka.Serialization
@@ -143,6 +295,23 @@ namespace Akka.Serialization
             catch (Exception ex)
             {
                 throw new SerializationException($"Failed to deserialize instance of type {type}. {ex.Message}", ex);
+            }
+        }
+
+        public override object FromBinary(ReadOnlyMemory<byte> bytes, Type type)
+        {
+            try
+            {
+                using (var roms = new ReadOnlyMemoryStream(bytes))
+                {
+                    var res = _serializer.Deserialize<object>(roms);
+                    return res;
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e);
+                throw;
             }
         }
 

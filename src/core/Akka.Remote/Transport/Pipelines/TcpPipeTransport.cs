@@ -162,7 +162,7 @@ namespace Akka.Remote.Transport.Pipelines
 
                 var handle = new PipeAssociationHandle(_localAddress!, remoteAddress);
                 var conn   = new PipeConnection(
-                    socket, stream, handle, this, _log, _settings.WriteChannelCapacity);
+                    socket, stream, handle, this, _log, _settings.WriteChannelCapacity*2);
 
                 _connections.TryAdd(conn);
                 conn.Start();
