@@ -60,7 +60,12 @@ namespace Akka.Remote.Transport.Pipelines
         private readonly Socket _socket;
         private readonly Stream _stream; // NetworkStream or SslStream
         private readonly PipeReader _reader;
-        private readonly Channel<ByteString> _writeChannel;
+        // CopilotNotes: Channel is always Channel<IPooledFrame>. On the legacy path
+        // (zero-copy-codec = off), the write side wraps each ByteString in a
+        // ByteStringPooledFrame (Dispose is no-op). On the zero-copy path, a PooledFrame
+        // rented from MemoryPool<byte>.Shared is enqueued and returned to the pool after
+        // WriteFrame copies the bytes into the coalesced batch. 🌸
+        private readonly Channel<IPooledFrame> _writeChannel;
         private readonly CancellationTokenSource _cts;
         private readonly ILoggingAdapter _log;
         private readonly TcpPipeTransport _transport;
@@ -113,7 +118,7 @@ namespace Akka.Remote.Transport.Pipelines
                 bufferSize: 64 * 1024,
                 leaveOpen: true,
                 useZeroByteReads: true));
-            _writeChannel = Channel.CreateBounded<ByteString>(new BoundedChannelOptions(writeChannelCapacity)
+            _writeChannel = Channel.CreateBounded<IPooledFrame>(new BoundedChannelOptions(writeChannelCapacity)
             {
                 SingleReader = true,
                 SingleWriter = false,
@@ -152,15 +157,25 @@ namespace Akka.Remote.Transport.Pipelines
         /// <summary>
         /// Enqueue a payload for writing. Thread-safe. Returns <c>false</c> if the
         /// channel is at capacity (write dropped) or the connection is closing.
+        /// The <paramref name="frame"/> will be disposed by the write loop after
+        /// the bytes are copied into the coalesced send batch. 🌸
         /// </summary>
-        public bool TryEnqueueWrite(ByteString payload)
+        public bool TryEnqueueWrite(IPooledFrame frame)
         {
             if (Volatile.Read(ref _closed) == 1)
                 return false;
 
-            // ToByteArray() copies — Phase 2 can eliminate this via IBufferWriter writer.
-            return _writeChannel.Writer.TryWrite(payload);
+            return _writeChannel.Writer.TryWrite(frame);
         }
+
+        /// <summary>
+        /// Legacy overload: wraps <paramref name="payload"/> in a
+        /// <see cref="ByteStringPooledFrame"/> and enqueues it.
+        /// Used by the <c>zero-copy-codec = off</c> path so existing call sites
+        /// in <see cref="PipeAssociationHandle"/> need no changes.
+        /// </summary>
+        public bool TryEnqueueWrite(ByteString payload)
+            => TryEnqueueWrite(new ByteStringPooledFrame(payload));
 
         /// <summary>
         /// Begin graceful disassociation: drain any pending writes then close.
@@ -345,7 +360,7 @@ namespace Akka.Remote.Transport.Pipelines
                 // possible" instead of a "soft cap" — the only way a single batch can
                 // exceed the watermark is if its *first* frame is already over-budget,
                 // which is unavoidable (we never split a single Akka frame).
-                ByteString? carry = null;
+                IPooledFrame? carry = null;
 
                 while (true)
                 {
@@ -432,19 +447,15 @@ namespace Akka.Remote.Transport.Pipelines
             }
         }
 
-        private static void WriteFrame(ArrayBufferWriter<byte> dest, ByteString payload)
+        private static void WriteFrame(ArrayBufferWriter<byte> dest, IPooledFrame frame)
         {
-            // GetSpan returns at least 'count' bytes. We write the 4-byte LE length
-            // header then the payload bytes back-to-back.
-            var sp = dest.GetSpan(FrameHeaderSize + payload.Length);
-            BinaryPrimitives.WriteInt32LittleEndian(
-                //dest.GetSpan(FrameHeaderSize + payload.Length),
-                sp,
-                payload.Length);
-            //dest.Advance(FrameHeaderSize);
-
-            payload.Span.CopyTo(sp.Slice(FrameHeaderSize));
-            dest.Advance(FrameHeaderSize+payload.Length);
+            // Write 4-byte LE length header + payload bytes back-to-back,
+            // then dispose the frame to return its buffer to the pool. 🌸
+            var sp = dest.GetSpan(FrameHeaderSize + frame.Length);
+            BinaryPrimitives.WriteInt32LittleEndian(sp, frame.Length);
+            frame.WrittenSpan.CopyTo(sp.Slice(FrameHeaderSize));
+            dest.Advance(FrameHeaderSize + frame.Length);
+            frame.Dispose();
         }
 
         // ── Frame parsing ──────────────────────────────────────────────────────

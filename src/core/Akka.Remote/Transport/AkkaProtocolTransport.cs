@@ -427,6 +427,14 @@ namespace Akka.Remote.Transport
         /// <inheritdoc cref="AssociationHandle"/>
         public override bool Write(ByteString payload)
         {
+            // CopilotNotes: zero-copy fast path — when the wrapped handle is a
+            // PipeAssociationHandle with zero-copy-codec enabled, we skip ConstructPayload
+            // (which allocates a byte[] via ToByteString() — the W5 copy) and write the
+            // outer AkkaProtocolMessage tag+varint+body directly into a pooled PooledFrame.
+            // The payload here is the W4 bytes (AckAndEnvelopeContainer). 🌸
+            if (WrappedHandle is Pipelines.PipeAssociationHandle ph && ph.IsZeroCopyEnabled)
+                return ph.WriteRaw(payload.Memory);
+
             return WrappedHandle.Write(Codec.ConstructPayload(payload));
         }
 

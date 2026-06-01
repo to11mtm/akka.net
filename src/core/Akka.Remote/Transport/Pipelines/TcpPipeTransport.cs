@@ -160,7 +160,7 @@ namespace Akka.Remote.Transport.Pipelines
                 var stream = await BuildStreamAsync(socket, remoteAddress.Host!, isServer: false, connectCts.Token)
                     .ConfigureAwait(false);
 
-                var handle = new PipeAssociationHandle(_localAddress!, remoteAddress);
+                var handle = new PipeAssociationHandle(_localAddress!, remoteAddress, _settings.ZeroCopyCodec);
                 var conn   = new PipeConnection(
                     socket, stream, handle, this, _log, _settings.WriteChannelCapacity*2);
 
@@ -290,7 +290,7 @@ namespace Akka.Remote.Transport.Pipelines
                 var host   = remoteEp.Address.ToString();
                 var stream = await BuildStreamAsync(clientSocket, host, isServer: true, ct).ConfigureAwait(false);
 
-                var handle = new PipeAssociationHandle(_localAddress!, remoteAddress);
+                var handle = new PipeAssociationHandle(_localAddress!, remoteAddress, _settings.ZeroCopyCodec);
                 var conn   = new PipeConnection(
                     clientSocket, stream, handle, this, _log, _settings.WriteChannelCapacity);
 
