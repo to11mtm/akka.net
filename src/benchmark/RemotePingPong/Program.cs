@@ -58,14 +58,25 @@ namespace RemotePingPong
 
         private static readonly (SerializerMode, PayloadMode, TransportMode)[] BattleRoyale =
         [
-            (SerializerMode.Default, PayloadMode.Primitive, TransportMode.DotNetty),
-            (SerializerMode.Default, PayloadMode.Primitive, TransportMode.PipeProtobuf),
-            (SerializerMode.Default, PayloadMode.SerializedObject, TransportMode.DotNetty),
+            // ── DotNetty baseline ─────────────────────────────────────────────
+            (SerializerMode.Default,  PayloadMode.Primitive,        TransportMode.DotNetty),
+            (SerializerMode.Default,  PayloadMode.SerializedObject, TransportMode.DotNetty),
             (SerializerMode.Hyperion, PayloadMode.SerializedObject, TransportMode.DotNetty),
-            (SerializerMode.MsgPack, PayloadMode.SerializedObject, TransportMode.DotNetty),
-            (SerializerMode.Default, PayloadMode.SerializedObject, TransportMode.PipeProtobuf),
+            (SerializerMode.MsgPack,  PayloadMode.SerializedObject, TransportMode.DotNetty),
+
+            // ── Pipe/Protobuf (zero-copy = off) ──────────────────────────────
+            (SerializerMode.Default,  PayloadMode.Primitive,        TransportMode.PipeProtobuf),
+            (SerializerMode.Default,  PayloadMode.SerializedObject, TransportMode.PipeProtobuf),
             (SerializerMode.Hyperion, PayloadMode.SerializedObject, TransportMode.PipeProtobuf),
-            (SerializerMode.MsgPack, PayloadMode.SerializedObject, TransportMode.PipeProtobuf),
+            (SerializerMode.MsgPack,  PayloadMode.SerializedObject, TransportMode.PipeProtobuf),
+
+            // ── Pipe/Protobuf + zero-copy-codec ──────────────────────────────
+            // CopilotNotes: Same wire format as PipeProtobuf but with the zero-copy outbound
+            // codec enabled (akka.remote.pipe.tcp.zero-copy-codec = on). UwU 🌸
+            (SerializerMode.Default,  PayloadMode.Primitive,        TransportMode.PipeProtobufZeroCopy),
+            (SerializerMode.Default,  PayloadMode.SerializedObject, TransportMode.PipeProtobufZeroCopy),
+            (SerializerMode.Hyperion, PayloadMode.SerializedObject, TransportMode.PipeProtobufZeroCopy),
+            (SerializerMode.MsgPack,  PayloadMode.SerializedObject, TransportMode.PipeProtobufZeroCopy),
         ];
 
         /// <summary>
@@ -157,26 +168,37 @@ namespace RemotePingPong
 
             /// <summary>System.IO.Pipelines TCP transport with protobuf codec (wire-compatible).</summary>
             PipeProtobuf,
+
+            /// <summary>
+            /// System.IO.Pipelines TCP transport with protobuf codec <em>and</em>
+            /// <c>akka.remote.pipe.tcp.zero-copy-codec = on</c>.
+            /// Same wire format as <see cref="PipeProtobuf"/>; the zero-copy path avoids
+            /// an extra ByteString allocation on the outbound write path. uwu~ ✨
+            /// </summary>
+            PipeProtobufZeroCopy,
         }
 
         /// <summary>
         /// Parses a transport mode string from the command line.
-        /// Valid values (case-insensitive): "dotnetty", "pipe", "pipe-protobuf", "pipe-msgpack", "messagepack".
+        /// Valid values (case-insensitive): "dotnetty", "pipe", "pipe-protobuf", "pipelines",
+        /// "pipe-zc", "pipe-zerocopy", "pipe-protobuf-zerocopy".
         /// Defaults to <see cref="TransportMode.DotNetty"/> when the string is empty / unrecognised.
         /// </summary>
         private static TransportMode ParseTransportMode(string? arg)
         {
             return (arg ?? "").ToLowerInvariant() switch
             {
-                "pipe" or "pipe-protobuf" or "pipelines" => TransportMode.PipeProtobuf,
-                _ => TransportMode.DotNetty,
+                "pipe" or "pipe-protobuf" or "pipelines"                          => TransportMode.PipeProtobuf,
+                "pipe-zc" or "pipe-zerocopy" or "pipe-protobuf-zerocopy" or "zc"  => TransportMode.PipeProtobufZeroCopy,
+                _                                                                   => TransportMode.DotNetty,
             };
         }
 
         private static string TransportLabel(TransportMode mode) => mode switch
         {
-            TransportMode.PipeProtobuf => "Pipe/TCP + Protobuf",
-            _                          => "DotNetty/TCP + Protobuf",
+            TransportMode.PipeProtobuf         => "Pipe/TCP + Protobuf",
+            TransportMode.PipeProtobufZeroCopy => "Pipe/TCP + Protobuf + ZeroCopy",
+            _                                  => "DotNetty/TCP + Protobuf",
         };
 
         [Serializable]
@@ -257,6 +279,20 @@ namespace RemotePingPong
                         }}
                     }}"),
 
+                // CopilotNotes: PipeProtobufZeroCopy is identical to PipeProtobuf on the wire;
+                // the only difference is zero-copy-codec = on which avoids an extra ByteString
+                // copy on the outbound write path. nyaa~ 🌸
+                TransportMode.PipeProtobufZeroCopy => ConfigurationFactory.ParseString($@"
+                    akka.remote {{
+                        enabled-transports = [""akka.remote.pipe.tcp""]
+                        pipe.tcp {{
+                            hostname        = ""{ipOrHostname}""
+                            port            = {port}
+                            envelope        = protobuf
+                            zero-copy-codec = on
+                        }}
+                    }}"),
+
                 // Default: DotNetty
                 _ => ConfigurationFactory.ParseString($@"
                     akka.remote {{
@@ -289,12 +325,13 @@ namespace RemotePingPong
 
             // ── Parse args ────────────────────────────────────────────────────
             // Single-run usage: RemotePingPong [timesToRun] [transport] [serializer] [payload]
-            //   transport:  dotnetty | pipe | pipe-msgpack
+            //   transport:  dotnetty | pipe | pipe-protobuf | pipe-zc | pipe-zerocopy | pipe-protobuf-zerocopy
             //   serializer: default  | hyperion | msgpack
             //   payload:    primitive | object
             //
             // Battle-royale usage: RemotePingPong battle [outputFile?]
             //   outputFile: path to write the markdown table; omit to print to stdout. 🎖️
+            //   Runs all (transport × serializer × payload) combos including zero-copy variants! uwu ✨
             if ((args.Length >= 1 && args[0].Equals("battle", StringComparison.OrdinalIgnoreCase)) ||
                 (args.Length >= 1 && args[0].Equals("--battle-royale", StringComparison.OrdinalIgnoreCase)))
             {
