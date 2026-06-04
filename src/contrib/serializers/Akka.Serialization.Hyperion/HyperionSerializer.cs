@@ -308,11 +308,29 @@ namespace Akka.Serialization
                     return res;
                 }
             }
-            catch (Exception e)
+            catch (Exception ex)
             {
-                Console.WriteLine(e);
-                throw;
+                throw new SerializationException($"Failed to deserialize instance of type {type}. {ex.Message}", ex);
             }
+        }
+
+        /// <summary>
+        /// Serializes <paramref name="obj"/> directly into <paramref name="writer"/> using a
+        /// pooled <see cref="MemoryStream"/>, avoiding the extra <c>byte[]</c> copy from
+        /// <see cref="ToBinary"/>. 🌸
+        ///
+        /// <!-- CopilotNotes: Hyperion writes to a Stream, not IBufferWriter directly. We serialize
+        ///      into a MemoryStream and then write the internal buffer (GetBuffer) into the writer
+        ///      via a Span slice — one fewer heap copy vs. the base class ToBinary() path. 🌸 -->
+        /// </summary>
+        public override int WriteTo(IBufferWriter<byte> writer, object obj)
+        {
+            using var ms = new MemoryStream();
+            _serializer.Serialize(obj, ms);
+            var length = (int)ms.Length;
+            // GetBuffer() returns the internal array without copying — slice to actual written length.
+            writer.Write(ms.GetBuffer().AsSpan(0, length));
+            return length;
         }
 
         private IKnownTypesProvider CreateKnownTypesProvider(ExtendedActorSystem system, Type type)

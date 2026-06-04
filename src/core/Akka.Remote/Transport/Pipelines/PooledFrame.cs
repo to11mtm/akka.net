@@ -71,10 +71,10 @@ namespace Akka.Remote.Transport.Pipelines
 
         /// <summary>
         /// Rents a <see cref="PooledFrame"/> backed by at least
-        /// <paramref name="minimumCapacity"/> bytes from <see cref="MemoryPool{T}.Shared"/>.
+        /// <paramref name="capacity"/> bytes from <see cref="MemoryPool{T}.Shared"/>.
         /// </summary>
-        public static PooledFrame Rent(int minimumCapacity) =>
-            new(MemoryPool<byte>.Shared.Rent(minimumCapacity));
+        public static PooledFrame Rent(int capacity) =>
+            new(MemoryPool<byte>.Shared.Rent(capacity));
 
         // ── IBufferWriter<byte> ──────────────────────────────────────────────
 

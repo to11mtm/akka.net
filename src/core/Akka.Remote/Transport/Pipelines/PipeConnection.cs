@@ -18,6 +18,7 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using Akka.Event;
+using Akka.Remote.Transport;
 using Google.Protobuf;
 
 namespace Akka.Remote.Transport.Pipelines
@@ -55,7 +56,6 @@ namespace Akka.Remote.Transport.Pipelines
     {
         // ── Frame constants ─────────────────────────────────────────────────────
         private const int FrameHeaderSize = 4; // 4-byte LE int32 length prefix
-
         // ── Core infrastructure ────────────────────────────────────────────────
         private readonly Socket _socket;
         private readonly Stream _stream; // NetworkStream or SslStream
@@ -240,14 +240,17 @@ namespace Akka.Remote.Transport.Pipelines
 
                     while (TryParseFrame(ref buffer, out var frame))
                     {
-                        // CopilotNotes: ByteString.CopyFrom allocates per frame (the frame bytes are
-                        // already in a pooled PipeReader buffer). Phase 2 can avoid the copy by
-                        // teaching IHandleEventListener about ReadOnlySequence<byte> directly.
-                        var bytes = frame.IsSingleSegment
-                            ? ByteString.CopyFrom(frame.FirstSpan)
-                            : UnsafeByteOperations.UnsafeWrap(frame.ToArray());
-
-                        listener.Notify(new InboundPayload(bytes));
+                        // B.2: Promote each frame to a RentedInboundPayload (pool rent + single memcpy)
+                        // before the mailbox crossing. This replaces the ByteString alloc that used to
+                        // happen here. Legacy consumers that access InboundPayload.Payload will trigger
+                        // a lazy ByteString copy, but zero-copy consumers (PR-C inline protocol) can
+                        // use InboundPayload.Pooled.Memory directly.
+                        //
+                        // CopilotNotes: Always promote to RentedInboundPayload here because the
+                        // SegmentAliasPayload lifetime ends at _reader.AdvanceTo (below), which is
+                        // called in the same iteration. Mailbox hops require owned memory. 🌸
+                        var pooled = RentedInboundPayload.Rent(frame);
+                        listener.Notify(new InboundPayload(pooled));
                     }
 
                     _reader.AdvanceTo(buffer.Start, buffer.End);
@@ -489,9 +492,22 @@ namespace Akka.Remote.Transport.Pipelines
             }
             else
             {
-                Span<byte> header = stackalloc byte[FrameHeaderSize];
-                buffer.Slice(0, FrameHeaderSize).CopyTo(header);
-                var payloadLength = BinaryPrimitives.ReadInt32LittleEndian(header);
+                int payloadLength = 0;
+                if (buffer.First.Length < FrameHeaderSize)
+                {
+                    // Header is split across segments — copy to stack and read.
+                    Span<byte> header = stackalloc byte[FrameHeaderSize];
+                    buffer.Slice(0, FrameHeaderSize).CopyTo(header);
+                    payloadLength = BinaryPrimitives.ReadInt32LittleEndian(header);
+                }
+                else
+                {
+                    // Header is contained in the first segment, can read directly without copying.
+                    payloadLength = BinaryPrimitives.ReadInt32LittleEndian(buffer.FirstSpan);
+                }
+                // Span<byte> header = stackalloc byte[FrameHeaderSize];
+                // buffer.Slice(0, FrameHeaderSize).CopyTo(header);
+                // var payloadLength = BinaryPrimitives.ReadInt32LittleEndian(header);
 
                 // Guard against corrupt / malicious frames.
                 if (payloadLength < 0 || buffer.Length < FrameHeaderSize + (long)payloadLength)

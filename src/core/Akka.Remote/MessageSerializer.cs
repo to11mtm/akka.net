@@ -6,6 +6,7 @@
 //-----------------------------------------------------------------------
 
 using System;
+using System.Buffers;
 using Akka.Actor;
 using Akka.Serialization;
 using Akka.Util;
@@ -14,6 +15,18 @@ using SerializedMessage = Akka.Remote.Serialization.Proto.Msg.Payload;
 
 namespace Akka.Remote
 {
+    public sealed class SysandTransportInfo
+    {
+        public ExtendedActorSystem System { get; }
+        public Information TransportInformation { get; }
+
+        public SysandTransportInfo(ExtendedActorSystem system, Information transportInformation)
+        {
+            System = system;
+            TransportInformation = transportInformation;
+        }
+    }
+    
     /// <summary>
     /// INTERNAL API.
     ///
@@ -74,6 +87,60 @@ namespace Akka.Remote
                 }
 
                 return serializedMsg;
+            }
+            finally
+            {
+                Akka.Serialization.Serialization.CurrentTransportInformation = oldInfo;
+            }
+        }
+
+        /// <summary>
+        /// Zero-copy serialize overload: writes the serialized message bytes directly into
+        /// <paramref name="writer"/> via <see cref="Serializer.WriteTo"/>, avoiding the
+        /// intermediate <c>byte[]</c> allocation from <see cref="Serialize(ExtendedActorSystem,Information,object)"/>. 🌸
+        /// 
+        /// <para>
+        /// Returns the number of bytes written. The manifest and serializer-id are NOT written
+        /// to the buffer — callers should obtain those from the returned
+        /// <c>(serializerId, manifest)</c> tuple separately if needed.
+        /// </para>
+        /// 
+        /// <!-- CopilotNotes: Used by PR-A's InnerEnvelopeWriter to write the serialized message
+        ///      payload directly into the pooled outbound frame, eliminating W1 allocation. 🌸 -->
+        /// </summary>
+        /// <param name="sysandTransportInfo">Endpoint-held system and transport info to lower arg count.</param>
+        /// <param name="message">The message to serialize.</param>
+        /// <param name="writer">The buffer writer to receive the serialized bytes.</param>
+        /// <returns>
+        /// A tuple of (bytesWritten, serializerId, manifest) so callers can build the
+        /// inner-envelope header without a separate <c>Serialize</c> call.
+        /// </returns>
+        public static (int bytesWritten, int serializerId, string? manifest) Serialize(
+            SysandTransportInfo sysandTransportInfo,
+            object message,
+            IBufferWriter<byte> writer)
+        {
+            var serializer = sysandTransportInfo.System.Serialization.FindSerializerFor(message);
+            var oldInfo    = Akka.Serialization.Serialization.CurrentTransportInformation;
+            try
+            {
+                Akka.Serialization.Serialization.CurrentTransportInformation = sysandTransportInfo.TransportInformation;
+
+                var bytesWritten = serializer.WriteTo(writer, message);
+
+                string? manifest = null;
+                if (serializer is SerializerWithStringManifest sm2)
+                {
+                    var m = sm2.Manifest(message);
+                    if (!string.IsNullOrEmpty(m))
+                        manifest = m;
+                }
+                else if (serializer.IncludeManifest)
+                {
+                    manifest = message.GetType().TypeQualifiedName();
+                }
+
+                return (bytesWritten, serializer.Identifier, manifest);
             }
             finally
             {

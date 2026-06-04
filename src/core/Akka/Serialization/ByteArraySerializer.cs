@@ -6,6 +6,7 @@
 //-----------------------------------------------------------------------
 
 using System;
+using System.Buffers;
 using Akka.Actor;
 
 namespace Akka.Serialization
@@ -56,6 +57,34 @@ namespace Akka.Serialization
         public override object FromBinary(byte[] bytes, Type type)
         {
             return bytes;
+        }
+
+        /// <summary>
+        /// Zero-copy overload: the payload IS a <c>byte[]</c>, so we just materialise
+        /// a copy from the pool memory. This avoids the double-indirection in the base class
+        /// (<c>bytes.ToArray()</c> → <c>FromBinary(byte[], Type)</c>). 🌸
+        /// </summary>
+        public override object FromBinary(ReadOnlyMemory<byte> bytes, Type type)
+        {
+            // ByteArraySerializer always returns byte[] (ownership by caller), so we must copy.
+            // CopilotNotes: No allocation savings here vs. base class, but we do avoid the
+            // extra virtual dispatch. Real gain is when callers don't need a byte[] at all
+            // (e.g. directly consuming ReadOnlyMemory<byte>). 🌸
+            return bytes.ToArray();
+        }
+
+        /// <summary>
+        /// Writes the raw byte array directly into the buffer without any intermediate
+        /// allocation. 🌸
+        /// </summary>
+        public override int WriteTo(IBufferWriter<byte> writer, object obj)
+        {
+            if (obj is byte[] bytes)
+            {
+                writer.Write(bytes);
+                return bytes.Length;
+            }
+            return base.WriteTo(writer, obj);
         }
     }
 }

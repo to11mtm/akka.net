@@ -653,9 +653,20 @@ namespace RemotePingPong
                          .OrderByDescending(g => g.Max(r => r.ThroughputMsgPerSec)))
             {
                 var best = g.MaxBy(r => r.ThroughputMsgPerSec)!;
-                sb.AppendLine(
-                    $"| {TransportLabel(best.Transport)} | {SerializerLabel(best.Serializer)} | {PayloadLabel(best.Payload)} " +
-                    $"| {best.ThroughputMsgPerSec:N0} | {best.NumberOfClients} |");
+                if (best.Payload == PayloadMode.Primitive)
+                {
+                    // we want to put PrimitiveSerializer here because it's the one actually used for a primitive:
+                    sb.AppendLine(
+                        $"| {TransportLabel(best.Transport)} | PrimitiveSerializer | {PayloadLabel(best.Payload)} " +
+                        $"| {best.ThroughputMsgPerSec:N0} | {best.NumberOfClients} |");
+                }
+                else
+                {
+                    sb.AppendLine(
+                        $"| {TransportLabel(best.Transport)} | {SerializerLabel(best.Serializer)} | {PayloadLabel(best.Payload)} " +
+                        $"| {best.ThroughputMsgPerSec:N0} | {best.NumberOfClients} |");    
+                }
+                
             }
 
             sb.AppendLine();
@@ -671,10 +682,20 @@ namespace RemotePingPong
             {
                 foreach (var row in g.OrderBy(r => r.NumberOfClients))
                 {
-                    sb.AppendLine(
-                        $"| {TransportLabel(row.Transport)} | {SerializerLabel(row.Serializer)} | {PayloadLabel(row.Payload)} " +
-                        $"| {row.NumberOfClients} | {row.ThroughputMsgPerSec:N0} | {row.TotalMessages:N0} " +
-                        $"| {row.ElapsedMs:F2} |");
+                    if (row.Payload == PayloadMode.Primitive)
+                    {
+                        sb.AppendLine(
+                            $"| {TransportLabel(row.Transport)} | PrimitiveSerializer | {PayloadLabel(row.Payload)} " +
+                            $"| {row.NumberOfClients} | {row.ThroughputMsgPerSec:N0} | {row.TotalMessages:N0} " +
+                            $"| {row.ElapsedMs:F2} |");
+                    }
+                    else
+                    {
+                        sb.AppendLine(
+                            $"| {TransportLabel(row.Transport)} | {SerializerLabel(row.Serializer)} | {PayloadLabel(row.Payload)} " +
+                            $"| {row.NumberOfClients} | {row.ThroughputMsgPerSec:N0} | {row.TotalMessages:N0} " +
+                            $"| {row.ElapsedMs:F2} |");    
+                    }
                 }
             }
 

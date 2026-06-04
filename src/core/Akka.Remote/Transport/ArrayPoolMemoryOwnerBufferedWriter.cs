@@ -95,9 +95,9 @@ public sealed class ReservableSegmentArrayPooledMemoryOwnerBufferWriter : IReser
 }
 public class ArrayPoolMemoryOwnerBufferedWriter
 {
-    public static ArrayPoolMemoryOwnerBufferedWriter<T> Create<T>()
+    public static ArrayPoolMemoryOwnerBufferedWriter<T> Create<T>(int initialSize = 256)
     {
-        return new ArrayPoolMemoryOwnerBufferedWriter<T>(ArrayPool<T>.Shared);
+        return new ArrayPoolMemoryOwnerBufferedWriter<T>(ArrayPool<T>.Shared, initialSize);
     }
 }
 
@@ -119,11 +119,12 @@ public sealed class ArrayPoolMemoryOwnerBufferedWriter<T> : IMemoryOwner<T>, IBu
     
     public ArrayPoolMemoryOwnerBufferedWriter(ArrayPool<T> pool, int initialSize = 256)
     {
+        _position = 0;
         _pool = pool;
         _array = _pool.Rent(256); // Start with a reasonable default size
     }
 
-    public Memory<T> Memory => new(_array, 0, _array.Length - _position);
+    public Memory<T> Memory => new(_array, 0,  _position);
     public void Advance(int count)
     {
         _position += count;
@@ -131,7 +132,7 @@ public sealed class ArrayPoolMemoryOwnerBufferedWriter<T> : IMemoryOwner<T>, IBu
 
     public Memory<T> GetMemory(int sizeHint = 0)
     {
-        if (_position + sizeHint > _array.Length)
+        if (_position + sizeHint >= _array.Length)
         {
             Grow(sizeHint);
         }

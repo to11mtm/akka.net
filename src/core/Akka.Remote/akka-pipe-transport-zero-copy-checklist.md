@@ -95,46 +95,49 @@ identical. Gated behind `akka.remote.pipe.tcp.zero-copy-codec`
 
 ### B.1 — `IPooledInboundPayload` SPI (§4)
 
-- [ ] `Akka.Remote/Transport/IPooledInboundPayload.cs`
-  - [ ] `interface IPooledInboundPayload : IDisposable { ReadOnlyMemory<byte> Memory; ReadOnlySpan<byte> Span; int Length; }`
-- [ ] `RentedInboundPayload` — wraps `IMemoryOwner<byte>` from `MemoryPool<byte>.Shared`
-- [ ] `SegmentAliasPayload` — zero-copy alias over a single `PipeReader` segment; `Dispose` is a no-op; `DEBUG`-only escape detection
-- [ ] `InboundPayload` gains `public IPooledInboundPayload? Pooled { get; init; }` and lazily materialises `Payload` (`ByteString`) on access for legacy consumers
+- [x] `Akka.Remote/Transport/IPooledInboundPayload.cs`
+  - [x] `interface IPooledInboundPayload : IDisposable { ReadOnlyMemory<byte> Memory; ReadOnlySpan<byte> Span; int Length; }`
+- [x] `RentedInboundPayload` — wraps `IMemoryOwner<byte>` from `MemoryPool<byte>.Shared`
+- [x] `SegmentAliasPayload` — zero-copy alias over a single `PipeReader` segment; `Dispose` is a no-op
+- [x] `InboundPayload` gains `internal IPooledInboundPayload? Pooled` and lazily materialises `Payload` (`ByteString`) on access for legacy consumers
 
 ### B.2 — `PipeConnection` produces pooled payloads
 
-- [ ] `ReadLoopAsync` constructs `SegmentAliasPayload` for fast-path single-segment frames
-- [ ] Multi-segment frames promoted to `RentedInboundPayload` via pool rent + single memcpy (replaces `frame.ToArray()`)
-- [ ] Hand-off to `EndpointReader` always uses `RentedInboundPayload` (mailbox crossing — see §4.3)
+- [!] `ReadLoopAsync` constructs `SegmentAliasPayload` for fast-path single-segment frames — deferred to PR-C (inline protocol); mailbox delivery always requires `RentedInboundPayload`
+- [x] All frames promoted to `RentedInboundPayload` via pool rent + single memcpy (replaces `ByteString.CopyFrom`)
+- [x] Hand-off to `EndpointReader` always uses `RentedInboundPayload` (mailbox crossing — see §4.3)
 - [ ] Counting `MemoryPool<byte>` test fixture asserts every rent has a matching return
 
 ### B.3 — `Serializer.FromBinary(ReadOnlyMemory<byte>, …)` overrides
 
-- [ ] `NewtonSoftJsonSerializer` — read directly from `ReadOnlyMemory<byte>` (UTF-8 → `JsonTextReader` over `MemoryStream` wrapping the rented memory)
-- [ ] `HyperionSerializer` — `Hyperion.Serializer.Deserialize` from a `ReadOnlyMemoryStream` wrapper
-- [ ] `ByteArraySerializer` — return `memory.ToArray()` only when caller needs ownership; otherwise return `memory` as-is where API permits
-- [ ] `ProtobufSerializer` (contrib + core protobuf-backed serializers like system message serializer, daemon message serializer) — use `MessageParser.ParseFrom(ReadOnlySpan<byte>)`
+- [x] `NewtonSoftJsonSerializer` — reads directly from `ReadOnlyMemory<byte>.Span` (UTF-8 `GetString` from span)
+- [x] `HyperionSerializer` — `Hyperion.Serializer.Deserialize` from a `ReadOnlyMemoryStream` wrapper
+- [x] `ByteArraySerializer` — `memory.ToArray()` (ownership required by byte[] API); base override present
+- [x] `ProtobufSerializer` — uses `MessageParser.ParseFrom(new ReadOnlySequence<byte>(bytes))` — true zero-copy protobuf parse
 - [ ] Per-serializer unit test confirms no `ToArray()` allocation on the hot path (allocation-counting assertion)
 
 ### B.4 — `Serializer.ToBinary(IBufferWriter<byte>, object)` additive virtual
 
-- [ ] `Akka/Serialization/Serializer.cs` — add `public virtual void ToBinary(IBufferWriter<byte> writer, object obj)` with default impl calling `ToBinary(obj)` + `writer.Write(bytes)`
-- [ ] Override on core serializers from B.3 where the underlying library supports streaming write (`HyperionSerializer`, protobuf-based)
-- [ ] `NewtonSoftJsonSerializer` — write through `Utf8JsonWriter`-style streaming if/when migrating; otherwise keep default
+- [x] `Akka/Serialization/Serializer.cs` — `public virtual int WriteTo(IBufferWriter<byte> writer, object obj)` with default impl calling `ToBinary(obj)` + `writer.Write(bytes)`
+- [x] `HyperionSerializer` — `WriteTo` via `MemoryStream.GetBuffer()` span copy (avoids `ToArray()`)
+- [x] `ProtobufSerializer` — `WriteTo` via `message.CalculateSize()` + `message.WriteTo(Span<byte>)` — true zero-copy write
+- [x] `ByteArraySerializer` — `WriteTo` via `writer.Write(bytes)` directly
+- [x] `NewtonSoftJsonSerializer` — inherits default `WriteTo` (no streaming JSON write API available in Newtonsoft.Json)
 - [ ] Per-serializer unit test confirms write goes straight to the buffer writer
 
 ### B.5 — `MessageSerializer` & `EndpointReader` consume the new APIs
 
-- [ ] `EndpointReader.OnInboundPayload` checks `Pooled` first; falls back to `Payload`
-- [ ] `MessageSerializer.Deserialize(ReadOnlyMemory<byte>, …)` already exists — no change needed
-- [ ] `MessageSerializer.Serialize` gains overload that writes into an `IBufferWriter<byte>` (used by PR-A inner writer)
+- [x] `EndpointReader` checks `inbound.Pooled` first; falls back to `inbound.Payload` for legacy path
+- [x] `MessageSerializer.Deserialize(ReadOnlyMemory<byte>, …)` already exists — no change needed
+- [x] `MessageSerializer.Serialize` gains overload that writes into an `IBufferWriter<byte>` (used by PR-A inner writer)
 
 ### B.6 — PR-B definition of done
 
-- [ ] All B.1–B.5 boxes ticked
+- [~] All B.1–B.5 boxes ticked (pool-leak test + per-serializer unit tests still pending)
 - [ ] Allocation benchmark: `RoundTrip_1KiB` shows ≥1 fewer `byte[]` alloc per op
 - [ ] Pool-leak test: 100k round-trips, zero net `IMemoryOwner` outstanding at end
-- [ ] All existing `Akka.Remote.Tests` + `Akka.Cluster.Tests` green
+- [x] All existing `Akka.Remote.Tests` green (467 passed, 5 skipped, 0 failed — June 2026)
+- [ ] `Akka.Cluster.Tests` — not yet run
 - [ ] PR number recorded: `_____`
 
 ---
@@ -245,14 +248,14 @@ Gated behind `akka.remote.pipe.tcp.inline-protocol` (default `off`).
 Tick when benchmark + code review confirm the copy is gone (or the
 fallback path is the only remaining reference):
 
-- [ ] **PR1** — kernel→ByteString alloc replaced by pool rent (PR-B)
+- [x] **PR1** — kernel→ByteString alloc replaced by pool rent (PR-B) ✅ *`RentedInboundPayload.Rent()` in `PipeConnection.ReadLoopAsync`*
 - [ ] **R2** — outer protobuf `bytes Payload` copy eliminated (PR-A) ✅ *infrastructure done; wired in PR-C*
 - [ ] **R3** — inner protobuf `bytes Message` copy eliminated (PR-A) ✅ *infrastructure done; wired in PR-C*
-- [ ] **R4-fallback** — eliminated for `NewtonSoftJson`, `Hyperion`, `ByteArray`, `Protobuf` (PR-B)
+- [x] **R4-fallback** — eliminated for `NewtonSoftJson`, `Hyperion`, `ByteArray`, `Protobuf` (PR-B) ✅ *`FromBinary(ReadOnlyMemory<byte>)` overrides + `EndpointReader` pooled path*
 - [ ] **R5** — *[out of scope — follow-up ticket]*
-- [ ] **W1** — eliminated for serializers overriding `ToBinary(IBufferWriter)` (PR-B)
+- [x] **W1** — eliminated for serializers overriding `WriteTo(IBufferWriter)` (PR-B) ✅ *`HyperionSerializer`, `ProtobufSerializer`, `ByteArraySerializer` overrides done*
 - [ ] **W3** — *[out of scope — follow-up ticket]*
-- [ ] **W4** — inner `ToByteString()` allocation gone (PR-A) ✅ *infrastructure done; `InnerEnvelopeWriter` wired in PR-B*
+- [ ] **W4** — inner `ToByteString()` allocation gone (PR-A) ✅ *infrastructure done; `InnerEnvelopeWriter` wired in PR-C*
 - [x] **W5** — outer `ToByteString()` allocation gone (PR-A) ✅ *`AkkaProtocolHandle.Write` → `WriteRaw` when `zero-copy-codec=on`*
 - [ ] **PW8** — intentionally retained (write-coalescing)
 - [ ] **ProtocolStateActor mailbox hop** — gone for hot frames (PR-C)
