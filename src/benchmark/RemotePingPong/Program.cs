@@ -18,9 +18,100 @@ using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Configuration;
 using Akka.Util.Internal;
+using MessagePack;
 
 namespace RemotePingPong
 {
+    [MessagePackObject(keyAsPropertyName:true)]
+        public sealed class BenchmarkEnvelope
+        {
+            public long SequenceNr { get; set; }
+
+            public string Marker { get; set; } = "hit";
+
+            public DateTime TimestampUtc { get; set; }
+        }
+
+        // ── Deep-nested payload classes ────────────────────────────────────────
+        // CopilotNotes: Three-level hierarchy where every level has 3× as many scalar
+        // fields as its parent (root = 3, level-2 = 9, level-3 = 27). This is the LEAF.
+
+        /// <summary>
+        /// Leaf node of the deep-nested benchmark payload — 27 mixed-type fields. 🌿
+        /// </summary>
+        // [Serializable]
+        [MessagePackObject(keyAsPropertyName:true)]
+        public sealed class DeepLevel3
+        {
+            // 9 longs
+            public long L1 { get; set; } public long L2 { get; set; } public long L3 { get; set; }
+            public long L4 { get; set; } public long L5 { get; set; } public long L6 { get; set; }
+            public long L7 { get; set; } public long L8 { get; set; } public long L9 { get; set; }
+            // 9 strings
+            public string S1 { get; set; } = "a"; public string S2 { get; set; } = "b"; public string S3 { get; set; } = "c";
+            public string S4 { get; set; } = "d"; public string S5 { get; set; } = "e"; public string S6 { get; set; } = "f";
+            public string S7 { get; set; } = "g"; public string S8 { get; set; } = "h"; public string S9 { get; set; } = "i";
+            // 6 doubles + 3 bools (= 9 more fields → total 27)
+            public double D1 { get; set; } public double D2 { get; set; } public double D3 { get; set; }
+            public double D4 { get; set; } public double D5 { get; set; } public double D6 { get; set; }
+            public bool   B1 { get; set; } public bool   B2 { get; set; } public bool   B3 { get; set; }
+        }
+
+        /// <summary>
+        /// Middle node of the deep-nested benchmark payload — 9 scalar fields plus 3
+        /// <see cref="DeepLevel3"/> children. 🌿
+        /// </summary>
+        // [Serializable]
+        [MessagePackObject(keyAsPropertyName:true)]
+        public sealed class DeepLevel2
+        {
+            // 3 longs, 3 strings, 2 doubles, 1 bool = 9 fields
+            public long   L1 { get; set; } public long   L2 { get; set; } public long   L3 { get; set; }
+            public string S1 { get; set; } = "x"; public string S2 { get; set; } = "y"; public string S3 { get; set; } = "z";
+            public double D1 { get; set; } public double D2 { get; set; }
+            public bool   B1 { get; set; }
+            // 3 leaf children
+            public DeepLevel3 Sub1 { get; set; } = new();
+            public DeepLevel3 Sub2 { get; set; } = new();
+            public DeepLevel3 Sub3 { get; set; } = new();
+        }
+
+        /// <summary>
+        /// Root of the deep-nested benchmark payload — 3 scalar fields plus 3
+        /// <see cref="DeepLevel2"/> children (each of which contains 3 <see cref="DeepLevel3"/>
+        /// leaf nodes). UwU 🌳
+        /// </summary>
+        //[Serializable]
+        [MessagePackObject(keyAsPropertyName:true)]
+        public sealed class DeepObject
+        {
+            // 3 fields at root level
+            public long     SequenceNr   { get; set; }
+            public string   Marker       { get; set; } = "deep";
+            public DateTime TimestampUtc { get; set; }
+            // 3 level-2 children
+            public DeepLevel2 Sub1 { get; set; } = new();
+            public DeepLevel2 Sub2 { get; set; } = new();
+            public DeepLevel2 Sub3 { get; set; } = new();
+        }
+
+        // ── Large payload class ────────────────────────────────────────────────
+
+        /// <summary>
+        /// Large benchmark payload: one <see cref="long"/>, one <see cref="Guid"/>,
+        /// and a 37 KB <see cref="byte"/> array.  Tests the heavy-allocation path
+        /// of every serializer. nyaa~ 📦
+        /// </summary>
+        //[Serializable]
+        [MessagePackObject(keyAsPropertyName:true)]
+        public sealed class LargePayloadEnvelope
+        {
+            public long   SequenceNr { get; set; }
+            public Guid   Id         { get; set; }
+            /// <summary>37 KB payload buffer. Pre-filled with deterministic bytes. 🗜️</summary>
+            public byte[] Data       { get; set; } = Array.Empty<byte>();
+        }
+        
     public static class Messages
     {
         public class Msg { public override string ToString() { return "msg"; } }
@@ -77,6 +168,32 @@ namespace RemotePingPong
             (SerializerMode.Default,  PayloadMode.SerializedObject, TransportMode.PipeProtobufZeroCopy),
             (SerializerMode.Hyperion, PayloadMode.SerializedObject, TransportMode.PipeProtobufZeroCopy),
             (SerializerMode.MsgPack,  PayloadMode.SerializedObject, TransportMode.PipeProtobufZeroCopy),
+
+            // ── Deep nested object (3 levels, 3× fields per level) ────────────
+            // CopilotNotes: Tests graph-traversal serializer overhead with a small but deeply
+            // nested object tree (root → 3 level-2 nodes → 9 leaf nodes). nyaa~ 🌳
+            (SerializerMode.Default,  PayloadMode.DeepObject, TransportMode.DotNetty),
+            (SerializerMode.Hyperion, PayloadMode.DeepObject, TransportMode.DotNetty),
+            (SerializerMode.MsgPack,  PayloadMode.DeepObject, TransportMode.DotNetty),
+            (SerializerMode.Default,  PayloadMode.DeepObject, TransportMode.PipeProtobuf),
+            (SerializerMode.Hyperion, PayloadMode.DeepObject, TransportMode.PipeProtobuf),
+            (SerializerMode.MsgPack,  PayloadMode.DeepObject, TransportMode.PipeProtobuf),
+            (SerializerMode.Default,  PayloadMode.DeepObject, TransportMode.PipeProtobufZeroCopy),
+            (SerializerMode.Hyperion, PayloadMode.DeepObject, TransportMode.PipeProtobufZeroCopy),
+            (SerializerMode.MsgPack,  PayloadMode.DeepObject, TransportMode.PipeProtobufZeroCopy),
+
+            // ── Large payload (int64 + Guid + 37 KB byte[]) ──────────────────
+            // CopilotNotes: Tests heavy-allocation / memory-pressure path; each message
+            // carries a 37 KB byte array through the full serializer + transport stack. 📦
+            (SerializerMode.Default,  PayloadMode.LargePayload, TransportMode.DotNetty),
+            (SerializerMode.Hyperion, PayloadMode.LargePayload, TransportMode.DotNetty),
+            (SerializerMode.MsgPack,  PayloadMode.LargePayload, TransportMode.DotNetty),
+            (SerializerMode.Default,  PayloadMode.LargePayload, TransportMode.PipeProtobuf),
+            (SerializerMode.Hyperion, PayloadMode.LargePayload, TransportMode.PipeProtobuf),
+            (SerializerMode.MsgPack,  PayloadMode.LargePayload, TransportMode.PipeProtobuf),
+            (SerializerMode.Default,  PayloadMode.LargePayload, TransportMode.PipeProtobufZeroCopy),
+            (SerializerMode.Hyperion, PayloadMode.LargePayload, TransportMode.PipeProtobufZeroCopy),
+            (SerializerMode.MsgPack,  PayloadMode.LargePayload, TransportMode.PipeProtobufZeroCopy),
         ];
 
         /// <summary>
@@ -119,21 +236,41 @@ namespace RemotePingPong
             /// are actually exercised end-to-end.
             /// </summary>
             SerializedObject,
+
+            /// <summary>
+            /// Sends a 3-level deeply nested object where each successive level has 3× as many
+            /// fields as the previous (root = 3 fields, level-2 nodes = 9 fields each,
+            /// level-3 leaf nodes = 27 fields each). Each root object fans out to 3 level-2
+            /// nodes, each of which contains 3 level-3 leaf nodes — 9 leaves total per message.
+            /// Great for stress-testing graph-serializer overhead! uwu 🌳
+            /// </summary>
+            DeepObject,
+
+            /// <summary>
+            /// Sends an object containing an <see cref="long"/>, a <see cref="Guid"/>,
+            /// and a 37 KB <see cref="byte"/> array.  Exercises the large-payload /
+            /// memory-pressure path of every serializer. nyaa~ 📦
+            /// </summary>
+            LargePayload,
         }
 
         private static PayloadMode ParsePayloadMode(string? arg)
         {
             return (arg ?? "").ToLowerInvariant() switch
             {
-                "object" or "serialized" or "serializer" => PayloadMode.SerializedObject,
-                _ => PayloadMode.Primitive,
+                "object" or "serialized" or "serializer"         => PayloadMode.SerializedObject,
+                "deep" or "deepobject" or "nested"               => PayloadMode.DeepObject,
+                "large" or "largepayload" or "big" or "bigpayload" => PayloadMode.LargePayload,
+                _                                                => PayloadMode.Primitive,
             };
         }
 
         private static string PayloadLabel(PayloadMode mode) => mode switch
         {
             PayloadMode.SerializedObject => "Custom object (serializer path)",
-            _ => "Primitive long",
+            PayloadMode.DeepObject       => "Deep nested object (3 levels, 3×fields)",
+            PayloadMode.LargePayload     => "Large payload (int64 + Guid + 37 KB byte[])",
+            _                            => "Primitive long",
         };
 
         /// <summary>
@@ -201,24 +338,60 @@ namespace RemotePingPong
             _                                  => "DotNetty/TCP + Protobuf",
         };
 
-        [Serializable]
-        private sealed class BenchmarkEnvelope
+        
+
+        // CopilotNotes: Pre-allocate the 37 KB buffer once so CreatePingPayload is cheap.
+        // The byte[] is shared across all Tell() calls (same reference) — that's intentional:
+        // we're benchmarking serializer/transport overhead, not allocation cost. UwU
+        private static readonly byte[] _largeBuffer = BuildLargeBuffer(37 * 1024);
+
+        private static byte[] BuildLargeBuffer(int size)
         {
-            public long SequenceNr { get; set; }
-
-            public string Marker { get; set; } = "hit";
-
-            public DateTime TimestampUtc { get; set; }
+            var buf = new byte[size];
+            for (var i = 0; i < size; i++)
+                buf[i] = (byte)(i & 0xFF);
+            return buf;
         }
 
         private static object CreatePingPayload(PayloadMode mode) => mode switch
         {
             // CopilotNotes: Primitive mode intentionally keeps serializer overhead minimal.
             PayloadMode.Primitive => 1L,
-            _ => new BenchmarkEnvelope
+
+            // CopilotNotes: DeepObject fans out into 9 leaf nodes (3 level-2 × 3 level-3) — a
+            // nice stress-test for graph-traversal serializers. 🌳
+            PayloadMode.DeepObject => new DeepObject
+            {
+                SequenceNr   = 1L,
+                Marker       = "deep",
+                TimestampUtc = DateTime.UtcNow,
+                Sub1 = new DeepLevel2 { L1 = 10, L2 = 11, L3 = 12, S1 = "aa", D1 = 1.1, B1 = true,
+                    Sub1 = new DeepLevel3 { L1 = 100, S1 = "aaa", D1 = 1.11 },
+                    Sub2 = new DeepLevel3 { L1 = 101, S1 = "bbb", D1 = 1.12 },
+                    Sub3 = new DeepLevel3 { L1 = 102, S1 = "ccc", D1 = 1.13 } },
+                Sub2 = new DeepLevel2 { L1 = 20, L2 = 21, L3 = 22, S1 = "bb", D1 = 2.1, B1 = false,
+                    Sub1 = new DeepLevel3 { L1 = 200, S1 = "ddd", D1 = 2.11 },
+                    Sub2 = new DeepLevel3 { L1 = 201, S1 = "eee", D1 = 2.12 },
+                    Sub3 = new DeepLevel3 { L1 = 202, S1 = "fff", D1 = 2.13 } },
+                Sub3 = new DeepLevel2 { L1 = 30, L2 = 31, L3 = 32, S1 = "cc", D1 = 3.1, B1 = true,
+                    Sub1 = new DeepLevel3 { L1 = 300, S1 = "ggg", D1 = 3.11 },
+                    Sub2 = new DeepLevel3 { L1 = 301, S1 = "hhh", D1 = 3.12 },
+                    Sub3 = new DeepLevel3 { L1 = 302, S1 = "iii", D1 = 3.13 } },
+            },
+
+            // CopilotNotes: LargePayloadEnvelope reuses the pre-built 37 KB buffer so we're
+            // only measuring serializer/transport overhead, not allocation. nyaa~ 📦
+            PayloadMode.LargePayload => new LargePayloadEnvelope
             {
                 SequenceNr = 1L,
-                Marker = "hit",
+                Id         = Guid.NewGuid(),
+                Data       = _largeBuffer,
+            },
+
+            _ => new BenchmarkEnvelope
+            {
+                SequenceNr   = 1L,
+                Marker       = "hit",
                 TimestampUtc = DateTime.UtcNow,
             },
         };
@@ -399,7 +572,7 @@ namespace RemotePingPong
             _firstRun = false;
         }
 
-        const long repeat = 100000L;
+        const long repeat = 50000L;
 
         private static async Task Start(
             uint timesToRun,

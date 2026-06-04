@@ -3,7 +3,7 @@ using System.Buffers;
 
 namespace Akka.Remote.Transport;
 
-public class ReservedBufferRangeSegment
+public sealed class ReservedBufferRangeSegment
 {
     private readonly IReservableSegmentBufferWriter _bufferWriter;
     public readonly int Offset;
@@ -93,7 +93,7 @@ public sealed class ReservableSegmentArrayPooledMemoryOwnerBufferWriter : IReser
         return new(_array, offset, length);
     }
 }
-public class ArrayPoolMemoryOwnerBufferedWriter
+public static class ArrayPoolMemoryOwnerBufferedWriter
 {
     public static ArrayPoolMemoryOwnerBufferedWriter<T> Create<T>(int initialSize = 256)
     {
