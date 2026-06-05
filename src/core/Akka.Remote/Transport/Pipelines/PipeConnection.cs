@@ -232,9 +232,9 @@ namespace Akka.Remote.Transport.Pipelines
 
                 while (true)
                 {
-                    if (await ReadParseNew(ct, listener)) break;
+                    // if (await ReadParseNew(ct, listener)) break;
 
-                    // if (await ReadParseOld(listener)) break;
+                    if (await ReadParseOld(listener)) break;
                 }
             }
             catch (OperationCanceledException)
@@ -264,7 +264,7 @@ namespace Akka.Remote.Transport.Pipelines
 
         private async Task<bool> ReadParseOld(IHandleEventListener listener)
         {
-            var result = await _reader.ReadAsync().ConfigureAwait(false);
+            var result = await _reader.ReadAsync();
             if (result.IsCanceled)
                 return true;
 
@@ -291,6 +291,38 @@ namespace Akka.Remote.Transport.Pipelines
                 return true;
             return false;
         }
+        
+        private async ValueTask ReadParseOld2(IHandleEventListener listener)
+        {
+            while (true)
+            {
+                var result = await _reader.ReadAsync();
+                if (result.IsCanceled)
+                    break;
+
+                var buffer = result.Buffer;
+
+                while (TryParseFrame(ref buffer, out var frame))
+                {
+                    // B.2: Promote each frame to a RentedInboundPayload (pool rent + single memcpy)
+                    // before the mailbox crossing. This replaces the ByteString alloc that used to
+                    // happen here. Legacy consumers that access InboundPayload.Payload will trigger
+                    // a lazy ByteString copy, but zero-copy consumers (PR-C inline protocol) can
+                    // use InboundPayload.Pooled.Memory directly.
+                    //
+                    // CopilotNotes: Always promote to RentedInboundPayload here because the
+                    // SegmentAliasPayload lifetime ends at _reader.AdvanceTo (below), which is
+                    // called in the same iteration. Mailbox hops require owned memory. 🌸
+                    var pooled = RentedInboundPayload.Rent(frame);
+                    listener.Notify(new InboundPayload(pooled));
+                }
+
+                _reader.AdvanceTo(buffer.Start, buffer.End);
+
+                if (result.IsCompleted)
+                    break;
+            }
+        }
 
         private async Task<bool> ReadParseNew(CancellationToken ct, IHandleEventListener listener)
         {
@@ -306,15 +338,40 @@ namespace Akka.Remote.Transport.Pipelines
             // intentionally do NOT forward `ct` into ReadAtLeastAsync here — the IsCanceled
             // check below covers both paths. 🌸
             _ = ct; // consumed via CancelPendingRead registration in ReadLoopAsync
+
+            // ── Phase 1: guarantee the 4-byte length header ──────────────────
             var result = await _reader.ReadAtLeastAsync(FrameHeaderSize).ConfigureAwait(false);
             if (result.IsCanceled)
                 return true;
 
             var buffer = result.Buffer;
 
-            // Consume every complete frame already buffered — identical to ReadParseOld's
-            // TryParseFrame loop so large OS bursts are drained in one pass without
-            // bouncing through ReadAtLeastAsync once per frame. ✨
+            // ── Phase 2: guarantee the full first frame body ─────────────────
+            // Peek the payload length from the header (non-destructive — GetFrameLength
+            // does NOT advance `buffer`).  If the body hasn't fully arrived yet we tell
+            // the pipe "examined everything, consumed nothing" and wait for exactly the
+            // bytes we need, so TryParseFrame is guaranteed to succeed on its first call.
+            // CopilotNotes: firstFrameLength ≤ 0 means either an empty frame (0) or a
+            // corrupt header (negative). Both fall through to TryParseFrame which handles
+            // them correctly; we only issue the extra read for a well-formed positive length. 🌸
+            var firstFrameLength = GetFrameLength(ref buffer);
+            var totalNeeded = FrameHeaderSize + firstFrameLength;
+            if (firstFrameLength > 0 && buffer.Length < totalNeeded)
+            {
+                // Mark everything as examined but nothing consumed so the PipeReader
+                // knows to wait for new bytes rather than returning the same buffer again.
+                _reader.AdvanceTo(buffer.Start, buffer.End);
+
+                result = await _reader.ReadAtLeastAsync(totalNeeded).ConfigureAwait(false);
+                if (result.IsCanceled)
+                    return true;
+
+                buffer = result.Buffer;
+            }
+
+            // ── Phase 3: drain all complete frames in this buffer batch ───────
+            // Mirrors ReadParseOld's TryParseFrame loop — one AdvanceTo at the end per
+            // ReadAtLeastAsync round-trip so large OS bursts are drained in one pass. ✨
             while (TryParseFrame(ref buffer, out var frame))
             {
                 // RentedInboundPayload copies frame bytes into a pool-owned buffer before
@@ -322,6 +379,14 @@ namespace Akka.Remote.Transport.Pipelines
                 var pooled = RentedInboundPayload.Rent(frame);
                 listener.Notify(new InboundPayload(pooled));
             }
+
+            // while (true)
+            // {
+            //     var frame = TryParseFrame2(ref buffer);
+            //     if (frame.Length == 0)
+            //         break;
+            //     listener.Notify(new InboundPayload(RentedInboundPayload.Rent(frame)));
+            // }
 
             // consumed = buffer.Start — first byte we haven't finished processing yet
             //            (start of a partial header, or == buffer.End when fully drained).

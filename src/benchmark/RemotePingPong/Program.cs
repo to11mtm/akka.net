@@ -169,6 +169,7 @@ namespace RemotePingPong
             (SerializerMode.Hyperion, PayloadMode.SerializedObject, TransportMode.PipeProtobufZeroCopy),
             (SerializerMode.MsgPack,  PayloadMode.SerializedObject, TransportMode.PipeProtobufZeroCopy),
 
+            /*
             // ── Deep nested object (3 levels, 3× fields per level) ────────────
             // CopilotNotes: Tests graph-traversal serializer overhead with a small but deeply
             // nested object tree (root → 3 level-2 nodes → 9 leaf nodes). nyaa~ 🌳
@@ -194,6 +195,7 @@ namespace RemotePingPong
             (SerializerMode.Default,  PayloadMode.LargePayload, TransportMode.PipeProtobufZeroCopy),
             (SerializerMode.Hyperion, PayloadMode.LargePayload, TransportMode.PipeProtobufZeroCopy),
             (SerializerMode.MsgPack,  PayloadMode.LargePayload, TransportMode.PipeProtobufZeroCopy),
+            */
         ];
 
         /// <summary>
