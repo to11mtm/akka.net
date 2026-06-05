@@ -533,7 +533,7 @@ namespace RemotePingPong
                 payloadMode = ParsePayloadMode(args[3]);
 
             // timesToRun = 1;
-            // transportMode = TransportMode.PipeMsgPack;
+            // transportMode = TransportMode.PipeProtobufZeroCopy;
             // serializerMode = SerializerMode.MsgPack;
             // payloadMode = PayloadMode.SerializedObject;
             

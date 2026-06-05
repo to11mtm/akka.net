@@ -902,40 +902,45 @@ namespace Akka.Remote.Transport
 
             if (hasMsg)
             {
-                var msgParser = new EnvelopeContainerParser(msgSection);
-
-                var senderSeg = msgParser.SenderSegment();
-                var sender = !senderSeg.IsEmpty
-                    ? provider.ResolveActorRefWithLocalAddress(
-                        Encoding.UTF8.GetString(senderSeg.Span), localAddress)
-                    : null;
-                
-                var recieverSegmentString = Encoding.UTF8.GetString(msgParser.ReceiverSegment().Span);
-                var recipient = provider.ResolveActorRefWithLocalAddress(recieverSegmentString, localAddress);
-                var recipientAddress = ActorPathCache.Cache.GetOrCompute(recieverSegmentString).Address;
-
-                // Reinterpret the seq sentinel exactly like the generated-codec path does:
-                //   ulong.MaxValue → reliable delivery NOT in use → seqOption == null
-                //   anything else  → real seq number
-                SeqNo? seqOption = null;
-                var rawSeq = (ulong)msgParser.GetSequenceNumber();
-                if (rawSeq != SeqUndefined)
-                {
-                    unchecked { seqOption = new SeqNo((long)rawSeq); }
-                }
-                
-                var payloadParser = msgParser.GetPayloadParser();
-                var serialized = new SerializedMessage
-                {
-                    Message = UnsafeByteOperations.UnsafeWrap(payloadParser.GetMessageByteSpan()),
-                    SerializerId = payloadParser.SerId,
-                    MessageManifest = UnsafeByteOperations.UnsafeWrap(payloadParser.Manifest()),
-                };
-
-                messageOption = new Message(recipient, recipientAddress, serialized, sender, seqOption);
+                messageOption = GetMessageOption(provider, localAddress, msgSection);
             }
 
             return new AckAndMessage(ackOption, messageOption);
+        }
+
+        private Message GetMessageOption(IRemoteActorRefProvider provider, Address localAddress, ReadOnlyMemory<byte> msgSection)
+        {
+            var msgParser = new EnvelopeContainerParser(msgSection);
+
+            var senderSeg = msgParser.SenderSegment();
+            var sender = !senderSeg.IsEmpty
+                ? provider.ResolveActorRefWithLocalAddress(
+                    Encoding.UTF8.GetString(senderSeg.Span), localAddress)
+                : null;
+                
+            var recieverSegmentString = Encoding.UTF8.GetString(msgParser.ReceiverSegment().Span);
+            var recipient = provider.ResolveActorRefWithLocalAddress(recieverSegmentString, localAddress);
+            var recipientAddress = ActorPathCache.Cache.GetOrCompute(recieverSegmentString).Address;
+
+            // Reinterpret the seq sentinel exactly like the generated-codec path does:
+            //   ulong.MaxValue → reliable delivery NOT in use → seqOption == null
+            //   anything else  → real seq number
+            SeqNo? seqOption = null;
+            var rawSeq = (ulong)msgParser.GetSequenceNumber();
+            if (rawSeq != SeqUndefined)
+            {
+                unchecked { seqOption = new SeqNo((long)rawSeq); }
+            }
+                
+            var payloadParser = msgParser.GetPayloadParser();
+            var serialized = new SerializedMessage
+            {
+                Message = UnsafeByteOperations.UnsafeWrap(payloadParser.GetMessageByteSpan()),
+                SerializerId = payloadParser.SerId,
+                MessageManifest = UnsafeByteOperations.UnsafeWrap(payloadParser.Manifest()),
+            };
+
+            return new Message(recipient, recipientAddress, serialized, sender, seqOption);
         }
 
         private AcknowledgementInfo AckBuilder(Ack ack)

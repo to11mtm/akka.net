@@ -234,7 +234,7 @@ namespace Akka.Remote.Transport.Pipelines
                 {
                     // if (await ReadParseNew(ct, listener)) break;
 
-                    if (await ReadParseOld(listener)) break;
+                    if (await ReadParseOld2(listener)) break;
                 }
             }
             catch (OperationCanceledException)
@@ -262,6 +262,37 @@ namespace Akka.Remote.Transport.Pipelines
             }
         }
 
+        private async Task<bool> ReadParseOld2(IHandleEventListener listener)
+        {
+            var result = await _reader.ReadAsync();
+            if (result.IsCanceled)
+                return true;
+
+            var buffer = result.Buffer;
+
+            while (TryParseFrame(ref buffer, out var frame))
+            {
+                // B.2: Promote each frame to a RentedInboundPayload (pool rent + single memcpy)
+                // before the mailbox crossing. This replaces the ByteString alloc that used to
+                // happen here. Legacy consumers that access InboundPayload.Payload will trigger
+                // a lazy ByteString copy, but zero-copy consumers (PR-C inline protocol) can
+                // use InboundPayload.Pooled.Memory directly.
+                //
+                // CopilotNotes: Always promote to RentedInboundPayload here because the
+                // SegmentAliasPayload lifetime ends at _reader.AdvanceTo (below), which is
+                // called in the same iteration. Mailbox hops require owned memory. 🌸
+                var pooled = RentedInboundPayload.Rent(frame);
+                //_reader.AdvanceTo(frame.End); // advance past this frame before any listener code runs, so the pipe can reuse the buffer for the next read
+                listener.Notify(new InboundPayload(pooled));
+            }
+
+            _reader.AdvanceTo(buffer.Start, buffer.End);
+
+            if (result.IsCompleted)
+                return true;
+            return false;
+        }
+        
         private async Task<bool> ReadParseOld(IHandleEventListener listener)
         {
             var result = await _reader.ReadAsync();
@@ -292,7 +323,7 @@ namespace Akka.Remote.Transport.Pipelines
             return false;
         }
         
-        private async ValueTask ReadParseOld2(IHandleEventListener listener)
+        private async ValueTask ReadParseOld1p5(IHandleEventListener listener)
         {
             while (true)
             {

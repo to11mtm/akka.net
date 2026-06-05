@@ -215,9 +215,15 @@ namespace Akka.Remote.Transport
         /// Uses the pooled length when available. 🌸
         /// </summary>
         public int Length => _pooled?.Length ?? _payload?.Length ?? 0;
+        public bool HasPooled => _pooled is not null;
 
         /// <inheritdoc/>
         public override string ToString() => $"InboundPayload(size = {Length} bytes)";
+
+        public void DisposePooled()
+        {
+            _pooled?.Dispose();
+        }
     }
 #nullable restore
 
