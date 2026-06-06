@@ -979,6 +979,16 @@ namespace Akka.Remote.Transport
             SysandTransportInfo systemAndTransportInfo,
             object message, IActorRef senderOption = null, SeqNo? seqOption = null, Ack ackOption = null)
         {
+            // return ConstructMessage_Original(localAddress, recipient, systemAndTransportInfo, message, senderOption,
+            //     seqOption, ackOption);
+            return ConstructMessage_Buffered(localAddress, recipient, systemAndTransportInfo, message, senderOption,
+                seqOption, ackOption);
+        }
+        
+        public ByteString ConstructMessage_Original(Address localAddress, IActorRef recipient,
+            SysandTransportInfo systemAndTransportInfo,
+            object message, IActorRef senderOption = null, SeqNo? seqOption = null, Ack ackOption = null)
+        {
             var ackAndEnvelope = new AckAndEnvelopeContainer();
             var envelope = new RemoteEnvelope() { Recipient = SerializeActorRef(recipient.Path.Address, recipient) };
             if (senderOption != null && senderOption.Path != null)
@@ -1023,6 +1033,69 @@ namespace Akka.Remote.Transport
             };
             ackAndEnvelope.Envelope = envelope;
 
+            return ackAndEnvelope.ToByteString();
+        }
+        
+        public ByteString ConstructMessage_Buffered(Address localAddress, IActorRef recipient,
+            SysandTransportInfo systemAndTransportInfo,
+            object message, IActorRef senderOption = null, SeqNo? seqOption = null, Ack ackOption = null)
+        {
+            var ackAndEnvelope = new AckAndEnvelopeContainerUtf8();
+            var envelope = new RemoteEnvelopeUtf8();
+            
+            if (seqOption is { } seq)
+            {
+                envelope.Seq = (ulong)seq.RawValue;
+            }
+            else envelope.Seq = SeqUndefined;
+
+            if (ackOption != null)
+            {
+                ackAndEnvelope.Ack = AckBuilder(ackOption);
+            }
+
+            using var f = ArrayPoolMemoryOwnerBufferedWriter.Create<byte>(1024);
+            // Message is often the largest part of the message, so we allocate it first in hopes the excess growth minimizes recopies.
+            // It's -possible- that the inverse  is a better pattern, we can test it later.
+            var (msgByteEndIdx, serializerId, manifest) =
+                MessageSerializer.Serialize(systemAndTransportInfo, message, f);
+            // Memory<byte> manifestMemory = default;
+            var manifestByteEndIdx = msgByteEndIdx;
+            if (!string.IsNullOrWhiteSpace(manifest))
+            {
+                //hax; if we have a manifest we probably have a message to go with it.
+                //So, we 'cheat' and use maxByteCount here.
+                manifestByteEndIdx = msgByteEndIdx + (int)Encoding.UTF8.GetBytes(manifest, f);
+                //var mbc = Encoding.UTF8.GetByteCount(manifest);
+                //manifestMemory = f.GetMemory(mbc).Slice(0, mbc);
+                //Encoding.UTF8.GetBytes(manifest, manifestMemory.Span);
+                //f.Advance(mbc);
+            }
+            
+            var recipiendEndIdx = manifestByteEndIdx+ WriteSerializedActorRefPathToBuffer(f, recipient.Path.Address, recipient); 
+            
+            // Grab sender last, now we can unwrap/construct.
+            if (senderOption != null && senderOption.Path != null)
+            {
+                var senderEndIdx = recipiendEndIdx+ WriteSerializedActorRefPathToBuffer(f, localAddress, senderOption);
+                envelope.Sender = new ActorRefDataUtf8()
+                {
+                    Path = UnsafeByteOperations.UnsafeWrap(f.Memory.Slice(recipiendEndIdx, senderEndIdx - recipiendEndIdx))
+                };
+            }
+            envelope.Recipient = new ActorRefDataUtf8()
+            {
+                Path = UnsafeByteOperations.UnsafeWrap(f.Memory.Slice(manifestByteEndIdx, recipiendEndIdx - manifestByteEndIdx))
+            };
+            envelope.Message = new SerializedMessage()
+            {
+                Message = UnsafeByteOperations.UnsafeWrap(f.Memory.Slice(0, msgByteEndIdx)),
+                SerializerId = serializerId,
+                MessageManifest = manifestByteEndIdx > msgByteEndIdx ?
+                    UnsafeByteOperations.UnsafeWrap(f.Memory.Slice(msgByteEndIdx,manifestByteEndIdx-msgByteEndIdx))
+                    : ByteString.Empty
+            };
+            ackAndEnvelope.Envelope = envelope;
             return ackAndEnvelope.ToByteString();
         }
 
@@ -1102,6 +1175,28 @@ namespace Akka.Remote.Transport
                     ? actorRef.Path.ToSerializationFormat()
                     : actorRef.Path.ToSerializationFormatWithAddress(defaultAddress)
             };
+        }
+        
+        private static ActorRefDataUtf8 SerializeActorRefDataUtf8(Address defaultAddress, IActorRef actorRef)
+        {
+            return new ActorRefDataUtf8()
+            {
+                Path = UnsafeByteOperations.UnsafeWrap(Encoding.UTF8.GetBytes((!string.IsNullOrEmpty(actorRef.Path.Address.Host))
+                    ? actorRef.Path.ToSerializationFormat()
+                    : actorRef.Path.ToSerializationFormatWithAddress(defaultAddress)))
+            };
+        }
+
+        private static int WriteSerializedActorRefPathToBuffer(IBufferWriter<byte> writer, Address defaultAddress, IActorRef actorRef)
+        {
+            if (!string.IsNullOrEmpty(actorRef.Path.Address.Host))
+            {
+                return actorRef.Path.WriteToSerializationFormatUtf8Bytes(writer);
+            }
+            else
+            {
+                return actorRef.Path.WriteToSerializationFormatWithAddressUtf8Bytes(writer, defaultAddress);
+            }
         }
 
         private static AddressData SerializeAddress(Address address)

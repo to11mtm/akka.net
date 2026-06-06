@@ -125,6 +125,7 @@ public sealed class ArrayPoolMemoryOwnerBufferedWriter<T> : IMemoryOwner<T>, IBu
     }
 
     public Memory<T> Memory => new(_array, 0,  _position);
+    public int Position => _position;
     public void Advance(int count)
     {
         _position += count;

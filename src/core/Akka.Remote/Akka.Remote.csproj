@@ -4,6 +4,7 @@
         <TargetFramework>$(NetStandardLibVersion)</TargetFramework>
         <PackageTags>$(AkkaPackageTags);network</PackageTags>
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <LangVersion>latest</LangVersion>
     </PropertyGroup>
     <ItemGroup>
         <EmbeddedResource Include="Configuration\Remote.conf" />

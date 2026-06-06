@@ -26,6 +26,18 @@ message RemoteEnvelope {
 	fixed64 seq = 5;
 }
 
+message RemoteEnvelopeUtf8 {
+  ActorRefDataUtf8 recipient = 1;
+  Payload message = 2;
+  ActorRefDataUtf8 sender = 4;
+  fixed64 seq = 5;
+}
+
+message AckAndEnvelopeContainerUtf8 {
+  AcknowledgementInfo ack = 1;
+  RemoteEnvelopeUtf8 envelope = 2;
+}
+
 message AcknowledgementInfo {
 	fixed64 cumulativeAck = 1;
 	repeated fixed64 nacks = 2;
