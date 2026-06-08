@@ -6,6 +6,7 @@
 //-----------------------------------------------------------------------
 
 using System;
+using System.Buffers;
 using System.Text;
 using Akka.Actor;
 using Akka.Configuration;
@@ -59,6 +60,30 @@ namespace Akka.Remote.Serialization
                 default:
                     throw new ArgumentException($"Cannot serialize object of type [{obj.GetType()}]");
             }
+        }
+
+        public override int WriteTo(IBufferWriter<byte> writer, object obj)
+        {
+            switch (obj)
+            {
+                case string s:
+                    var maxLen = Encoding.UTF8.GetMaxByteCount(s.Length);
+                    var span = writer.GetSpan(maxLen);
+                    var written = Encoding.UTF8.GetBytes(s, span);
+                    writer.Advance(written);
+                    return written;
+                case int i:
+                    BitConverter.TryWriteBytes(writer.GetSpan(sizeof(int)), i);
+                    writer.Advance(sizeof(int));
+                    return sizeof(int);
+                case long l:
+                    BitConverter.TryWriteBytes(writer.GetSpan(sizeof(long)), l);
+                    writer.Advance(sizeof(long));
+                    return sizeof(long);
+                default:
+                    throw new ArgumentException($"Cannot serialize object of type [{obj.GetType()}]");
+            }
+            
         }
 
         /// <inheritdoc />

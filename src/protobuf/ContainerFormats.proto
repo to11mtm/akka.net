@@ -34,12 +34,23 @@ message ActorRefData {
   string path = 1;
 }
 
+message ActorRefDataUtf8 {
+  bytes path = 1;
+}
+
 // Defines a remote address.
 message AddressData {
   string system = 1;
   string hostname = 2;
   uint32 port = 3;
   string protocol = 4;
+}
+
+message AddressDataUtf8 {
+  bytes system = 1;
+  bytes hostname = 2;
+  uint32 port = 3;
+  bytes protocol = 4;
 }
 
 // Defines a payload.

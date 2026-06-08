@@ -5,7 +5,9 @@
 // </copyright>
 //-----------------------------------------------------------------------
 
+#nullable disable
 using System;
+using System.Buffers;
 using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Configuration;
@@ -94,7 +96,7 @@ namespace Akka.Remote.Transport
         /// </summary>
         /// <param name="message">The message that describes the error.</param>
         /// <param name="cause">The exception that is the cause of the current exception.</param>
-        public InvalidAssociationException(string message, Exception cause = null)
+        public InvalidAssociationException(string message, Exception? cause = null)
             : base(message, cause)
         {
         }
@@ -116,30 +118,114 @@ namespace Akka.Remote.Transport
     public interface IHandleEvent : INoSerializationVerificationNeeded { }
 
     /// <summary>
-    /// Message sent to the listener registered to an association (via the TaskCompletionSource returned by <see cref="AssociationHandle.ReadHandlerSource"/>)
+    /// Message sent to the listener registered to an association (via the TaskCompletionSource returned by <see cref="AssociationHandle.ReadHandlerSource"/>).
+    ///
+    /// <para>
+    /// When the Pipe transport produces frames, the payload may be backed by pool-rented memory
+    /// exposed via <see cref="Pooled"/>. Callers that understand pooled memory should:
+    /// <list type="bullet">
+    ///   <item>Check <see cref="Pooled"/> first and use <see cref="IPooledInboundPayload.Memory"/> directly.</item>
+    ///   <item>Dispose the <see cref="Pooled"/> instance when done to return the buffer to the pool.</item>
+    /// </list>
+    /// Legacy callers that access <see cref="Payload"/> will trigger a lazy copy from the pool memory
+    /// into a <see cref="ByteString"/>; the pool buffer is then automatically returned.
+    /// </para>
+    ///
+    /// <!-- CopilotNotes: The lazy-copy design means that legacy code (ProtocolStateActor etc.)
+    ///      works unchanged — they call Payload and get a ByteString, the pool memory is returned.
+    ///      PR-C's inline protocol can use Pooled.Memory directly, avoiding the ByteString alloc
+    ///      entirely and achieving the full zero-copy win. 🌸 -->
     /// </summary>
+#nullable enable
     public sealed class InboundPayload : IHandleEvent
     {
+        // Backing field for the legacy ByteString view.
+        private ByteString? _payload;
+
+        // Optional pool-backed memory. Nulled out once Payload has been lazily materialised.
+        private IPooledInboundPayload? _pooled;
+
         /// <summary>
-        /// TBD
+        /// Creates an <see cref="InboundPayload"/> backed by a legacy <see cref="ByteString"/>.
         /// </summary>
-        /// <param name="payload">TBD</param>
+        /// <param name="payload">The frame bytes.</param>
         public InboundPayload(ByteString payload)
         {
-            Payload = payload;
+            _payload = payload;
         }
 
         /// <summary>
-        /// TBD
+        /// Creates an <see cref="InboundPayload"/> backed by pool-rented memory. 🌸
         /// </summary>
-        public ByteString Payload { get; private set; }
-
-        
-        public override string ToString()
+        /// <param name="pooled">
+        /// The pool-rented frame bytes. Ownership transfers to this instance;
+        /// the pool buffer is returned automatically when <see cref="Payload"/> is first accessed,
+        /// or when the caller explicitly disposes the value returned by <see cref="Pooled"/>.
+        /// </param>
+        internal InboundPayload(IPooledInboundPayload pooled)
         {
-            return $"InboundPayload(size = {Payload.Length} bytes)";
+            _pooled = pooled;
+        }
+
+        /// <summary>
+        /// The optional pool-rented backing memory. 🌸
+        ///
+        /// <para>
+        /// Valid until <see cref="Payload"/> is first accessed (which disposes the pooled memory),
+        /// or until the caller explicitly disposes this value.
+        /// </para>
+        ///
+        /// <para>
+        /// Returns <c>null</c> when constructed with a <see cref="ByteString"/> directly (legacy path).
+        /// </para>
+        /// </summary>
+        internal IPooledInboundPayload? Pooled => _pooled;
+
+        /// <summary>
+        /// The frame bytes as a <see cref="ByteString"/>. ✨
+        ///
+        /// <para>
+        /// When backed by pool memory (<see cref="Pooled"/> is non-null), the first access
+        /// copies the bytes into a <see cref="ByteString"/> and returns the pool buffer
+        /// to <see cref="MemoryPool{T}.Shared"/>. Subsequent accesses return the cached copy.
+        /// </para>
+        /// </summary>
+        public ByteString Payload
+        {
+            get
+            {
+                if (_payload is not null)
+                    return _payload;
+
+                // Lazy copy from pooled memory → ByteString, then return the pool buffer. 🌸
+                var pooled = _pooled;
+                if (pooled is not null)
+                {
+                    _payload = ByteString.CopyFrom(pooled.Span);
+                    pooled.Dispose();
+                    _pooled = null;
+                }
+
+                return _payload!;
+            }
+        }
+
+        /// <summary>
+        /// The number of bytes in this payload without triggering lazy materialisation.
+        /// Uses the pooled length when available. 🌸
+        /// </summary>
+        public int Length => _pooled?.Length ?? _payload?.Length ?? 0;
+        public bool HasPooled => _pooled is not null;
+
+        /// <inheritdoc/>
+        public override string ToString() => $"InboundPayload(size = {Length} bytes)";
+
+        public void DisposePooled()
+        {
+            _pooled?.Dispose();
         }
     }
+#nullable restore
 
     /// <summary>
     /// TBD
@@ -405,7 +491,7 @@ namespace Akka.Remote.Transport
         }
 
         
-        public override bool Equals(object obj)
+        public override bool Equals(object? obj)
         {
             if (ReferenceEquals(null, obj)) return false;
             if (ReferenceEquals(this, obj)) return true;

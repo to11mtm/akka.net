@@ -6,6 +6,8 @@
 //-----------------------------------------------------------------------
 
 using System;
+using System.Buffers;
+using System.Buffers.Text;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
@@ -634,6 +636,99 @@ public abstract class ActorPath : IEquatable<ActorPath>, IComparable<ActorPath>,
     }
 
     /// <summary>
+    /// Writes the UTF-8 byte representation of this actor path to the specified
+    /// <see cref="IBufferWriter{T}"/>, advancing as needed.
+    /// Equivalent to <see cref="ToString()"/> but zero-allocation for the hot path! ✨
+    /// </summary>
+    /// <param name="writer">The buffer writer to write UTF-8 bytes to.</param>
+    /// <returns>The total number of bytes written.</returns>
+    public int WriteUtf8Bytes(IBufferWriter<byte> writer)
+    {
+        return WriteUtf8Bytes(writer, Address.ToString().AsSpan());
+    }
+
+    /// <summary>
+    /// Core UTF-8 writer - mirrors <see cref="Join"/> but writes directly to an
+    /// <see cref="IBufferWriter{T}"/> instead of allocating a string. UwU 🌸
+    /// </summary>
+    /// <param name="writer">The buffer writer to write to.</param>
+    /// <param name="prefix">The address prefix, or empty for address-less paths.</param>
+    /// <param name="uid">Optional - the UID to append as a '#uid' fragment.</param>
+    /// <returns>The total number of bytes written.</returns>
+    /// <remarks>
+    /// CopilotNotes: All valid actor path characters are ASCII-only (enforced by
+    /// <see cref="IsValidPathElement"/> and <see cref="Validate"/>), so every char
+    /// is exactly 1 byte in UTF-8 — we cast directly for maximum speed! 💪
+    /// </remarks>
+    private int WriteUtf8Bytes(IBufferWriter<byte> writer, ReadOnlySpan<char> prefix, long? uid = null)
+    {
+        // Since all actor path chars are ASCII, each char == 1 UTF-8 byte.
+        // This local helper avoids any Encoding overhead~ ✨
+        static void CopyAsciiAsUtf8(ReadOnlySpan<char> chars, Span<byte> dest)
+        {
+            for (var i = 0; i < chars.Length; i++)
+                dest[i] = (byte)chars[i];
+        }
+
+        if (_depth == 0)
+        {
+            // Root: just "prefix/"
+            var totalBytes = prefix.Length + 1;
+            var span = writer.GetSpan(totalBytes);
+            CopyAsciiAsUtf8(prefix, span);
+            span[prefix.Length] = (byte)'/';
+            writer.Advance(totalBytes);
+            return totalBytes;
+        }
+        else
+        {
+            // Resolve total byte length (same as char length for ASCII paths)
+            var totalLength = prefix.Length;
+            var p = this;
+            while (p!._depth > 0)
+            {
+                totalLength += p.Name.Length + 1; // +1 for the '/' separator
+                p = p.Parent;
+            }
+
+            // UID suffix calculation: '#' + digits
+            var uidSizeHint = 0;
+            if (uid != null)
+            {
+                // +1 for the '#' character
+                uidSizeHint = SpanHacks.Int64SizeInCharacters(uid.Value) + 1;
+                totalLength += uidSizeHint;
+            }
+
+            // Grab a single contiguous span from the writer - one Advance call at the end 🎯
+            var buffer = writer.GetSpan(totalLength);
+            CopyAsciiAsUtf8(prefix, buffer);
+
+            // Write UID fragment at the tail end first (mirrors Join's approach)
+            var offset = totalLength - uidSizeHint;
+            if (uid != null)
+            {
+                buffer[offset] = (byte)'#';
+                Utf8Formatter.TryFormat(uid.Value, buffer.Slice(offset + 1), out _);
+            }
+
+            // Walk up the path tree, filling segments from right to left
+            p = this;
+            while (p!._depth > 0)
+            {
+                var name = p.Name.AsSpan();
+                offset -= name.Length + 1;
+                buffer[offset] = (byte)'/';
+                CopyAsciiAsUtf8(name, buffer.Slice(offset + 1, name.Length));
+                p = p.Parent;
+            }
+
+            writer.Advance(totalLength);
+            return totalLength;
+        }
+    }
+
+    /// <summary>
     /// String representation of the path elements, excluding the address
     /// information. The elements are separated with "/" and starts with "/",
     /// e.g. "/user/a/b".
@@ -731,6 +826,30 @@ public abstract class ActorPath : IEquatable<ActorPath>, IComparable<ActorPath>,
     }
 
     /// <summary>
+    /// Writes the UTF-8 byte representation of this actor path in serialization format
+    /// (including the <c>#uid</c> fragment when the UID is defined) to the specified
+    /// <see cref="IBufferWriter{T}"/>, advancing as needed.
+    /// Zero-allocation equivalent of <see cref="ToSerializationFormat()"/>! ✨
+    /// </summary>
+    /// <param name="writer">The buffer writer to write UTF-8 bytes to.</param>
+    /// <returns>The total number of bytes written.</returns>
+    /// <remarks>
+    /// CopilotNotes: Mirrors <see cref="ToSerializationFormat()"/> exactly, including the
+    /// IgnoreActorRef short-circuit (no UID appended for ignore refs) 🎯
+    /// </remarks>
+    public int WriteToSerializationFormatUtf8Bytes(IBufferWriter<byte> writer)
+    {
+        if (IgnoreActorRef.IsIgnoreRefPath(this))
+        {
+            // IgnoreActorRef never includes a UID fragment - fall back to plain path
+            return WriteUtf8Bytes(writer);
+        }
+
+        long? uid = Uid != ActorCell.UndefinedUid ? Uid : null;
+        return WriteUtf8Bytes(writer, Address.ToString().AsSpan(), uid);
+    }
+
+    /// <summary>
     /// TBD
     /// </summary>
     /// <param name="address">TBD</param>
@@ -744,6 +863,39 @@ public abstract class ActorPath : IEquatable<ActorPath>, IComparable<ActorPath>,
         }
         var result = ToStringWithAddress(address, true);
         return result;
+    }
+
+    /// <summary>
+    /// Writes the UTF-8 byte representation of this actor path in serialization format,
+    /// replacing the address with <paramref name="address"/> unless this path's address
+    /// already includes host and port information. Includes the <c>#uid</c> fragment when
+    /// the UID is defined.
+    /// Zero-allocation equivalent of <see cref="ToSerializationFormatWithAddress(Akka.Actor.Address)"/>! ✨
+    /// </summary>
+    /// <param name="writer">The buffer writer to write UTF-8 bytes to.</param>
+    /// <param name="address">
+    /// The address to use. Ignored when this path's own address already has host and port,
+    /// or when this is an <see cref="IgnoreActorRef"/> path.
+    /// </param>
+    /// <returns>The total number of bytes written.</returns>
+    /// <remarks>
+    /// CopilotNotes: Mirrors <see cref="ToSerializationFormatWithAddress(Akka.Actor.Address)"/> exactly,
+    /// including the IgnoreActorRef short-circuit and the host+port address-priority logic 🌸
+    /// </remarks>
+    public int WriteToSerializationFormatWithAddressUtf8Bytes(IBufferWriter<byte> writer, Address address)
+    {
+        if (IgnoreActorRef.IsIgnoreRefPath(this))
+        {
+            // IgnoreActorRef never changes its address - fall back to plain path (no UID)
+            return WriteUtf8Bytes(writer);
+        }
+
+        long? uid = Uid != ActorCell.UndefinedUid ? Uid : null;
+
+        // If this path already has a fully-qualified address (host + port), prefer it
+        // over the supplied address - same logic as ToStringWithAddress(Address, bool) 💡
+        var effectiveAddress = Address is { Host: not null, Port: not null } ? Address : address;
+        return WriteUtf8Bytes(writer, effectiveAddress.ToString().AsSpan(), uid);
     }
 
     private string AppendUidFragment(string withAddress)

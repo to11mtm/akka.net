@@ -12,6 +12,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.Text.Unicode;
 using Akka.Actor;
 using Akka.Configuration;
 using Akka.Util;
@@ -326,6 +327,13 @@ namespace Akka.Serialization
             return TranslateSurrogate(res, this, type);
         }
 
+        public override object FromBinary(ReadOnlyMemory<byte> bytes, Type type)
+        {
+            string data = Encoding.UTF8.GetString(bytes.Span);
+            object res = JsonConvert.DeserializeObject(data, Settings);
+            return TranslateSurrogate(res, this, type);
+        }
+
         private static object TranslateSurrogate(object deserializedValue, NewtonSoftJsonSerializer parent, Type type)
         {
             if (deserializedValue is JObject j)
@@ -385,14 +393,14 @@ namespace Akka.Serialization
 
         private static object GetValue(string V)
         {
-            var t = V.Substring(0, 1);
-            var v = V.Substring(1);
-            if (t == "I")
-                return int.Parse(v, NumberFormatInfo.InvariantInfo);
-            if (t == "F")
-                return float.Parse(v, NumberFormatInfo.InvariantInfo);
-            if (t == "M")
-                return decimal.Parse(v, NumberFormatInfo.InvariantInfo);
+            var t = V[0];//.Substring(0, 1);
+            //var v = V.Substring(1);
+            if (t == 'I')
+                return int.Parse(V.AsSpan().Slice(1), NumberFormatInfo.InvariantInfo);
+            if (t == 'F')
+                return float.Parse(V.AsSpan().Slice(1), NumberFormatInfo.InvariantInfo);
+            if (t == 'M')
+                return decimal.Parse(V.AsSpan().Slice(1), NumberFormatInfo.InvariantInfo);
 
             throw new NotSupportedException();
         }

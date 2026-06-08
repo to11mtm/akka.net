@@ -6,6 +6,7 @@
 //-----------------------------------------------------------------------
 
 using System;
+using System.Collections.Frozen;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
@@ -114,12 +115,12 @@ namespace Akka.Remote
     internal sealed class Remoting : RemoteTransport
     {
         private readonly ILoggingAdapter _log;
-        private volatile IDictionary<string, HashSet<ProtocolTransportAddressPair>> _transportMapping;
+        private volatile IDictionary<string, FrozenSet<ProtocolTransportAddressPair>> _transportMapping;
         private volatile IActorRef _endpointManager;
 
         // This is effectively a write-once variable similar to a lazy val. The reason for not using a lazy val is exception
         // handling.
-        private volatile HashSet<Address> _addresses;
+        private volatile FrozenSet<Address> _addresses;
 
         // This variable has the same semantics as the addresses variable, in the sense it is written once, and emulates
         // a lazy val
@@ -196,19 +197,19 @@ namespace Akka.Remote
                     var akkaProtocolTransports = addressPromise.Task.Result;
                     if(akkaProtocolTransports.Count==0)
                         throw new ConfigurationException(@"No transports enabled under ""akka.remote.enabled-transports""");
-                    _addresses = new HashSet<Address>(akkaProtocolTransports.Select(a => a.Address));
+                    _addresses = akkaProtocolTransports.Select(a => a.Address).ToFrozenSet();
 
                     IEnumerable<IGrouping<string, ProtocolTransportAddressPair>> tmp =
                         akkaProtocolTransports.GroupBy(t => t.ProtocolTransport.SchemeIdentifier);
-                    _transportMapping = new Dictionary<string, HashSet<ProtocolTransportAddressPair>>();
+                    _transportMapping = new Dictionary<string, FrozenSet<ProtocolTransportAddressPair>>();
                     foreach (var g in tmp)
                     {
                         var set = new HashSet<ProtocolTransportAddressPair>(g);
-                        _transportMapping.Add(g.Key, set);
+                        _transportMapping.Add(g.Key, set.ToFrozenSet());
                     }
 
                     _defaultAddress = akkaProtocolTransports.Head().Address;
-                    _addresses = new HashSet<Address>(akkaProtocolTransports.Select(x => x.Address));
+                    _addresses = akkaProtocolTransports.Select(x => x.Address).ToFrozenSet();
 
                     _log.Info("Remoting started; listening on addresses : [{0}]", string.Join(",", _addresses.Select(x => x.ToString())));
 
@@ -373,7 +374,7 @@ namespace Akka.Remote
         /// <exception cref="RemoteTransportException">TBD</exception>
         /// <returns>TBD</returns>
         internal static Address LocalAddressForRemote(
-            IDictionary<string, HashSet<ProtocolTransportAddressPair>> transportMapping, Address remote)
+            IDictionary<string, FrozenSet<ProtocolTransportAddressPair>> transportMapping, Address remote)
         {
             if (transportMapping.TryGetValue(remote.Protocol, out var transports))
             {

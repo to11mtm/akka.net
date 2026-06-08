@@ -1055,7 +1055,7 @@ namespace Akka.Remote
             _handle = handleOrActive;
             _transportInformation = new Information(localAddress, Context.System);
             _remoteMetrics = RemoteMetricsExtension.Create(Context.System.AsInstanceOf<ExtendedActorSystem>());
-
+            _sysAndTransportInfo = new SysandTransportInfo(_system, _transportInformation);
             if (_handle == null)
             {
                 Initializing();
@@ -1368,6 +1368,7 @@ namespace Akka.Remote
         private int _fullBackoffCount = 1;
         private int _smallBackoffCount = 0;
         private int _noBackoffCount = 0;
+        private readonly SysandTransportInfo _sysAndTransportInfo;
 
         private void AdjustAdaptiveBackup()
         {
@@ -1504,8 +1505,10 @@ namespace Akka.Remote
                 ByteString pdu;
                 try
                 {
-                    pdu = _codec.ConstructMessage(send.Recipient.LocalAddressToUse, send.Recipient,
-                        SerializeMessage(send.Message), send.SenderOption, send.Seq, _lastAck);
+                    pdu = _codec.ConstructMessage(send.Recipient.LocalAddressToUse, send.Recipient, _sysAndTransportInfo,
+                        send.Message, send.SenderOption, send.Seq, _lastAck);
+                    // pdu = _codec.ConstructMessage(send.Recipient.LocalAddressToUse, send.Recipient,
+                    //     SerializeMessage(send.Message), send.SenderOption, send.Seq, _lastAck);
                 }
                 catch (Exception e) when (e is not SerializationException)
                 {
@@ -2005,6 +2008,23 @@ namespace Akka.Remote
         }
 
         private AckAndMessage TryDecodeMessageAndAck(ByteString pdu)
+        {
+            try
+            {
+                return _codec.DecodeMessage(pdu, _provider, LocalAddress);
+            }
+            catch (Exception ex)
+            {
+                throw new EndpointException("Error while decoding incoming Akka PDU", ex);
+            }
+        }
+
+        /// <summary>
+        /// Zero-copy overload: decodes from pool-rented memory without constructing a
+        /// <see cref="Google.Protobuf.ByteString"/>. 🌸
+        /// </summary>
+        /// <param name="pdu">The raw inner-envelope bytes (pool-rented memory).</param>
+        private AckAndMessage TryDecodeMessageAndAck(ReadOnlyMemory<byte> pdu)
         {
             try
             {

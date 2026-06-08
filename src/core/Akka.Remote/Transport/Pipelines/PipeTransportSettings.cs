@@ -104,6 +104,26 @@ namespace Akka.Remote.Transport.Pipelines
         /// </summary>
         public EnvelopeCodecKind EnvelopeCodec { get; }
 
+        /// <summary>
+        /// When <c>true</c>, the hand-written zero-copy codec is used for outbound
+        /// <c>AkkaProtocolMessage</c> framing, bypassing <c>ConstructPayload</c>'s
+        /// <c>ToByteString()</c> allocation (eliminates W5 from the write-path analysis).
+        ///
+        /// <para>
+        /// The on-wire bytes are <b>identical</b> to those produced by the legacy
+        /// <see cref="AkkaPduProtobuffCodec"/> — there is no compatibility concern;
+        /// this flag only affects the internal implementation, not the wire protocol.
+        /// </para>
+        ///
+        /// Defaults to <c>false</c>. Set <c>akka.remote.pipe.tcp.zero-copy-codec = on</c>
+        /// to enable. uwu~ 🌸
+        ///
+        /// <!-- CopilotNotes: Controlled by HOCON key "zero-copy-codec" under pipe.tcp.
+        ///      When true, PipeAssociationHandle.WriteRaw is called instead of the legacy
+        ///      Write(ByteString) path in AkkaProtocolHandle.Write. -->
+        /// </summary>
+        public bool ZeroCopyCodec { get; }
+
         // ── Constructor ────────────────────────────────────────────────────────
 
         private PipeTransportSettings(
@@ -112,7 +132,8 @@ namespace Akka.Remote.Transport.Pipelines
             int sendBufferSize, int receiveBufferSize, int backlog,
             bool tcpKeepAlive, bool tcpNoDelay, bool dnsUseIpv6,
             int writeChannelCapacity, SslSettings ssl,
-            EnvelopeCodecKind envelopeCodec)
+            EnvelopeCodecKind envelopeCodec,
+            bool zeroCopyCodec)
         {
             Hostname             = hostname;
             PublicHostname       = publicHostname;
@@ -130,6 +151,7 @@ namespace Akka.Remote.Transport.Pipelines
             WriteChannelCapacity = writeChannelCapacity;
             Ssl                  = ssl;
             EnvelopeCodec        = envelopeCodec;
+            ZeroCopyCodec        = zeroCopyCodec;
         }
 
         // ── Factory ────────────────────────────────────────────────────────────
@@ -182,7 +204,8 @@ namespace Akka.Remote.Transport.Pipelines
                 ssl: enableSsl
                     ? SslSettings.Create(config.GetConfig("ssl"))
                     : SslSettings.Empty,
-                envelopeCodec: envelopeCodec
+                envelopeCodec: envelopeCodec,
+                zeroCopyCodec: config.GetBoolean("zero-copy-codec", false)
             );
         }
 
