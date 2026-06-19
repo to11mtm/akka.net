@@ -9,11 +9,9 @@ using System;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Net;
 using System.Threading;
-using System.Threading.Channels;
 using System.Threading.Tasks;
 using Akka.Actor;
 using Akka.Configuration;
@@ -139,7 +137,7 @@ namespace Akka.Remote.Transport.Streams
             }
             catch (Exception ex)
             {
-                writer.TryComplete(ex);
+                writer.Tell(new Status.Failure(ex));
                 throw;
             }
         }
@@ -186,7 +184,7 @@ namespace Akka.Remote.Transport.Streams
 
                 if (localAddress == null || remoteAddress == null)
                 {
-                    writer.TryComplete();
+                    writer.Tell(new Status.Success(NotUsed.Instance));
                     return;
                 }
 
@@ -197,18 +195,9 @@ namespace Akka.Remote.Transport.Streams
             }, TaskContinuationOptions.ExecuteSynchronously);
         }
 
-        // CopilotNote: 🌸 Perf experiment — swapped Source.ActorRef for Source.Channel.
-        // The materialized value is now a ChannelWriter<T> (backed by a bounded channel) instead
-        // of an IActorRef mailbox. We keep BoundedChannelFullMode.Wait so TryWrite returns false
-        // when the buffer fills, letting us emulate the old OverflowStrategy.Fail behavior by
-        // failing the writer on overflow. singleWriter: false because multiple threads may call
-        // Write/Disassociate concurrently. uwu
-        private Source<ReadOnlySequence<byte>, ChannelWriter<ReadOnlySequence<byte>>> CreateOutboundSource()
+        private Source<ReadOnlySequence<byte>, IActorRef> CreateOutboundSource()
         {
-            return Source.Channel<ReadOnlySequence<byte>>(
-                _writeBufferSize,
-                singleWriter: false,
-                fullMode: BoundedChannelFullMode.Wait);
+            return Source.ActorRef<ReadOnlySequence<byte>>(_writeBufferSize, OverflowStrategy.Fail);
         }
 
         private Flow<ReadOnlySequence<byte>, IReadOnlyList<ReadOnlySequence<byte>>, NotUsed> DecodeFrames()
@@ -322,7 +311,7 @@ namespace Akka.Remote.Transport.Streams
             public StreamAssociationHandle(
                 Address localAddress,
                 Address remoteAddress,
-                ChannelWriter<ReadOnlySequence<byte>> writer,
+                IActorRef writer,
                 int maxFrameSize,
                 DotNettyByteOrder byteOrder,
                 Action<StreamAssociationHandle> remove,
@@ -349,7 +338,7 @@ namespace Akka.Remote.Transport.Streams
                 }, TaskContinuationOptions.ExecuteSynchronously);
             }
 
-            public ChannelWriter<ReadOnlySequence<byte>> Writer { get; }
+            public IActorRef Writer { get; }
 
             public override bool Write(ByteString payload)
             {
@@ -358,18 +347,15 @@ namespace Akka.Remote.Transport.Streams
 
                 try
                 {
-                    var frame = RemoteTcpFraming.Encode(new ReadOnlySequence<byte>(payload.Memory), _maxFrameSize, _byteOrder);
-                    
-                    return Writer.TryWrite(frame);
-
+                    Writer.Tell(RemoteTcpFraming.Encode(new ReadOnlySequence<byte>(payload.Memory), _maxFrameSize, _byteOrder));
                 }
                 catch (Exception ex)
                 {
-                    Writer.TryComplete(ex);
+                    Writer.Tell(new Status.Failure(ex));
                     return false;
                 }
 
-                // return true;
+                return true;
             }
 
             public override void Disassociate()
@@ -378,7 +364,7 @@ namespace Akka.Remote.Transport.Streams
                     return;
 
                 _closed = true;
-                Writer.TryComplete();
+                Writer.Tell(new Status.Success(NotUsed.Instance));
                 _remove(this);
             }
 
