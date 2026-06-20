@@ -88,9 +88,13 @@ namespace Akka.Benchmarks.Remoting
             _recvCodec = new AkkaPduProtobuffCodec(_sys1);
             _sendCodec = new AkkaPduProtobuffCodec(_sys2);
             _fullDecode = CreatePayloadPdu();
+<<<<<<< HEAD
             _fullDecodeSequence = new ReadOnlySequence<byte>(_fullDecode.Memory);
             _pduDecoded = ((Payload)_recvCodec.DecodePdu(_fullDecode)).Bytes;
             _pduDecodedSequence = new ReadOnlySequence<byte>(_pduDecoded.Memory);
+=======
+            _pduDecoded = UnsafeByteOperations.UnsafeWrap(((Payload)_recvCodec.DecodePdu(UnsafeByteOperations.UnsafeWrap(_fullDecode.Memory))).Bytes);
+>>>>>>> ami-pipe-transport-no-msgpackpdu
             _payloadDecoded = _recvCodec.DecodeMessage(_pduDecoded, _rarp, _addr1).MessageOption.SerializedMessage;
             _messageWriter = new ArrayBufferWriter<byte>(_pduDecoded.Length);
             _payloadWriter = new ArrayBufferWriter<byte>(_fullDecode.Length);
@@ -184,7 +188,7 @@ namespace Akka.Benchmarks.Remoting
                 var pdu = _recvCodec.DecodePdu(_fullDecode);
                 if (pdu is Payload p)
                 {
-                    var msg = _recvCodec.DecodeMessage(p.Bytes, _rarp, _addr1);
+                    var msg = _recvCodec.DecodeMessage(UnsafeByteOperations.UnsafeWrap(p.Bytes), _rarp, _addr1);
                     var deserialize = MessageSerializer.Deserialize(_sys1, msg.MessageOption.SerializedMessage);
                 }
             }

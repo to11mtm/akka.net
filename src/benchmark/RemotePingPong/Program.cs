@@ -162,6 +162,12 @@ namespace RemotePingPong
             (SerializerMode.MsgPack,  PayloadMode.SerializedObject, TransportMode.Streams),
             (SerializerMode.MsgPackV2, PayloadMode.SerializedObject, TransportMode.Streams),
             
+            (SerializerMode.Default,  PayloadMode.Primitive,        TransportMode.PipeProtobuf),
+            (SerializerMode.Default,  PayloadMode.SerializedObject, TransportMode.PipeProtobuf),
+            (SerializerMode.Hyperion, PayloadMode.SerializedObject, TransportMode.PipeProtobuf),
+            (SerializerMode.MsgPack,  PayloadMode.SerializedObject, TransportMode.PipeProtobuf),
+            (SerializerMode.MsgPackV2, PayloadMode.SerializedObject, TransportMode.PipeProtobuf),
+            
             /*
             // ── Pipe/Protobuf (zero-copy = off) ──────────────────────────────
             (SerializerMode.Default,  PayloadMode.Primitive,        TransportMode.PipeProtobuf),

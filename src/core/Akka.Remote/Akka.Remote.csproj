@@ -17,6 +17,7 @@
           <PrivateAssets>all</PrivateAssets>
           <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
         </PackageReference>
+        <PackageReference Include="MessagePack" Version="3.1.7" />
     </ItemGroup>
 
   <ItemGroup>
@@ -24,6 +25,10 @@
     <Protobuf Access="internal" Include="../../protobuf/SystemMessageFormats.proto" />
     <Protobuf Access="internal" Include="../../protobuf/WireFormats.proto" />
 
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Transport\Pipelines\MessagePack\" />
   </ItemGroup>
     <PropertyGroup>
         <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
