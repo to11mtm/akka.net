@@ -15,12 +15,9 @@
 
 <ItemGroup>
   <ProjectReference Include="..\..\contrib\serializers\Akka.Serialization.Hyperion\Akka.Serialization.Hyperion.csproj" />
-  <ProjectReference Include="..\..\core\Akka.Remote\Akka.Remote.csproj" />
-</ItemGroup>
+  <ProjectReference Include="..\..\contrib\serializers\Akka.Serialization.MessagePack2\Akka.Serialization.MessagePack.csproj" />
 
-<ItemGroup>
-  <PackageReference Include="Akka.Serialization.MessagePack2" Version="1.5.60" />
-  <PackageReference Include="MessagePack" Version="3.1.7" />
+  <ProjectReference Include="..\..\core\Akka.Remote\Akka.Remote.csproj" />
 </ItemGroup>
   
 </Project>

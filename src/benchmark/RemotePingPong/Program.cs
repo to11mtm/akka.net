@@ -154,11 +154,13 @@ namespace RemotePingPong
             (SerializerMode.Default,  PayloadMode.SerializedObject, TransportMode.DotNetty),
             (SerializerMode.Hyperion, PayloadMode.SerializedObject, TransportMode.DotNetty),
             (SerializerMode.MsgPack,  PayloadMode.SerializedObject, TransportMode.DotNetty),
+            (SerializerMode.MsgPackV2, PayloadMode.SerializedObject, TransportMode.DotNetty),
 
             (SerializerMode.Default,  PayloadMode.Primitive,        TransportMode.Streams),
             (SerializerMode.Default,  PayloadMode.SerializedObject, TransportMode.Streams),
             (SerializerMode.Hyperion, PayloadMode.SerializedObject, TransportMode.Streams),
             (SerializerMode.MsgPack,  PayloadMode.SerializedObject, TransportMode.Streams),
+            (SerializerMode.MsgPackV2, PayloadMode.SerializedObject, TransportMode.Streams),
             
             /*
             // ── Pipe/Protobuf (zero-copy = off) ──────────────────────────────
@@ -226,6 +228,13 @@ namespace RemotePingPong
             /// Requires <c>Akka.Serialization.MessagePack</c> package. Nyaa~!
             /// </summary>
             MsgPack,
+
+            /// <summary>
+            /// MessagePack <c>SerializerV2</c>-based serializer — buffer-first, zero
+            /// intermediate <c>byte[]</c> allocations on the I/O surface for better throughput.
+            /// Requires <c>Akka.Serialization.MessagePack</c> package. UwU ✨
+            /// </summary>
+            MsgPackV2,
         }
 
         /// <summary>
@@ -289,17 +298,19 @@ namespace RemotePingPong
         {
             return (arg ?? "").ToLowerInvariant() switch
             {
-                "hyperion"                    => SerializerMode.Hyperion,
-                "msgpack" or "messagepack"    => SerializerMode.MsgPack,
-                _                             => SerializerMode.Default,
+                "hyperion"                          => SerializerMode.Hyperion,
+                "msgpackv2" or "messagepackv2" or "msgpack2" or "messagepack2" => SerializerMode.MsgPackV2,
+                "msgpack" or "messagepack"          => SerializerMode.MsgPack,
+                _                                   => SerializerMode.Default,
             };
         }
 
         private static string SerializerLabel(SerializerMode mode) => mode switch
         {
-            SerializerMode.Hyperion => "Hyperion",
-            SerializerMode.MsgPack  => "MessagePack (typeless)",
-            _                       => "JSON (default)",
+            SerializerMode.Hyperion  => "Hyperion",
+            SerializerMode.MsgPackV2 => "MessagePack V2 (buffer-first)",
+            SerializerMode.MsgPack   => "MessagePack (typeless)",
+            _                        => "JSON (default)",
         };
 
         /// <summary>
@@ -310,6 +321,7 @@ namespace RemotePingPong
             /// <summary>Legacy DotNetty TCP transport with protobuf codec (the historical baseline).</summary>
             DotNetty,
 
+            
             /// <summary>System.IO.Pipelines TCP transport with protobuf codec (wire-compatible).</summary>
             PipeProtobuf,
 
@@ -451,6 +463,16 @@ namespace RemotePingPong
                         }
                     }"),
 
+                // CopilotNotes: MsgPackV2 binds the buffer-first SerializerV2 implementation so the
+                // remoting pipeline can write straight into pooled buffers — no temp byte[]. uwu ✨
+                SerializerMode.MsgPackV2 => ConfigurationFactory.ParseString(@"
+                    akka.actor {
+                        serializers.messagepackv2 = ""Akka.Serialization.MessagePack.MsgPackSerializerV2, Akka.Serialization.MessagePack""
+                        serialization-bindings {
+                            ""System.Object"" = messagepackv2
+                        }
+                    }"),
+
                 _ => Config.Empty, // nyaa~ nothing extra needed for default JSON
             };
 
@@ -541,7 +563,7 @@ namespace RemotePingPong
             uint timesToRun = 1;
             var  transportMode   = TransportMode.Streams;
             var  serializerMode  = SerializerMode.MsgPack;
-            var  payloadMode     = PayloadMode.LargePayload;
+            var  payloadMode     = PayloadMode.SerializedObject;
 
             if (args.Length >= 1 && !uint.TryParse(args[0], out timesToRun))
                 timesToRun = 1;
